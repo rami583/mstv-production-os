@@ -6,8 +6,8 @@ create table if not exists public.events (
   event_name text not null,
   date date not null,
   client_arrival_time time,
-  start_time time not null,
-  end_time time not null,
+  start_time time,
+  end_time time,
   end_of_day_time time,
   status text not null default 'Brouillon' check (
     status in ('Brouillon', 'En préparation', 'En attente client', 'Prêt', 'En direct', 'Terminé')

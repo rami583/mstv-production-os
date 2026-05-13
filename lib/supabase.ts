@@ -14,8 +14,8 @@ export type Database = {
           event_name: string;
           date: string;
           client_arrival_time: string | null;
-          start_time: string;
-          end_time: string;
+          start_time: string | null;
+          end_time: string | null;
           end_of_day_time: string | null;
           status: EventStatus;
           created_at: string;
@@ -27,8 +27,8 @@ export type Database = {
           event_name: string;
           date: string;
           client_arrival_time?: string | null;
-          start_time: string;
-          end_time: string;
+          start_time?: string | null;
+          end_time?: string | null;
           end_of_day_time?: string | null;
           status?: EventStatus;
           created_at?: string;

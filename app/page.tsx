@@ -111,6 +111,8 @@ type LinkEntryDraft = {
   streamKey: string;
 };
 
+type EventTimeField = "clientArrivalTime" | "startTime" | "endTime" | "endOfDayTime";
+
 type EventDocument = {
   id: string;
   eventId: string;
@@ -136,8 +138,8 @@ type ProductionEvent = {
   eventName: string;
   date: string;
   clientArrivalTime: string | null;
-  startTime: string;
-  endTime: string;
+  startTime: string | null;
+  endTime: string | null;
   endOfDayTime: string | null;
   status: EventStatus;
   createdAt: string;
@@ -242,15 +244,70 @@ function formatDateKey(date: Date) {
 }
 
 function formatTime(time: string | null) {
-  if (!time) return "À confirmer";
-  const [hours = "00", minutes = "00"] = time.split(":");
-  return `${hours.padStart(2, "0")}h${minutes.padStart(2, "0")}`;
+  const timeValue = toTimeInputValue(time);
+  if (!timeValue) return "";
+  const [hours = "00", minutes = "00"] = timeValue.split(":");
+  return `${hours}h${minutes}`;
+}
+
+function formatTimeRange(startTime: string | null, endTime: string | null) {
+  const startLabel = formatTime(startTime);
+  const endLabel = formatTime(endTime);
+
+  if (startLabel && endLabel) return `${startLabel} → ${endLabel}`;
+  return startLabel || endLabel;
+}
+
+function formatFullDate(dateKey: string) {
+  const date = new Date(`${dateKey}T12:00:00`);
+  if (Number.isNaN(date.getTime())) return "";
+
+  return new Intl.DateTimeFormat("fr-FR", {
+    weekday: "long",
+    day: "numeric",
+    month: "long",
+    year: "numeric",
+  }).format(date);
 }
 
 function toTimeInputValue(time: string | null) {
   if (!time) return "";
   const [hours = "00", minutes = "00"] = time.split(":");
   return `${hours.padStart(2, "0")}:${minutes.padStart(2, "0")}`;
+}
+
+function sanitizeTimeDraft(value: string) {
+  return value.replace(/\D/g, "").slice(0, 4);
+}
+
+function normalizeCompactTimeInput(value: string) {
+  const digits = sanitizeTimeDraft(value);
+  if (!digits) return "";
+
+  const [hours, minutes] =
+    digits.length <= 2
+      ? [digits, "00"]
+      : digits.length === 3
+        ? [digits.slice(0, 1), digits.slice(1)]
+        : [digits.slice(0, 2), digits.slice(2)];
+
+  const hourNumber = Number(hours);
+  const minuteNumber = Number(minutes);
+
+  if (!Number.isInteger(hourNumber) || !Number.isInteger(minuteNumber)) return "";
+  if (hourNumber < 0 || hourNumber > 23 || minuteNumber < 0 || minuteNumber > 59) return "";
+
+  return `${String(hourNumber).padStart(2, "0")}:${String(minuteNumber).padStart(2, "0")}`;
+}
+
+function normalizeEventTimeInput(input: CreateEventInput): CreateEventInput {
+  return {
+    ...input,
+    clientArrivalTime: normalizeCompactTimeInput(input.clientArrivalTime),
+    startTime: normalizeCompactTimeInput(input.startTime),
+    endTime: normalizeCompactTimeInput(input.endTime),
+    endOfDayTime: normalizeCompactTimeInput(input.endOfDayTime),
+  };
 }
 
 function eventSortValue(event: ProductionEvent) {
@@ -458,10 +515,10 @@ function mapEvent(row: EventQueryRow): ProductionEvent {
     clientName: row.client_name,
     eventName: row.event_name,
     date: row.date,
-    clientArrivalTime: row.client_arrival_time,
-    startTime: row.start_time,
-    endTime: row.end_time,
-    endOfDayTime: row.end_of_day_time,
+    clientArrivalTime: toTimeInputValue(row.client_arrival_time) || null,
+    startTime: toTimeInputValue(row.start_time) || null,
+    endTime: toTimeInputValue(row.end_time) || null,
+    endOfDayTime: toTimeInputValue(row.end_of_day_time) || null,
     status: row.status,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -654,6 +711,8 @@ export default function Home() {
   const [selectedDateKey, setSelectedDateKey] = useState(formatDateKey(today));
   const [createMenuOpen, setCreateMenuOpen] = useState(false);
   const [createModalOpen, setCreateModalOpen] = useState(false);
+  const [editingEvent, setEditingEvent] = useState<ProductionEvent | null>(null);
+  const [editingReturnScreen, setEditingReturnScreen] = useState<Screen>("calendar");
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -716,16 +775,18 @@ export default function Home() {
       throw new Error("Configuration Supabase manquante.");
     }
 
+    const normalizedInput = normalizeEventTimeInput(input);
+
     const { data: event, error: eventError } = await supabase
       .from("events")
       .insert({
-        client_name: input.clientName,
-        event_name: input.eventName,
-        date: input.date,
-        client_arrival_time: input.clientArrivalTime || null,
-        start_time: input.startTime,
-        end_time: input.endTime,
-        end_of_day_time: input.endOfDayTime || null,
+        client_name: normalizedInput.clientName,
+        event_name: normalizedInput.eventName,
+        date: normalizedInput.date,
+        client_arrival_time: normalizedInput.clientArrivalTime || null,
+        start_time: normalizedInput.startTime || null,
+        end_time: normalizedInput.endTime || null,
+        end_of_day_time: normalizedInput.endOfDayTime || null,
       })
       .select()
       .single();
@@ -774,6 +835,93 @@ export default function Home() {
     setSelectedDateKey(event.date);
     setVisibleMonth(new Date(`${event.date}T12:00:00`));
     setScreen("detail");
+  }
+
+  async function updateEvent(event: ProductionEvent, input: CreateEventInput, nextScreen: Screen = "calendar") {
+    if (!supabase) {
+      throw new Error("Configuration Supabase manquante.");
+    }
+
+    const normalizedInput = normalizeEventTimeInput(input);
+    const updatePayload = {
+      client_name: normalizedInput.clientName,
+      event_name: normalizedInput.eventName,
+      date: normalizedInput.date,
+      client_arrival_time: normalizedInput.clientArrivalTime || null,
+      start_time: normalizedInput.startTime || null,
+      end_time: normalizedInput.endTime || null,
+      end_of_day_time: normalizedInput.endOfDayTime || null,
+    };
+
+    const { data, error: updateError } = await supabase
+      .from("events")
+      .update(updatePayload)
+      .eq("id", event.id)
+      .select()
+      .single();
+
+    if (updateError) throw updateError;
+
+    const updatedEvent: ProductionEvent = {
+      ...event,
+      clientName: data.client_name,
+      eventName: data.event_name,
+      date: data.date,
+      clientArrivalTime: toTimeInputValue(data.client_arrival_time) || null,
+      startTime: toTimeInputValue(data.start_time) || null,
+      endTime: toTimeInputValue(data.end_time) || null,
+      endOfDayTime: toTimeInputValue(data.end_of_day_time) || null,
+      status: data.status,
+      updatedAt: data.updated_at,
+    };
+
+    setEvents((current) => current.map((item) => (item.id === event.id ? updatedEvent : item)));
+    setSelectedId(updatedEvent.id);
+    setSelectedDateKey(updatedEvent.date);
+    setVisibleMonth(new Date(`${updatedEvent.date}T12:00:00`));
+    setScreen(nextScreen);
+  }
+
+  async function updateEventTime(event: ProductionEvent, field: EventTimeField, value: string) {
+    if (!supabase) {
+      throw new Error("Configuration Supabase manquante.");
+    }
+
+    const columnByField: Record<EventTimeField, "client_arrival_time" | "start_time" | "end_time" | "end_of_day_time"> = {
+      clientArrivalTime: "client_arrival_time",
+      startTime: "start_time",
+      endTime: "end_time",
+      endOfDayTime: "end_of_day_time",
+    };
+    const nextValue = normalizeCompactTimeInput(value) || null;
+    const column = columnByField[field];
+    const updatePayload: Database["public"]["Tables"]["events"]["Update"] = {
+      [column]: nextValue,
+    };
+
+    const { data, error: updateError } = await supabase
+      .from("events")
+      .update(updatePayload)
+      .eq("id", event.id)
+      .select()
+      .single();
+
+    if (updateError) throw updateError;
+
+    setEvents((current) =>
+      current.map((item) =>
+        item.id === event.id
+          ? {
+              ...item,
+              clientArrivalTime: toTimeInputValue(data.client_arrival_time) || null,
+              startTime: toTimeInputValue(data.start_time) || null,
+              endTime: toTimeInputValue(data.end_time) || null,
+              endOfDayTime: toTimeInputValue(data.end_of_day_time) || null,
+              updatedAt: data.updated_at,
+            }
+          : item,
+      ),
+    );
   }
 
   async function toggleOption(option: EventOption) {
@@ -1007,7 +1155,7 @@ export default function Home() {
 
     const nextLabel = label.trim();
     if (!nextLabel) {
-      throw new Error("Le nom de l'élément est requis.");
+      throw new Error("La note est requise.");
     }
 
     const { data, error: insertError } = await supabase
@@ -1502,10 +1650,21 @@ export default function Home() {
           screen={screen}
           setScreen={setScreen}
           yearLabel={yearLabel}
+          detailDateLabel={screen === "detail" && selectedEvent ? formatFullDate(selectedEvent.date) : null}
           goToday={goToday}
           createMenuOpen={createMenuOpen}
           setCreateMenuOpen={setCreateMenuOpen}
           onCreateEvent={() => {
+            setEditingEvent(null);
+            setEditingReturnScreen("calendar");
+            setCreateModalOpen(true);
+            setCreateMenuOpen(false);
+          }}
+          canEditEvent={screen === "detail" && Boolean(selectedEvent)}
+          onEditEvent={() => {
+            if (!selectedEvent) return;
+            setEditingEvent(selectedEvent);
+            setEditingReturnScreen("detail");
             setCreateModalOpen(true);
             setCreateMenuOpen(false);
           }}
@@ -1525,6 +1684,11 @@ export default function Home() {
             onOpen={openEvent}
             visibleMonth={visibleMonth}
             selectedDateKey={selectedDateKey}
+            onEdit={(event) => {
+              setEditingEvent(event);
+              setEditingReturnScreen("calendar");
+              setCreateModalOpen(true);
+            }}
             setSelectedDateKey={setSelectedDateKey}
             changeMonth={changeMonth}
           />
@@ -1538,6 +1702,7 @@ export default function Home() {
             hasNext={hasNextEvent}
             goPrevious={() => navigateEvent(-1)}
             goNext={() => navigateEvent(1)}
+            onUpdateEventTime={updateEventTime}
             onToggleOption={toggleOption}
             onCreateOption={createEventOption}
             onDeleteOption={deleteEventOption}
@@ -1567,10 +1732,21 @@ export default function Home() {
       {createModalOpen && (
         <CreateEventModal
           selectedDateKey={selectedDateKey}
-          onClose={() => setCreateModalOpen(false)}
-          onCreate={async (input) => {
-            await createEvent(input);
+          event={editingEvent}
+          onClose={() => {
             setCreateModalOpen(false);
+            setEditingEvent(null);
+            setEditingReturnScreen("calendar");
+          }}
+          onSubmit={async (input) => {
+            if (editingEvent) {
+              await updateEvent(editingEvent, input, editingReturnScreen);
+            } else {
+              await createEvent(input);
+            }
+            setCreateModalOpen(false);
+            setEditingEvent(null);
+            setEditingReturnScreen("calendar");
           }}
         />
       )}
@@ -1590,20 +1766,26 @@ function AppHeader({
   screen,
   setScreen,
   yearLabel,
+  detailDateLabel,
   goToday,
   createMenuOpen,
   setCreateMenuOpen,
   onCreateEvent,
+  canEditEvent,
+  onEditEvent,
   canDeleteEvent,
   onDeleteEvent,
 }: {
   screen: Screen;
   setScreen: (screen: Screen) => void;
   yearLabel: string;
+  detailDateLabel: string | null;
   goToday: () => void;
   createMenuOpen: boolean;
   setCreateMenuOpen: (open: boolean | ((current: boolean) => boolean)) => void;
   onCreateEvent: () => void;
+  canEditEvent: boolean;
+  onEditEvent: () => void;
   canDeleteEvent: boolean;
   onDeleteEvent: () => void;
 }) {
@@ -1618,6 +1800,11 @@ function AppHeader({
           <button className="rounded-full border border-stone-200 bg-white px-2.5 py-1.5 text-base font-semibold text-stone-700 sm:px-3">
             {yearLabel}
           </button>
+        )}
+        {screen === "detail" && detailDateLabel && (
+          <span className="rounded-full border border-stone-200 bg-white px-2.5 py-1.5 text-base font-semibold text-stone-700 sm:px-3">
+            {detailDateLabel}
+          </span>
         )}
       </div>
       <div className="flex shrink-0 items-center gap-1.5 sm:gap-2">
@@ -1638,17 +1825,29 @@ function AppHeader({
           +
         </button>
       </div>
-      {createMenuOpen && <CreateMenu onCreateEvent={onCreateEvent} canDeleteEvent={canDeleteEvent} onDeleteEvent={onDeleteEvent} />}
+      {createMenuOpen && (
+        <CreateMenu
+          onCreateEvent={onCreateEvent}
+          canEditEvent={canEditEvent}
+          onEditEvent={onEditEvent}
+          canDeleteEvent={canDeleteEvent}
+          onDeleteEvent={onDeleteEvent}
+        />
+      )}
     </header>
   );
 }
 
 function CreateMenu({
   onCreateEvent,
+  canEditEvent,
+  onEditEvent,
   canDeleteEvent,
   onDeleteEvent,
 }: {
   onCreateEvent: () => void;
+  canEditEvent: boolean;
+  onEditEvent: () => void;
   canDeleteEvent: boolean;
   onDeleteEvent: () => void;
 }) {
@@ -1667,6 +1866,14 @@ function CreateMenu({
       >
         Créer un événement
       </button>
+      {canEditEvent && (
+        <button
+          onClick={onEditEvent}
+          className="block w-full rounded-xl px-4 py-3 text-left text-base font-medium text-stone-700 transition hover:bg-[#bb2720]/[0.05] hover:text-stone-950"
+        >
+          Modifier l'événement
+        </button>
+      )}
       {canDeleteEvent && (
         <button
           onClick={onDeleteEvent}
@@ -1682,6 +1889,7 @@ function CreateMenu({
 function CalendarDashboard({
   events,
   onOpen,
+  onEdit,
   visibleMonth,
   selectedDateKey,
   setSelectedDateKey,
@@ -1689,6 +1897,7 @@ function CalendarDashboard({
 }: {
   events: ProductionEvent[];
   onOpen: (id: string) => void;
+  onEdit: (event: ProductionEvent) => void;
   visibleMonth: Date;
   selectedDateKey: string;
   setSelectedDateKey: (dateKey: string) => void;
@@ -1793,7 +2002,7 @@ function CalendarDashboard({
           ))}
         </div>
       </Card>
-      <SelectedDayEvents events={selectedEvents} onOpen={onOpen} />
+      <SelectedDayEvents events={selectedEvents} onOpen={onOpen} onEdit={onEdit} />
     </section>
   );
 }
@@ -1801,29 +2010,51 @@ function CalendarDashboard({
 function SelectedDayEvents({
   events,
   onOpen,
+  onEdit,
 }: {
   events: ProductionEvent[];
   onOpen: (id: string) => void;
+  onEdit: (event: ProductionEvent) => void;
 }) {
   if (events.length === 0) return null;
 
   return (
     <section className="space-y-1.5 lg:space-y-2">
       {events.map((event) => (
-        <button
+        <div
           key={event.id}
           onClick={() => onOpen(event.id)}
-          className="grid min-h-20 w-full grid-cols-[3px_1fr_auto] items-center gap-4 rounded-xl bg-white/70 px-4 py-4 text-left transition hover:bg-white lg:gap-5 lg:px-5"
+          onKeyDown={(keyEvent) => {
+            if (keyEvent.key === "Enter" || keyEvent.key === " ") {
+              keyEvent.preventDefault();
+              onOpen(event.id);
+            }
+          }}
+          role="button"
+          tabIndex={0}
+          className="relative grid min-h-20 w-full cursor-pointer grid-cols-[3px_1fr_auto] items-center gap-4 rounded-xl bg-white/70 px-4 py-4 text-left transition hover:bg-white lg:gap-5 lg:px-5"
         >
           <span className="h-full min-h-14 rounded-full bg-[#bb2720]" />
           <span className="min-w-0">
             <span className="block text-base font-semibold leading-snug text-stone-950">{event.clientName}</span>
             <span className="block truncate text-base text-stone-500">{event.eventName}</span>
           </span>
-          <span className="pl-2 text-right text-base font-medium text-stone-500">
-            {formatTime(event.startTime)} → {formatTime(event.endTime)}
-          </span>
-        </button>
+          <button
+            type="button"
+            onClick={(clickEvent) => {
+              clickEvent.stopPropagation();
+              onEdit(event);
+            }}
+            className="absolute right-3 top-2 rounded-full border border-stone-200 bg-white px-3 py-1 text-base font-semibold text-stone-500 transition hover:border-stone-300 hover:text-stone-800"
+          >
+            Modifier
+          </button>
+          {formatTimeRange(event.startTime, event.endTime) && (
+            <span className="pl-2 pt-6 text-right text-base font-medium text-stone-500 sm:pt-5">
+              {formatTimeRange(event.startTime, event.endTime)}
+            </span>
+          )}
+        </div>
       ))}
     </section>
   );
@@ -1836,6 +2067,7 @@ function ProductionDetail({
   hasNext,
   goPrevious,
   goNext,
+  onUpdateEventTime,
   onToggleOption,
   onCreateOption,
   onDeleteOption,
@@ -1861,6 +2093,7 @@ function ProductionDetail({
   hasNext: boolean;
   goPrevious: () => void;
   goNext: () => void;
+  onUpdateEventTime: (event: ProductionEvent, field: EventTimeField, value: string) => Promise<void>;
   onToggleOption: (option: EventOption) => Promise<void>;
   onCreateOption: (eventId: string, label: string) => Promise<EventOption>;
   onDeleteOption: (option: EventOption) => Promise<void>;
@@ -2022,7 +2255,7 @@ function ProductionDetail({
             </button>
           </div>
         </div>
-        <ProductionTimeline event={event} />
+        <ProductionTimeline event={event} onUpdateTime={onUpdateEventTime} />
       </Card>
 
       <Card className="premium-surface p-3 sm:p-5">
@@ -2369,71 +2602,127 @@ function getLinkTone(state: LinkStatus) {
       };
 }
 
-function getTimelineDate(eventDate: string, time: string | null) {
-  if (!time) return null;
-  const timelineDate = new Date(`${eventDate}T${time}`);
-  return Number.isNaN(timelineDate.getTime()) ? null : timelineDate;
-}
-
-function getActiveTimelineIndex(moments: { date: Date | null }[]) {
-  const now = new Date();
-  let activeIndex = -1;
-
-  moments.forEach((moment, index) => {
-    if (moment.date && moment.date.getTime() <= now.getTime()) {
-      activeIndex = index;
-    }
-  });
-
-  if (activeIndex === -1) return null;
-  const lastMoment = moments[moments.length - 1]?.date;
-  if (lastMoment && now.getTime() > lastMoment.getTime()) return null;
-  return activeIndex;
-}
-
-function ProductionTimeline({ event }: { event: ProductionEvent }) {
+function ProductionTimeline({
+  event,
+  onUpdateTime,
+}: {
+  event: ProductionEvent;
+  onUpdateTime: (event: ProductionEvent, field: EventTimeField, value: string) => Promise<void>;
+}) {
   const moments = [
-    { label: "Arrivée client", time: formatTime(event.clientArrivalTime), date: getTimelineDate(event.date, event.clientArrivalTime) },
-    { label: "Début live", time: formatTime(event.startTime), date: getTimelineDate(event.date, event.startTime) },
-    { label: "Fin live", time: formatTime(event.endTime), date: getTimelineDate(event.date, event.endTime) },
-    { label: "Fin journée", time: formatTime(event.endOfDayTime), date: getTimelineDate(event.date, event.endOfDayTime) },
+    { label: "Arrivée client", field: "clientArrivalTime" as const, value: event.clientArrivalTime },
+    { label: "Début live", field: "startTime" as const, value: event.startTime },
+    { label: "Fin live", field: "endTime" as const, value: event.endTime },
+    { label: "Fin journée", field: "endOfDayTime" as const, value: event.endOfDayTime },
   ];
-  const activeIndex = getActiveTimelineIndex(moments);
 
   return (
     <div className="mt-8">
       <div className="relative flex w-full justify-between">
         <div className="absolute left-2.5 right-2.5 top-2.5 h-[2px] bg-[#bb2720]/20" />
-        {moments.map((moment, index) => {
-          const isActive = activeIndex === index;
-          const isPast = !isActive && moment.date && moment.date.getTime() < new Date().getTime();
-          const dotClassName = isActive
-            ? "border-[#bb2720] bg-[#bb2720]"
-            : isPast
-              ? "border-stone-400 bg-stone-300"
-              : "border-stone-300 bg-white";
-          const labelClassName = isActive ? "text-[#bb2720]" : isPast ? "text-stone-500" : "text-stone-700";
-
-          return (
-            <div key={moment.label} className={cn("relative min-w-0 flex-1", index === 0 ? "text-left" : index === moments.length - 1 ? "text-right" : "text-center")}>
-              <span
-                className={cn(
-                  "block h-5 w-5 rounded-full border-2",
-                  dotClassName,
-                  index === 0 ? "mr-auto" : index === moments.length - 1 ? "ml-auto" : "mx-auto",
-                )}
+        {moments.map((moment, index) => (
+          <div key={moment.label} className={cn("relative min-w-0 flex-1", index === 0 ? "text-left" : index === moments.length - 1 ? "text-right" : "text-center")}>
+            <span
+              className={cn(
+                "block h-5 w-5 rounded-full border-2 border-[#bb2720]/45 bg-white",
+                index === 0 ? "mr-auto" : index === moments.length - 1 ? "ml-auto" : "mx-auto",
+              )}
+            />
+            <div className="mt-3 truncate font-semibold text-stone-700">{moment.label}</div>
+            <div className={cn("mt-1.5", index === 0 ? "text-left" : index === moments.length - 1 ? "text-right" : "text-center")}>
+              <TimelineTimeCapsule
+                value={moment.value}
+                onSave={(value) => onUpdateTime(event, moment.field, value)}
               />
-              <div className={cn("mt-3 truncate font-semibold", labelClassName)}>{moment.label}</div>
-              <div className={cn("mt-1.5", index === 0 ? "text-left" : index === moments.length - 1 ? "text-right" : "text-center")}>
-                <span className="inline-flex rounded-full bg-slate-100 px-2.5 py-1 text-base font-semibold leading-none text-slate-600 ring-1 ring-slate-200/70">
-                  {moment.time}
-                </span>
-              </div>
             </div>
-          );
-        })}
+          </div>
+        ))}
       </div>
     </div>
+  );
+}
+
+function TimelineTimeCapsule({
+  value,
+  onSave,
+}: {
+  value: string | null;
+  onSave: (value: string) => Promise<void>;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(toTimeInputValue(value));
+  const [saving, setSaving] = useState(false);
+  const inputRef = useRef<HTMLInputElement | null>(null);
+
+  useEffect(() => {
+    if (!editing) setDraft(toTimeInputValue(value));
+  }, [editing, value]);
+
+  useEffect(() => {
+    if (!editing) return;
+    inputRef.current?.focus();
+    inputRef.current?.select();
+  }, [editing]);
+
+  async function saveTime() {
+    if (saving) return;
+    const nextValue = normalizeCompactTimeInput(draft);
+    setDraft(nextValue);
+
+    if (nextValue === toTimeInputValue(value)) {
+      setEditing(false);
+      return;
+    }
+
+    setSaving(true);
+    try {
+      await onSave(nextValue);
+      setEditing(false);
+    } catch {
+      inputRef.current?.focus();
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  if (editing) {
+    return (
+      <input
+        ref={inputRef}
+        type="text"
+        inputMode="numeric"
+        placeholder="HH:mm"
+        value={draft}
+        disabled={saving}
+        onChange={(event) => setDraft(sanitizeTimeDraft(event.target.value))}
+        onBlur={() => void saveTime()}
+        onKeyDown={(event) => {
+          if (event.key === "Enter") {
+            event.preventDefault();
+            void saveTime();
+          }
+          if (event.key === "Escape") {
+            event.preventDefault();
+            setDraft(toTimeInputValue(value));
+            setEditing(false);
+          }
+        }}
+        className="h-7 w-24 rounded-full border border-slate-200 bg-slate-100 px-2.5 text-center text-base font-semibold leading-none text-slate-700 outline-none transition focus:border-slate-300 disabled:opacity-70"
+      />
+    );
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={() => setEditing(true)}
+      className={cn(
+        "inline-flex rounded-full bg-slate-100 px-2.5 py-1 text-base font-semibold leading-none ring-1 ring-slate-200/70 transition hover:bg-slate-200/70",
+        value ? "text-slate-600" : "text-slate-400",
+      )}
+    >
+      {formatTime(value) || "--:--"}
+    </button>
   );
 }
 
@@ -2545,25 +2834,52 @@ function LinkValueRow({
   const trimmedValue = value.trim();
   const canOpen = openable && Boolean(getValidUrl(trimmedValue));
   const rowTone = getLinkTone(completed ? "available" : "missing");
+  const [editing, setEditing] = useState(false);
+  const openTimerRef = useRef<number | null>(null);
+
+  useEffect(() => () => {
+    if (openTimerRef.current) window.clearTimeout(openTimerRef.current);
+  }, []);
+
+  function openUrlFromRow() {
+    if (!canOpen) return;
+    if (openTimerRef.current) window.clearTimeout(openTimerRef.current);
+    openTimerRef.current = window.setTimeout(() => {
+      openUrl(trimmedValue);
+      openTimerRef.current = null;
+    }, 180);
+  }
+
+  function editUrlFromRow() {
+    if (openTimerRef.current) {
+      window.clearTimeout(openTimerRef.current);
+      openTimerRef.current = null;
+    }
+    setEditing(true);
+  }
 
   return (
     <div className="flex w-full min-w-0 items-center gap-2">
       <div className={cn("inline-flex min-h-9 min-w-0 flex-1 items-center gap-2 rounded-full border px-3 py-1.5 transition focus-within:border-sky-400", rowTone.surface, rowTone.border)}>
         <Icon className={cn("h-4 w-4 shrink-0", rowTone.icon)} />
-        <input
-          value={value}
-          onChange={(event) => onChange(event.target.value)}
-          placeholder={placeholder}
-          className={cn("min-w-0 flex-1 bg-transparent text-base font-semibold outline-none placeholder:text-sky-300", rowTone.text)}
-        />
-        {canOpen && (
+        {canOpen && !editing ? (
           <button
             type="button"
-            onClick={() => openUrl(trimmedValue)}
-            className={cn("hidden shrink-0 rounded-full px-2 py-0.5 text-base font-semibold transition hover:bg-white/70 sm:inline-flex", rowTone.icon)}
+            onClick={openUrlFromRow}
+            onDoubleClick={editUrlFromRow}
+            className={cn("min-w-0 flex-1 truncate bg-transparent text-left text-base font-semibold underline-offset-2 outline-none transition hover:underline", rowTone.text)}
           >
-            Ouvrir
+            {value}
           </button>
+        ) : (
+          <input
+            value={value}
+            onChange={(event) => onChange(event.target.value)}
+            onBlur={() => setEditing(false)}
+            autoFocus={editing}
+            placeholder={placeholder}
+            className={cn("min-w-0 flex-1 bg-transparent text-base font-semibold outline-none placeholder:text-sky-300", rowTone.text)}
+          />
         )}
       </div>
       <button
@@ -2804,7 +3120,7 @@ function ContextDetailBlock({
       setAddingOptionItem(false);
     } catch (saveError) {
       console.error("Unable to add option detail item", saveError);
-      setOptionItemError(saveError instanceof Error ? saveError.message : "Impossible d'ajouter cet élément.");
+      setOptionItemError(saveError instanceof Error ? saveError.message : "Impossible d'ajouter cette note.");
     } finally {
       setSavingOptionItem(false);
     }
@@ -2819,7 +3135,7 @@ function ContextDetailBlock({
       await onDeleteOptionItem(selectedOption, optionItem);
     } catch (deleteError) {
       console.error("Unable to delete option detail item", deleteError);
-      setOptionItemError(deleteError instanceof Error ? deleteError.message : "Impossible de supprimer cet élément.");
+      setOptionItemError(deleteError instanceof Error ? deleteError.message : "Impossible de supprimer cette note.");
     }
   }
 
@@ -3069,37 +3385,39 @@ function ContextDetailBlock({
       </div>
       {titleRenameError && <div className="mt-2 text-base font-medium text-rose-700">{titleRenameError}</div>}
       <div className="mt-3">
-        <div className="flex flex-wrap items-center gap-2">
+        <div className="flex flex-col gap-2">
           {!addingOptionItem ? (
             <button
               onClick={() => setAddingOptionItem(true)}
-              className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-emerald-200 bg-emerald-50 text-base font-semibold leading-none text-emerald-700 transition hover:bg-emerald-100"
-              aria-label="Ajouter un élément"
-              title="Ajouter un élément"
+              className="flex h-8 w-fit shrink-0 items-center gap-2 rounded-full border border-emerald-200 bg-emerald-50 px-3 text-base font-semibold leading-none text-emerald-700 transition hover:bg-emerald-100"
+              aria-label="Ajouter une note"
+              title="Ajouter une note"
             >
-              +
+              <span className="text-base leading-none">+</span>
+              <span>Ajouter une note</span>
             </button>
           ) : (
-            <form onSubmit={addOptionItem} className="flex min-w-0 flex-1 flex-wrap items-center gap-2">
-              <input
+            <form onSubmit={addOptionItem} className="flex min-w-0 flex-col gap-2">
+              <textarea
                 required
+                rows={3}
                 value={optionItemInput}
                 onChange={(event) => setOptionItemInput(event.target.value)}
-                placeholder="Nouvel élément"
-                className="h-9 min-w-0 flex-1 rounded-xl border border-emerald-200 bg-white px-3 text-base font-medium text-stone-950 outline-none transition placeholder:text-stone-300 focus:border-emerald-400"
+                placeholder="Nouvelle note"
+                className="min-h-20 w-full resize-none rounded-xl border border-emerald-200 bg-white px-3 py-2 text-base font-medium text-stone-950 outline-none transition placeholder:text-stone-300 focus:border-emerald-400"
               />
-              <button disabled={savingOptionItem} className="h-9 shrink-0 rounded-xl bg-emerald-600 px-3 text-base font-semibold text-white transition hover:bg-emerald-700 disabled:bg-stone-300">
+              <button disabled={savingOptionItem} className="h-9 w-fit shrink-0 rounded-xl bg-emerald-600 px-3 text-base font-semibold text-white transition hover:bg-emerald-700 disabled:bg-stone-300">
                 Ajouter
               </button>
             </form>
           )}
         {selectedOption.items.map((item) => (
-          <div key={item.id} className={cn("group inline-flex min-h-9 w-fit max-w-full items-center gap-2 rounded-full border px-3 py-1.5", optionTone.surface, optionTone.border)}>
-            <span className={cn("min-w-0 truncate text-base font-semibold", optionTone.text)}>{item.label}</span>
+          <div key={item.id} className={cn("group flex min-h-12 w-full items-start gap-3 rounded-xl border px-3 py-2.5", optionTone.surface, optionTone.border)}>
+            <p className={cn("min-w-0 flex-1 whitespace-pre-wrap text-base font-medium leading-relaxed", optionTone.text)}>{item.label}</p>
             <button
               onClick={() => void removeOptionItem(item)}
               className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-emerald-500 opacity-100 transition hover:bg-white/70 hover:text-emerald-800 focus:opacity-100 [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover:opacity-100"
-              aria-label="Supprimer cet élément"
+              aria-label="Supprimer cette note"
             >
               <X className="h-3.5 w-3.5" />
             </button>
@@ -3144,21 +3462,24 @@ function splitStoredDetails(details: string | null) {
 
 function CreateEventModal({
   selectedDateKey,
+  event,
   onClose,
-  onCreate,
+  onSubmit,
 }: {
   selectedDateKey: string;
+  event: ProductionEvent | null;
   onClose: () => void;
-  onCreate: (input: CreateEventInput) => Promise<void>;
+  onSubmit: (input: CreateEventInput) => Promise<void>;
 }) {
+  const isEditing = Boolean(event);
   const [form, setForm] = useState<CreateEventInput>({
-    clientName: "",
-    eventName: "",
-    date: selectedDateKey,
-    clientArrivalTime: "08:30",
-    startTime: "10:00",
-    endTime: "11:30",
-    endOfDayTime: "13:00",
+    clientName: event?.clientName ?? "",
+    eventName: event?.eventName ?? "",
+    date: event?.date ?? selectedDateKey,
+    clientArrivalTime: event ? toTimeInputValue(event.clientArrivalTime) : "08:30",
+    startTime: event ? toTimeInputValue(event.startTime) : "10:00",
+    endTime: event ? toTimeInputValue(event.endTime) : "11:30",
+    endOfDayTime: event ? toTimeInputValue(event.endOfDayTime) : "13:00",
   });
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -3169,9 +3490,11 @@ function CreateEventModal({
     setError(null);
 
     try {
-      await onCreate(form);
+      const normalizedForm = normalizeEventTimeInput(form);
+      setForm(normalizedForm);
+      await onSubmit(normalizedForm);
     } catch (createError) {
-      setError(createError instanceof Error ? createError.message : "Impossible de créer l'événement.");
+      setError(createError instanceof Error ? createError.message : isEditing ? "Impossible de modifier l'événement." : "Impossible de créer l'événement.");
     } finally {
       setSubmitting(false);
     }
@@ -3185,7 +3508,7 @@ function CreateEventModal({
     <div className="fixed inset-0 z-50 flex items-end bg-stone-950/10 p-3 sm:items-center sm:justify-center sm:p-6">
       <form onSubmit={handleSubmit} className="w-full rounded-3xl border border-stone-200 bg-white p-5 sm:max-w-xl sm:p-6">
         <div className="mb-5 flex items-center justify-between gap-4">
-          <h2 className="text-base font-semibold text-stone-950">Créer un événement</h2>
+          <h2 className="text-base font-semibold text-stone-950">{isEditing ? "Modifier l'événement" : "Créer un événement"}</h2>
           <button type="button" onClick={onClose} className="rounded-full border border-stone-200 px-3 py-1.5 text-base font-semibold text-stone-600">
             Fermer
           </button>
@@ -3202,16 +3525,16 @@ function CreateEventModal({
             <input required type="date" value={form.date} onChange={(event) => updateField("date", event.target.value)} className={formInputClassName} />
           </Field>
           <Field label="Arrivée client">
-            <input type="time" value={form.clientArrivalTime} onChange={(event) => updateField("clientArrivalTime", event.target.value)} className={formInputClassName} />
+            <TimeTextInput value={form.clientArrivalTime} onChange={(value) => updateField("clientArrivalTime", value)} className={formInputClassName} />
           </Field>
           <Field label="Début">
-            <input required type="time" value={form.startTime} onChange={(event) => updateField("startTime", event.target.value)} className={formInputClassName} />
+            <TimeTextInput value={form.startTime} onChange={(value) => updateField("startTime", value)} className={formInputClassName} />
           </Field>
           <Field label="Fin">
-            <input required type="time" value={form.endTime} onChange={(event) => updateField("endTime", event.target.value)} className={formInputClassName} />
+            <TimeTextInput value={form.endTime} onChange={(value) => updateField("endTime", value)} className={formInputClassName} />
           </Field>
           <Field label="Fin journée">
-            <input type="time" value={form.endOfDayTime} onChange={(event) => updateField("endOfDayTime", event.target.value)} className={formInputClassName} />
+            <TimeTextInput value={form.endOfDayTime} onChange={(value) => updateField("endOfDayTime", value)} className={formInputClassName} />
           </Field>
         </div>
 
@@ -3222,7 +3545,7 @@ function CreateEventModal({
             Annuler
           </button>
           <button disabled={submitting} className="rounded-full bg-[#bb2720] px-4 py-2 text-base font-semibold text-white disabled:bg-stone-300">
-            {submitting ? "Création..." : "Créer"}
+            {submitting ? (isEditing ? "Modification..." : "Création...") : isEditing ? "Modifier" : "Créer"}
           </button>
         </div>
       </form>
@@ -3291,6 +3614,44 @@ function DeleteEventDialog({
 
 const formInputClassName =
   "h-11 w-full rounded-2xl border border-stone-200 bg-white px-3 text-base font-medium text-stone-950 outline-none transition focus:border-[#bb2720]/50";
+
+function TimeTextInput({
+  value,
+  onChange,
+  className,
+}: {
+  value: string;
+  onChange: (value: string) => void;
+  className?: string;
+}) {
+  function commitValue() {
+    onChange(normalizeCompactTimeInput(value));
+  }
+
+  return (
+    <input
+      type="text"
+      inputMode="numeric"
+      placeholder="HH:mm"
+      value={value}
+      onChange={(event) => onChange(sanitizeTimeDraft(event.target.value))}
+      onBlur={commitValue}
+      onFocus={(event) => event.currentTarget.select()}
+      onKeyDown={(event) => {
+        if (event.key === "Enter") {
+          event.preventDefault();
+          commitValue();
+          event.currentTarget.blur();
+        }
+        if (event.key === "Escape") {
+          event.preventDefault();
+          event.currentTarget.blur();
+        }
+      }}
+      className={className}
+    />
+  );
+}
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
