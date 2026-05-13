@@ -44,6 +44,7 @@ export type Database = {
           label: string;
           status: CompletionStatus;
           details: string | null;
+          assigned_team_member_id: string | null;
           created_at: string;
         };
         Insert: {
@@ -52,6 +53,7 @@ export type Database = {
           label: string;
           status?: CompletionStatus;
           details?: string | null;
+          assigned_team_member_id?: string | null;
           created_at?: string;
         };
         Update: Partial<Database["public"]["Tables"]["event_options"]["Insert"]>;
@@ -79,6 +81,7 @@ export type Database = {
           event_id: string;
           label: string;
           url: string | null;
+          stream_key: string | null;
           status: LinkStatus;
           created_at: string;
         };
@@ -87,30 +90,71 @@ export type Database = {
           event_id: string;
           label: string;
           url?: string | null;
+          stream_key?: string | null;
           status?: LinkStatus;
           created_at?: string;
         };
         Update: Partial<Database["public"]["Tables"]["event_links"]["Insert"]>;
         Relationships: [];
       };
-      tasks: {
+      event_link_entries: {
+        Row: {
+          id: string;
+          link_id: string;
+          url: string | null;
+          stream_key: string | null;
+          position: number;
+          created_at: string;
+        };
+        Insert: {
+          id?: string;
+          link_id: string;
+          url?: string | null;
+          stream_key?: string | null;
+          position?: number;
+          created_at?: string;
+        };
+        Update: Partial<Database["public"]["Tables"]["event_link_entries"]["Insert"]>;
+        Relationships: [];
+      };
+      event_documents: {
         Row: {
           id: string;
           event_id: string;
-          title: string;
-          subtitle: string | null;
-          status: CompletionStatus;
+          group_id: string;
+          file_name: string;
+          file_path: string;
+          file_type: string | null;
+          file_size: number | null;
           created_at: string;
         };
         Insert: {
           id?: string;
           event_id: string;
-          title: string;
-          subtitle?: string | null;
-          status?: CompletionStatus;
+          group_id: string;
+          file_name: string;
+          file_path: string;
+          file_type?: string | null;
+          file_size?: number | null;
           created_at?: string;
         };
-        Update: Partial<Database["public"]["Tables"]["tasks"]["Insert"]>;
+        Update: Partial<Database["public"]["Tables"]["event_documents"]["Insert"]>;
+        Relationships: [];
+      };
+      event_document_groups: {
+        Row: {
+          id: string;
+          event_id: string;
+          label: string;
+          created_at: string;
+        };
+        Insert: {
+          id?: string;
+          event_id: string;
+          label: string;
+          created_at?: string;
+        };
+        Update: Partial<Database["public"]["Tables"]["event_document_groups"]["Insert"]>;
         Relationships: [];
       };
       team_members: {
@@ -127,18 +171,6 @@ export type Database = {
           created_at?: string;
         };
         Update: Partial<Database["public"]["Tables"]["team_members"]["Insert"]>;
-        Relationships: [];
-      };
-      task_assignees: {
-        Row: {
-          task_id: string;
-          team_member_id: string;
-        };
-        Insert: {
-          task_id: string;
-          team_member_id: string;
-        };
-        Update: Partial<Database["public"]["Tables"]["task_assignees"]["Insert"]>;
         Relationships: [];
       };
     };

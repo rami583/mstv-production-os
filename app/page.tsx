@@ -8,12 +8,16 @@ import {
   Check,
   CircleHelp,
   CirclePlay,
-  Clock3,
   Cloud,
   Copy,
+  Download,
   ExternalLink,
+  File,
   FileStack,
   FileText,
+  FileSpreadsheet,
+  KeyRound,
+  Link,
   MonitorPlay,
   Palette,
   Presentation,
@@ -27,7 +31,7 @@ import {
   X,
   type LucideIcon,
 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Card } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
 import {
@@ -39,28 +43,21 @@ import {
 } from "@/lib/supabase";
 
 type Screen = "calendar" | "detail";
-type State = "ok" | "waiting";
-type ItemKind = "option" | "link";
+type ItemKind = "option" | "link" | "document";
 
 type EventRow = Database["public"]["Tables"]["events"]["Row"];
 type EventOptionRow = Database["public"]["Tables"]["event_options"]["Row"];
 type EventOptionItemRow = Database["public"]["Tables"]["event_option_items"]["Row"];
 type EventLinkRow = Database["public"]["Tables"]["event_links"]["Row"];
-type TaskRow = Database["public"]["Tables"]["tasks"]["Row"];
+type EventLinkEntryRow = Database["public"]["Tables"]["event_link_entries"]["Row"];
+type EventDocumentRow = Database["public"]["Tables"]["event_documents"]["Row"];
+type EventDocumentGroupRow = Database["public"]["Tables"]["event_document_groups"]["Row"];
 type TeamMemberRow = Database["public"]["Tables"]["team_members"]["Row"];
 
 type EventQueryRow = EventRow & {
   event_options: EventOptionRow[] | null;
   event_links: EventLinkRow[] | null;
-  tasks:
-    | (TaskRow & {
-        task_assignees:
-          | ({
-              team_members: TeamMemberRow | null;
-            } | null)[]
-          | null;
-      })[]
-    | null;
+  event_documents?: EventDocumentRow[] | null;
 };
 
 type TeamMember = {
@@ -75,8 +72,10 @@ type EventOption = {
   label: string;
   status: CompletionStatus;
   details: string | null;
+  assignedTeamMemberId: string | null;
   createdAt: string;
   items: EventOptionItem[];
+  assignees: TeamMember[];
 };
 
 type EventOptionItem = {
@@ -91,18 +90,44 @@ type EventLink = {
   eventId: string;
   label: string;
   url: string | null;
+  streamKey: string | null;
   status: LinkStatus;
+  createdAt: string;
+  entries: EventLinkEntry[];
+};
+
+type EventLinkEntry = {
+  id: string;
+  linkId: string;
+  url: string | null;
+  streamKey: string | null;
+  position: number;
   createdAt: string;
 };
 
-type TaskItem = {
+type LinkEntryDraft = {
+  id: string | null;
+  url: string;
+  streamKey: string;
+};
+
+type EventDocument = {
   id: string;
   eventId: string;
-  title: string;
-  subtitle: string | null;
-  status: CompletionStatus;
+  groupId: string;
+  fileName: string;
+  filePath: string;
+  fileType: string | null;
+  fileSize: number | null;
   createdAt: string;
-  assignees: TeamMember[];
+};
+
+type EventDocumentGroup = {
+  id: string;
+  eventId: string;
+  label: string;
+  createdAt: string;
+  files: EventDocument[];
 };
 
 type ProductionEvent = {
@@ -119,17 +144,19 @@ type ProductionEvent = {
   updatedAt: string;
   options: EventOption[];
   links: EventLink[];
-  tasks: TaskItem[];
+  documentGroups: EventDocumentGroup[];
 };
 
 type ContextSelection =
   | { type: "option"; optionId: string }
-  | { type: "link"; linkId: string; copied: boolean }
+  | { type: "link"; linkId: string }
+  | { type: "document"; groupId: string }
   | null;
 
 type DeleteSelection =
   | { type: "option"; optionId: string }
-  | { type: "link"; linkId: string };
+  | { type: "link"; linkId: string }
+  | { type: "document"; groupId: string };
 
 type CreateEventInput = {
   clientName: string;
@@ -139,10 +166,7 @@ type CreateEventInput = {
   startTime: string;
   endTime: string;
   endOfDayTime: string;
-  status: EventStatus;
 };
-
-const statusOptions: EventStatus[] = ["Brouillon", "En préparation", "En attente client", "Prêt", "En direct", "Terminé"];
 
 const statusStyles: Record<EventStatus, string> = {
   Brouillon: "bg-stone-100 text-stone-600 ring-stone-200",
@@ -151,19 +175,6 @@ const statusStyles: Record<EventStatus, string> = {
   Prêt: "bg-emerald-100 text-emerald-800 ring-emerald-200",
   "En direct": "bg-rose-100 text-rose-800 ring-rose-200",
   Terminé: "bg-stone-200 text-stone-700 ring-stone-300",
-};
-
-const stateStyles: Record<State, { panel: string; icon: string; label: string }> = {
-  ok: {
-    panel: "border-emerald-200 bg-emerald-50/70",
-    icon: "bg-emerald-100 text-emerald-700",
-    label: "Terminé",
-  },
-  waiting: {
-    panel: "border-sky-200 bg-sky-50/70",
-    icon: "bg-sky-100 text-sky-700",
-    label: "À faire",
-  },
 };
 
 const iconKeywordRules: { keywords: string[]; icon: LucideIcon }[] = [
@@ -197,11 +208,15 @@ const defaultOptions = [
 
 const defaultLinks = ["Drive client", "Habillage Guillaume", "Événement LiveMaker", "Conducteur", "Slides", "Replay"];
 
-const defaultTasks = [
-  { title: "Mobilier", subtitle: "Configuration plateau à confirmer", assignees: ["Arthur"] },
-  { title: "Installer l'habillage", subtitle: "Package graphique régie", assignees: ["Tony", "Guillaume"] },
-  { title: "Configurer la plateforme", subtitle: "Event, page privée, test technique", assignees: ["Rami"] },
-  { title: "Préparer l'accueil", subtitle: "Café, loge, arrivée client", assignees: ["Antoine"] },
+const platformLinkLabels = new Set(["plateforme", "plateforme de diffusion", "evenement plateforme", "event plateforme"]);
+const eventDocumentsBucket = "event-documents";
+const optionCollaboratorProfiles = [
+  { firstName: "Antoine", displayName: "Antoine Santi", initials: "AS" },
+  { firstName: "Rami", displayName: "Rami Mustakim", initials: "RM" },
+  { firstName: "Arthur", displayName: "Arthur Legrand", initials: "AL" },
+  { firstName: "Gauthier", displayName: "Gauthier Renard", initials: "GR" },
+  { firstName: "Tony", displayName: "Tony Bouilly", initials: "TB" },
+  { firstName: "Guillaume", displayName: "Guillaume Gallot", initials: "GG" },
 ];
 
 const calendarArrowClassName =
@@ -259,6 +274,109 @@ function formatTitleCase(label: string) {
     });
 }
 
+function sanitizeStorageFileName(fileName: string) {
+  const extension = getFileExtension(fileName);
+  const baseName = fileName
+    .replace(/\.[^.]+$/, "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-zA-Z0-9_-]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .toLowerCase();
+  const safeBaseName = baseName || "document";
+  return extension ? `${Date.now()}-${safeBaseName}.${extension}` : `${Date.now()}-${safeBaseName}`;
+}
+
+function getFileExtension(fileName: string) {
+  const extension = fileName.split(".").pop();
+  return extension && extension !== fileName ? extension.toLowerCase() : "";
+}
+
+function getDocumentObjectPath(filePath: string) {
+  const prefix = `${eventDocumentsBucket}/`;
+  return filePath.startsWith(prefix) ? filePath.slice(prefix.length) : filePath;
+}
+
+function formatFileSize(size: number | null) {
+  if (size === null) return "Taille inconnue";
+  if (size < 1024) return `${size} o`;
+  if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} Ko`;
+  return `${(size / (1024 * 1024)).toFixed(1)} Mo`;
+}
+
+function isLinkEntryDraftEmpty(draft: LinkEntryDraft, isPlatform: boolean) {
+  return isPlatform ? !draft.url.trim() && !draft.streamKey.trim() : !draft.url.trim();
+}
+
+function isLinkEntryDraftComplete(draft: Pick<LinkEntryDraft, "url" | "streamKey">, isPlatform: boolean) {
+  return isPlatform ? Boolean(draft.url.trim() && draft.streamKey.trim()) : Boolean(draft.url.trim());
+}
+
+function normalizeLinkEntryDrafts(drafts: LinkEntryDraft[], isPlatform: boolean) {
+  const nonEmptyDrafts = drafts.filter((draft) => !isLinkEntryDraftEmpty(draft, isPlatform));
+  const emptyDraft = drafts.find((draft) => isLinkEntryDraftEmpty(draft, isPlatform) && draft.id) ??
+    drafts.find((draft) => isLinkEntryDraftEmpty(draft, isPlatform)) ?? { id: null, url: "", streamKey: "" };
+
+  return [
+    ...nonEmptyDrafts,
+    {
+      ...emptyDraft,
+      url: "",
+      streamKey: "",
+    },
+  ];
+}
+
+function createLinkEntryDrafts(link: EventLink, isPlatform: boolean) {
+  const sourceEntries = link.entries.length > 0
+    ? link.entries
+    : link.url || link.streamKey
+      ? [{
+          id: null,
+          linkId: link.id,
+          url: link.url,
+          streamKey: link.streamKey,
+          position: 0,
+          createdAt: link.createdAt,
+        }]
+      : [];
+
+  return normalizeLinkEntryDrafts(
+    sourceEntries.map((entry) => ({
+      id: entry.id,
+      url: entry.url ?? "",
+      streamKey: entry.streamKey ?? "",
+    })),
+    isPlatform,
+  );
+}
+
+function getPersistableLinkEntryDrafts(drafts: LinkEntryDraft[], isPlatform: boolean) {
+  return drafts.filter((draft) => !isLinkEntryDraftEmpty(draft, isPlatform));
+}
+
+function serializeLinkEntryDrafts(drafts: LinkEntryDraft[], isPlatform: boolean) {
+  return JSON.stringify(
+    getPersistableLinkEntryDrafts(drafts, isPlatform).map((draft, position) => ({
+      id: draft.id,
+      url: draft.url.trim(),
+      streamKey: isPlatform ? draft.streamKey.trim() : "",
+      position,
+    })),
+  );
+}
+
+function serializeLinkEntries(entries: EventLinkEntry[], isPlatform: boolean) {
+  return JSON.stringify(
+    entries.map((entry, position) => ({
+      id: entry.id,
+      url: entry.url?.trim() ?? "",
+      streamKey: isPlatform ? entry.streamKey?.trim() ?? "" : "",
+      position,
+    })),
+  );
+}
+
 function mapTeamMember(row: TeamMemberRow): TeamMember {
   return {
     id: row.id,
@@ -267,12 +385,43 @@ function mapTeamMember(row: TeamMemberRow): TeamMember {
   };
 }
 
+function getOptionCollaboratorProfile(member: TeamMember) {
+  return optionCollaboratorProfiles.find((profile) => profile.firstName === member.firstName) ?? null;
+}
+
+function getOptionAssignee(option: EventOption) {
+  return option.assignees[0] ?? null;
+}
+
 function mapEventOptionItem(row: EventOptionItemRow): EventOptionItem {
   return {
     id: row.id,
     optionId: row.option_id,
     label: row.label,
     createdAt: row.created_at,
+  };
+}
+
+function mapEventDocument(row: EventDocumentRow): EventDocument {
+  return {
+    id: row.id,
+    eventId: row.event_id,
+    groupId: row.group_id,
+    fileName: row.file_name,
+    filePath: row.file_path,
+    fileType: row.file_type,
+    fileSize: row.file_size,
+    createdAt: row.created_at,
+  };
+}
+
+function mapEventDocumentGroup(row: EventDocumentGroupRow): EventDocumentGroup {
+  return {
+    id: row.id,
+    eventId: row.event_id,
+    label: row.label,
+    createdAt: row.created_at,
+    files: [],
   };
 }
 
@@ -285,8 +434,10 @@ function mapEvent(row: EventQueryRow): ProductionEvent {
       label: option.label,
       status: option.status,
       details: option.details,
+      assignedTeamMemberId: option.assigned_team_member_id ?? null,
       createdAt: option.created_at,
       items: [],
+      assignees: [],
     }));
 
   const links = [...(row.event_links ?? [])]
@@ -296,23 +447,10 @@ function mapEvent(row: EventQueryRow): ProductionEvent {
       eventId: link.event_id,
       label: link.label,
       url: link.url,
+      streamKey: link.stream_key ?? null,
       status: link.status,
       createdAt: link.created_at,
-    }));
-
-  const tasks = [...(row.tasks ?? [])]
-    .sort((a, b) => a.created_at.localeCompare(b.created_at))
-    .map((task) => ({
-      id: task.id,
-      eventId: task.event_id,
-      title: task.title,
-      subtitle: task.subtitle,
-      status: task.status,
-      createdAt: task.created_at,
-      assignees: (task.task_assignees ?? [])
-        .map((assignee) => assignee?.team_members)
-        .filter((member): member is TeamMemberRow => Boolean(member))
-        .map(mapTeamMember),
+      entries: [],
     }));
 
   return {
@@ -329,7 +467,18 @@ function mapEvent(row: EventQueryRow): ProductionEvent {
     updatedAt: row.updated_at,
     options,
     links,
-    tasks,
+    documentGroups: [],
+  };
+}
+
+function mapEventLinkEntry(row: EventLinkEntryRow): EventLinkEntry {
+  return {
+    id: row.id,
+    linkId: row.link_id,
+    url: row.url,
+    streamKey: row.stream_key,
+    position: row.position,
+    createdAt: row.created_at,
   };
 }
 
@@ -351,6 +500,61 @@ function withOptionItems(events: ProductionEvent[], items: EventOptionItem[]) {
   }));
 }
 
+function withLinkEntries(events: ProductionEvent[], entries: EventLinkEntry[]) {
+  const entriesByLinkId = new Map<string, EventLinkEntry[]>();
+
+  for (const entry of entries) {
+    const linkEntries = entriesByLinkId.get(entry.linkId) ?? [];
+    linkEntries.push(entry);
+    entriesByLinkId.set(entry.linkId, linkEntries);
+  }
+
+  return events.map((event) => ({
+    ...event,
+    links: event.links.map((link) => ({
+      ...link,
+      entries: (entriesByLinkId.get(link.id) ?? []).sort((a, b) => a.position - b.position || a.createdAt.localeCompare(b.createdAt)),
+    })),
+  }));
+}
+
+function withOptionAssignees(events: ProductionEvent[], teamMembers: TeamMember[]) {
+  return events.map((event) => ({
+    ...event,
+    options: event.options.map((option) => ({
+      ...option,
+      assignees: option.assignedTeamMemberId
+        ? teamMembers.filter((member) => member.id === option.assignedTeamMemberId && getOptionCollaboratorProfile(member)).slice(0, 1)
+        : [],
+    })),
+  }));
+}
+
+function withDocumentGroups(events: ProductionEvent[], groups: EventDocumentGroup[], files: EventDocument[]) {
+  const filesByGroupId = new Map<string, EventDocument[]>();
+
+  for (const file of files) {
+    const groupFiles = filesByGroupId.get(file.groupId) ?? [];
+    groupFiles.push(file);
+    filesByGroupId.set(file.groupId, groupFiles);
+  }
+
+  const groupsByEventId = new Map<string, EventDocumentGroup[]>();
+  for (const group of groups) {
+    const eventGroups = groupsByEventId.get(group.eventId) ?? [];
+    eventGroups.push({
+      ...group,
+      files: filesByGroupId.get(group.id) ?? [],
+    });
+    groupsByEventId.set(group.eventId, eventGroups);
+  }
+
+  return events.map((event) => ({
+    ...event,
+    documentGroups: groupsByEventId.get(event.id) ?? [],
+  }));
+}
+
 async function fetchEvents() {
   if (!supabase) {
     throw new Error("Configuration Supabase manquante.");
@@ -362,21 +566,56 @@ async function fetchEvents() {
       `
         *,
         event_options (*),
-        event_links (*),
-        tasks (
-          *,
-          task_assignees (
-            team_members (*)
-          )
-        )
+        event_links (*)
       `,
     )
     .order("date", { ascending: true })
     .order("start_time", { ascending: true });
 
   if (error) throw error;
-  const events = ((data ?? []) as EventQueryRow[]).map(mapEvent);
+  let events = ((data ?? []) as EventQueryRow[]).map(mapEvent);
+  const eventIds = events.map((event) => event.id);
   const optionIds = events.flatMap((event) => event.options.map((option) => option.id));
+  const linkIds = events.flatMap((event) => event.links.map((link) => link.id));
+
+  if (eventIds.length > 0) {
+    const [{ data: groupData, error: groupError }, { data: documentData, error: documentError }] = await Promise.all([
+      supabase
+        .from("event_document_groups")
+        .select("*")
+        .in("event_id", eventIds)
+        .order("created_at", { ascending: true }),
+      supabase
+        .from("event_documents")
+        .select("*")
+        .in("event_id", eventIds)
+        .order("created_at", { ascending: true }),
+    ]);
+
+    if (groupError || documentError) {
+      console.error("Failed to load document groups/files. Apply supabase/migrations/005_event_document_groups.sql if the tables are missing.", {
+        groupError,
+        documentError,
+      });
+    } else {
+      events = withDocumentGroups(events, (groupData ?? []).map(mapEventDocumentGroup), (documentData ?? []).map(mapEventDocument));
+    }
+  }
+
+  if (linkIds.length > 0) {
+    const { data: linkEntryData, error: linkEntryError } = await supabase
+      .from("event_link_entries")
+      .select("*")
+      .in("link_id", linkIds)
+      .order("position", { ascending: true })
+      .order("created_at", { ascending: true });
+
+    if (linkEntryError) {
+      console.error("Failed to load event_link_entries. Apply supabase/migrations/009_event_link_entries.sql if the table is missing.", linkEntryError);
+    } else {
+      events = withLinkEntries(events, (linkEntryData ?? []).map(mapEventLinkEntry));
+    }
+  }
 
   if (optionIds.length === 0) return events;
 
@@ -436,7 +675,7 @@ export default function Home() {
 
     try {
       const [nextEvents, nextTeamMembers] = await Promise.all([fetchEvents(), fetchTeamMembers()]);
-      setEvents(nextEvents);
+      setEvents(withOptionAssignees(nextEvents, nextTeamMembers));
       setTeamMembers(nextTeamMembers);
       setSelectedId((current) => {
         if (nextSelectedId !== undefined) return nextSelectedId;
@@ -487,7 +726,6 @@ export default function Home() {
         start_time: input.startTime,
         end_time: input.endTime,
         end_of_day_time: input.endOfDayTime || null,
-        status: input.status,
       })
       .select()
       .single();
@@ -532,33 +770,6 @@ export default function Home() {
       if (optionItemError) throw optionItemError;
     }
 
-    const { data: insertedTasks, error: taskError } = await supabase
-      .from("tasks")
-      .insert(
-        defaultTasks.map((task) => ({
-          event_id: event.id,
-          title: task.title,
-          subtitle: task.subtitle,
-          status: "incomplete" as CompletionStatus,
-        })),
-      )
-      .select();
-
-    if (taskError) throw taskError;
-
-    const assignees = (insertedTasks ?? []).flatMap((task, index) => {
-      const assignedNames = defaultTasks[index]?.assignees ?? [];
-      return assignedNames.flatMap((name) => {
-        const member = teamMembers.find((item) => item.firstName === name);
-        return member ? [{ task_id: task.id, team_member_id: member.id }] : [];
-      });
-    });
-
-    if (assignees.length > 0) {
-      const { error: assigneeError } = await supabase.from("task_assignees").insert(assignees);
-      if (assigneeError) throw assigneeError;
-    }
-
     await reloadData(event.id);
     setSelectedDateKey(event.date);
     setVisibleMonth(new Date(`${event.date}T12:00:00`));
@@ -587,46 +798,92 @@ export default function Home() {
     );
   }
 
-  async function toggleTask(task: TaskItem) {
-    if (!supabase) return;
-    const nextStatus: CompletionStatus = task.status === "completed" ? "incomplete" : "completed";
-    const { error: updateError } = await supabase.from("tasks").update({ status: nextStatus }).eq("id", task.id);
-
-    if (updateError) {
-      setError(updateError.message);
-      return;
-    }
-
-    setEvents((current) =>
-      current.map((event) =>
-        event.id === task.eventId
-          ? {
-              ...event,
-              tasks: event.tasks.map((item) => (item.id === task.id ? { ...item, status: nextStatus } : item)),
-            }
-          : event,
-      ),
-    );
-  }
-
-  async function updateLinkUrl(link: EventLink, url: string) {
+  async function syncEventLinkEntries(link: EventLink, drafts: LinkEntryDraft[]) {
     if (!supabase) {
       throw new Error("Configuration Supabase manquante.");
     }
 
-    const nextUrl = url.trim();
-    const nextStatus: LinkStatus = nextUrl ? "available" : "missing";
-    const { error: updateError } = await supabase
+    const isPlatform = isPlatformLink(link);
+    const nextDrafts = getPersistableLinkEntryDrafts(drafts, isPlatform);
+    const existingEntryIds = new Set(link.entries.map((entry) => entry.id));
+    const nextExistingEntryIds = new Set(nextDrafts.map((draft) => draft.id).filter((id): id is string => Boolean(id)));
+    const deletedEntryIds = link.entries.map((entry) => entry.id).filter((entryId) => !nextExistingEntryIds.has(entryId));
+    const nextEntries: EventLinkEntry[] = [];
+
+    if (deletedEntryIds.length > 0) {
+      const { error: deleteError } = await supabase
+        .from("event_link_entries")
+        .delete()
+        .in("id", deletedEntryIds);
+
+      if (deleteError) throw deleteError;
+    }
+
+    for (const [position, draft] of nextDrafts.entries()) {
+      const entryPayload = {
+        url: draft.url.trim() || null,
+        stream_key: isPlatform ? draft.streamKey.trim() || null : null,
+        position,
+      };
+
+      if (draft.id && existingEntryIds.has(draft.id)) {
+        const { data, error: updateEntryError } = await supabase
+          .from("event_link_entries")
+          .update(entryPayload)
+          .eq("id", draft.id)
+          .select()
+          .single();
+
+        if (updateEntryError) throw updateEntryError;
+        nextEntries.push(mapEventLinkEntry(data));
+      } else {
+        const { data, error: insertEntryError } = await supabase
+          .from("event_link_entries")
+          .insert({
+            link_id: link.id,
+            ...entryPayload,
+          })
+          .select()
+          .single();
+
+        if (insertEntryError) throw insertEntryError;
+        nextEntries.push(mapEventLinkEntry(data));
+      }
+    }
+
+    const nextStatus: LinkStatus = nextDrafts.some((draft) => isLinkEntryDraftComplete(draft, isPlatform)) ? "available" : "missing";
+    const firstEntry = nextEntries[0] ?? null;
+    const linkPayload = {
+      url: firstEntry?.url ?? null,
+      stream_key: isPlatform ? firstEntry?.streamKey ?? null : null,
+      status: nextStatus,
+    };
+    const { error: updateLinkError } = await supabase
       .from("event_links")
-      .update({ url: nextUrl || null, status: nextStatus })
+      .update(linkPayload)
       .eq("id", link.id);
 
-    if (updateError) throw updateError;
+    if (updateLinkError) {
+      const debugError = {
+        linkId: link.id,
+        label: link.label,
+        payload: linkPayload,
+        errorMessage: updateLinkError.message,
+        errorCode: updateLinkError.code,
+        errorDetails: updateLinkError.details,
+        errorHint: updateLinkError.hint,
+      };
+      console.error("Failed to save event link", debugError);
+      console.error("Failed to save event link JSON", JSON.stringify(debugError, null, 2));
+      throw updateLinkError;
+    }
 
     const updatedLink: EventLink = {
       ...link,
-      url: nextUrl || null,
+      url: linkPayload.url,
+      streamKey: linkPayload.stream_key,
       status: nextStatus,
+      entries: nextEntries,
     };
 
     setEvents((current) =>
@@ -672,8 +929,10 @@ export default function Home() {
       label: data.label,
       status: data.status,
       details: data.details,
+      assignedTeamMemberId: data.assigned_team_member_id ?? null,
       createdAt: data.created_at,
       items: [],
+      assignees: [],
     };
 
     setEvents((current) =>
@@ -709,6 +968,36 @@ export default function Home() {
           : event,
       ),
     );
+  }
+
+  async function renameEventOption(option: EventOption, label: string) {
+    if (!supabase) {
+      throw new Error("Configuration Supabase manquante.");
+    }
+
+    const nextLabel = formatTitleCase(label);
+    if (!nextLabel || nextLabel === option.label) return option;
+
+    const { error: updateError } = await supabase
+      .from("event_options")
+      .update({ label: nextLabel })
+      .eq("id", option.id);
+
+    if (updateError) throw updateError;
+
+    const updatedOption = { ...option, label: nextLabel };
+    setEvents((current) =>
+      current.map((event) =>
+        event.id === option.eventId
+          ? {
+              ...event,
+              options: event.options.map((item) => (item.id === option.id ? updatedOption : item)),
+            }
+          : event,
+      ),
+    );
+
+    return updatedOption;
   }
 
   async function createEventOptionItem(option: EventOption, label: string) {
@@ -803,6 +1092,58 @@ export default function Home() {
     );
   }
 
+  async function toggleOptionAssignee(option: EventOption, member: TeamMember) {
+    if (!supabase) {
+      throw new Error("Configuration Supabase manquante.");
+    }
+
+    const currentAssignee = getOptionAssignee(option);
+    const isAssigned = currentAssignee?.id === member.id;
+    const nextAssignedTeamMemberId = isAssigned ? null : member.id;
+    const updatePayload = {
+      assigned_team_member_id: nextAssignedTeamMemberId,
+    };
+
+    const { error: updateError } = await supabase
+      .from("event_options")
+      .update(updatePayload)
+      .eq("id", option.id);
+
+    if (updateError) {
+      console.error("Failed to update option collaborator assignment", {
+        table: "event_options",
+        column: "assigned_team_member_id",
+        optionId: option.id,
+        teamMemberId: member.id,
+        payload: updatePayload,
+        errorMessage: updateError.message,
+        errorCode: updateError.code,
+        errorDetails: updateError.details,
+        errorHint: updateError.hint,
+      });
+      throw updateError;
+    }
+
+    setEvents((current) =>
+      current.map((event) =>
+        event.id === option.eventId
+          ? {
+              ...event,
+              options: event.options.map((item) =>
+                item.id === option.id
+                  ? {
+                      ...item,
+                      assignedTeamMemberId: nextAssignedTeamMemberId,
+                      assignees: isAssigned ? [] : [member],
+                    }
+                  : item,
+              ),
+            }
+          : event,
+      ),
+    );
+  }
+
   async function createEventLink(eventId: string, input: { label: string; url: string }) {
     if (!supabase) {
       throw new Error("Configuration Supabase manquante.");
@@ -832,8 +1173,10 @@ export default function Home() {
       eventId: data.event_id,
       label: data.label,
       url: data.url,
+      streamKey: data.stream_key ?? null,
       status: data.status,
       createdAt: data.created_at,
+      entries: [],
     };
 
     setEvents((current) =>
@@ -869,6 +1212,265 @@ export default function Home() {
           : event,
       ),
     );
+  }
+
+  async function renameEventLink(link: EventLink, label: string) {
+    if (!supabase) {
+      throw new Error("Configuration Supabase manquante.");
+    }
+
+    const nextLabel = formatTitleCase(label);
+    if (!nextLabel || nextLabel === link.label) return link;
+
+    const { error: updateError } = await supabase
+      .from("event_links")
+      .update({ label: nextLabel })
+      .eq("id", link.id);
+
+    if (updateError) throw updateError;
+
+    const updatedLink = { ...link, label: nextLabel };
+    setEvents((current) =>
+      current.map((event) =>
+        event.id === link.eventId
+          ? {
+              ...event,
+              links: event.links.map((item) => (item.id === link.id ? updatedLink : item)),
+            }
+          : event,
+      ),
+    );
+
+    return updatedLink;
+  }
+
+  async function createEventDocumentGroup(eventId: string, label: string) {
+    if (!supabase) {
+      throw new Error("Configuration Supabase manquante.");
+    }
+
+    const nextLabel = formatTitleCase(label);
+    if (!nextLabel) {
+      throw new Error("Le nom du document est requis.");
+    }
+
+    const insertPayload = {
+      event_id: eventId,
+      label: nextLabel,
+    };
+
+    const { data, error: insertError } = await supabase
+      .from("event_document_groups")
+      .insert(insertPayload)
+      .select()
+      .single();
+
+    if (insertError) {
+      const debugError = {
+        table: "event_document_groups",
+        eventId,
+        payload: insertPayload,
+        errorMessage: insertError.message,
+        errorCode: insertError.code,
+        errorDetails: insertError.details,
+        errorHint: insertError.hint,
+      };
+      console.error("Failed to create event document group", debugError);
+      console.error("Failed to create event document group JSON", JSON.stringify(debugError, null, 2));
+      throw insertError;
+    }
+
+    const group = mapEventDocumentGroup(data);
+
+    setEvents((current) =>
+      current.map((event) =>
+        event.id === eventId
+          ? {
+              ...event,
+              documentGroups: [...event.documentGroups, group],
+            }
+          : event,
+      ),
+    );
+
+    return group;
+  }
+
+  async function renameEventDocumentGroup(group: EventDocumentGroup, label: string) {
+    if (!supabase) {
+      throw new Error("Configuration Supabase manquante.");
+    }
+
+    const nextLabel = formatTitleCase(label);
+    if (!nextLabel || nextLabel === group.label) return group;
+
+    const { error: updateError } = await supabase
+      .from("event_document_groups")
+      .update({ label: nextLabel })
+      .eq("id", group.id);
+
+    if (updateError) throw updateError;
+
+    const updatedGroup = { ...group, label: nextLabel };
+    setEvents((current) =>
+      current.map((event) =>
+        event.id === group.eventId
+          ? {
+              ...event,
+              documentGroups: event.documentGroups.map((item) => (item.id === group.id ? updatedGroup : item)),
+            }
+          : event,
+      ),
+    );
+
+    return updatedGroup;
+  }
+
+  async function uploadEventDocument(group: EventDocumentGroup, file: globalThis.File) {
+    if (!supabase) {
+      throw new Error("Configuration Supabase manquante.");
+    }
+
+    const storageFileName = sanitizeStorageFileName(file.name);
+    const storagePath = `${group.eventId}/${group.id}/${storageFileName}`;
+    const filePath = `${eventDocumentsBucket}/${storagePath}`;
+
+    const { error: uploadError } = await supabase.storage.from(eventDocumentsBucket).upload(storagePath, file, {
+      contentType: file.type || undefined,
+      upsert: false,
+    });
+
+    if (uploadError) throw uploadError;
+
+    const { data, error: insertError } = await supabase
+      .from("event_documents")
+      .insert({
+        event_id: group.eventId,
+        group_id: group.id,
+        file_name: file.name,
+        file_path: filePath,
+        file_type: file.type || null,
+        file_size: file.size,
+      })
+      .select()
+      .single();
+
+    if (insertError) {
+      await supabase.storage.from(eventDocumentsBucket).remove([storagePath]);
+      throw insertError;
+    }
+
+    const document = mapEventDocument(data);
+
+    setEvents((current) =>
+      current.map((event) =>
+        event.id === group.eventId
+          ? {
+              ...event,
+              documentGroups: event.documentGroups.map((item) =>
+                item.id === group.id
+                  ? {
+                      ...item,
+                      files: [...item.files, document],
+                    }
+                  : item,
+              ),
+            }
+          : event,
+      ),
+    );
+
+    return document;
+  }
+
+  async function deleteEventDocumentGroup(group: EventDocumentGroup) {
+    if (!supabase) {
+      throw new Error("Configuration Supabase manquante.");
+    }
+
+    const objectPaths = group.files.map((file) => getDocumentObjectPath(file.filePath));
+    if (objectPaths.length > 0) {
+      const { error: storageError } = await supabase.storage.from(eventDocumentsBucket).remove(objectPaths);
+      if (storageError) throw storageError;
+    }
+
+    const { error: deleteError } = await supabase.from("event_document_groups").delete().eq("id", group.id);
+    if (deleteError) throw deleteError;
+
+    setEvents((current) =>
+      current.map((event) =>
+        event.id === group.eventId
+          ? {
+              ...event,
+              documentGroups: event.documentGroups.filter((item) => item.id !== group.id),
+            }
+          : event,
+      ),
+    );
+  }
+
+  async function deleteEventDocument(document: EventDocument) {
+    if (!supabase) {
+      throw new Error("Configuration Supabase manquante.");
+    }
+
+    const objectPath = getDocumentObjectPath(document.filePath);
+    const { error: storageError } = await supabase.storage.from(eventDocumentsBucket).remove([objectPath]);
+    if (storageError) throw storageError;
+
+    const { error: deleteError } = await supabase.from("event_documents").delete().eq("id", document.id);
+    if (deleteError) throw deleteError;
+
+    setEvents((current) =>
+      current.map((event) =>
+        event.id === document.eventId
+          ? {
+              ...event,
+              documentGroups: event.documentGroups.map((group) =>
+                group.id === document.groupId
+                  ? {
+                      ...group,
+                      files: group.files.filter((item) => item.id !== document.id),
+                    }
+                  : group,
+              ),
+            }
+          : event,
+      ),
+    );
+  }
+
+  async function openEventDocument(document: EventDocument) {
+    if (!supabase) {
+      throw new Error("Configuration Supabase manquante.");
+    }
+
+    const objectPath = getDocumentObjectPath(document.filePath);
+    const { data, error: signedUrlError } = await supabase.storage.from(eventDocumentsBucket).createSignedUrl(objectPath, 60);
+
+    if (signedUrlError) throw signedUrlError;
+    window.open(data.signedUrl, "_blank", "noopener,noreferrer");
+  }
+
+  async function downloadEventDocument(file: EventDocument) {
+    if (!supabase) {
+      throw new Error("Configuration Supabase manquante.");
+    }
+
+    const objectPath = getDocumentObjectPath(file.filePath);
+    const { data, error: signedUrlError } = await supabase.storage
+      .from(eventDocumentsBucket)
+      .createSignedUrl(objectPath, 60, { download: file.fileName });
+
+    if (signedUrlError) throw signedUrlError;
+
+    const downloadLink = document.createElement("a");
+    downloadLink.href = data.signedUrl;
+    downloadLink.download = file.fileName;
+    downloadLink.rel = "noopener noreferrer";
+    document.body.appendChild(downloadLink);
+    downloadLink.click();
+    downloadLink.remove();
   }
 
   async function deleteCurrentEvent() {
@@ -931,19 +1533,29 @@ export default function Home() {
         {!loading && screen === "detail" && selectedEvent && (
           <ProductionDetail
             event={selectedEvent}
+            teamMembers={teamMembers}
             hasPrevious={hasPreviousEvent}
             hasNext={hasNextEvent}
             goPrevious={() => navigateEvent(-1)}
             goNext={() => navigateEvent(1)}
             onToggleOption={toggleOption}
-            onToggleTask={toggleTask}
             onCreateOption={createEventOption}
             onDeleteOption={deleteEventOption}
+            onRenameOption={renameEventOption}
             onCreateOptionItem={createEventOptionItem}
             onDeleteOptionItem={deleteEventOptionItem}
+            onToggleOptionAssignee={toggleOptionAssignee}
             onCreateLink={createEventLink}
             onDeleteLink={deleteEventLink}
-            onSaveLink={updateLinkUrl}
+            onRenameLink={renameEventLink}
+            onSaveLinkEntries={syncEventLinkEntries}
+            onCreateDocumentGroup={createEventDocumentGroup}
+            onDeleteDocumentGroup={deleteEventDocumentGroup}
+            onRenameDocumentGroup={renameEventDocumentGroup}
+            onUploadDocument={uploadEventDocument}
+            onDeleteDocumentFile={deleteEventDocument}
+            onOpenDocument={openEventDocument}
+            onDownloadDocument={downloadEventDocument}
           />
         )}
 
@@ -1219,39 +1831,60 @@ function SelectedDayEvents({
 
 function ProductionDetail({
   event,
+  teamMembers,
   hasPrevious,
   hasNext,
   goPrevious,
   goNext,
   onToggleOption,
-  onToggleTask,
   onCreateOption,
   onDeleteOption,
+  onRenameOption,
   onCreateOptionItem,
   onDeleteOptionItem,
+  onToggleOptionAssignee,
   onCreateLink,
   onDeleteLink,
-  onSaveLink,
+  onRenameLink,
+  onSaveLinkEntries,
+  onCreateDocumentGroup,
+  onDeleteDocumentGroup,
+  onRenameDocumentGroup,
+  onUploadDocument,
+  onDeleteDocumentFile,
+  onOpenDocument,
+  onDownloadDocument,
 }: {
   event: ProductionEvent;
+  teamMembers: TeamMember[];
   hasPrevious: boolean;
   hasNext: boolean;
   goPrevious: () => void;
   goNext: () => void;
   onToggleOption: (option: EventOption) => Promise<void>;
-  onToggleTask: (task: TaskItem) => Promise<void>;
   onCreateOption: (eventId: string, label: string) => Promise<EventOption>;
   onDeleteOption: (option: EventOption) => Promise<void>;
+  onRenameOption: (option: EventOption, label: string) => Promise<EventOption>;
   onCreateOptionItem: (option: EventOption, label: string) => Promise<EventOptionItem>;
   onDeleteOptionItem: (option: EventOption, item: EventOptionItem) => Promise<void>;
+  onToggleOptionAssignee: (option: EventOption, member: TeamMember) => Promise<void>;
   onCreateLink: (eventId: string, input: { label: string; url: string }) => Promise<EventLink>;
   onDeleteLink: (link: EventLink) => Promise<void>;
-  onSaveLink: (link: EventLink, url: string) => Promise<EventLink>;
+  onRenameLink: (link: EventLink, label: string) => Promise<EventLink>;
+  onSaveLinkEntries: (link: EventLink, drafts: LinkEntryDraft[]) => Promise<EventLink>;
+  onCreateDocumentGroup: (eventId: string, label: string) => Promise<EventDocumentGroup>;
+  onDeleteDocumentGroup: (group: EventDocumentGroup) => Promise<void>;
+  onRenameDocumentGroup: (group: EventDocumentGroup, label: string) => Promise<EventDocumentGroup>;
+  onUploadDocument: (group: EventDocumentGroup, file: globalThis.File) => Promise<EventDocument>;
+  onDeleteDocumentFile: (document: EventDocument) => Promise<void>;
+  onOpenDocument: (document: EventDocument) => Promise<void>;
+  onDownloadDocument: (document: EventDocument) => Promise<void>;
 }) {
   const [contextSelection, setContextSelection] = useState<ContextSelection>(null);
   const [addForm, setAddForm] = useState<ItemKind | null>(null);
   const [optionName, setOptionName] = useState("");
   const [linkName, setLinkName] = useState("");
+  const [documentName, setDocumentName] = useState("");
   const [manageError, setManageError] = useState<string | null>(null);
   const [submittingAdd, setSubmittingAdd] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState<DeleteSelection | null>(null);
@@ -1262,9 +1895,10 @@ function ProductionDetail({
       if (!current) return null;
       if (current?.type === "option" && event.options.some((option) => option.id === current.optionId)) return current;
       if (current?.type === "link" && event.links.some((link) => link.id === current.linkId)) return current;
+      if (current?.type === "document" && event.documentGroups.some((group) => group.id === current.groupId)) return current;
       return null;
     });
-  }, [event.id, event.links, event.options]);
+  }, [event.documentGroups, event.id, event.links, event.options]);
 
   function selectOption(option: EventOption) {
     setContextSelection((current) =>
@@ -1273,24 +1907,13 @@ function ProductionDetail({
   }
 
   function selectLink(link: EventLink) {
-    let selectedSameLink = false;
-    setContextSelection((current) => {
-      selectedSameLink = current?.type === "link" && current.linkId === link.id;
-      return selectedSameLink ? null : { type: "link", linkId: link.id, copied: false };
-    });
+    setContextSelection((current) => (current?.type === "link" && current.linkId === link.id ? null : { type: "link", linkId: link.id }));
+  }
 
-    if (selectedSameLink) return;
-
-    const linkUrl = link.url?.trim();
-    if (!linkUrl) return;
-
-    const copyPromise = navigator.clipboard?.writeText(linkUrl);
-    if (copyPromise) {
-      void copyPromise.then(
-        () => setContextSelection((current) => (current?.type === "link" && current.linkId === link.id ? { ...current, copied: true } : current)),
-        () => setContextSelection((current) => (current?.type === "link" && current.linkId === link.id ? { ...current, copied: false } : current)),
-      );
-    }
+  function selectDocumentGroup(group: EventDocumentGroup) {
+    setContextSelection((current) =>
+      current?.type === "document" && current.groupId === group.id ? null : { type: "document", groupId: group.id },
+    );
   }
 
   async function addOption(formEvent: React.FormEvent<HTMLFormElement>) {
@@ -1319,9 +1942,26 @@ function ProductionDetail({
       const link = await onCreateLink(event.id, { label: linkName, url: "" });
       setLinkName("");
       setAddForm(null);
-      setContextSelection({ type: "link", linkId: link.id, copied: false });
+      setContextSelection({ type: "link", linkId: link.id });
     } catch (createError) {
       setManageError(createError instanceof Error ? createError.message : "Impossible d'ajouter le lien.");
+    } finally {
+      setSubmittingAdd(false);
+    }
+  }
+
+  async function addDocumentGroup(formEvent: React.FormEvent<HTMLFormElement>) {
+    formEvent.preventDefault();
+    setSubmittingAdd(true);
+    setManageError(null);
+
+    try {
+      const group = await onCreateDocumentGroup(event.id, documentName);
+      setDocumentName("");
+      setAddForm(null);
+      setContextSelection({ type: "document", groupId: group.id });
+    } catch (createError) {
+      setManageError(createError instanceof Error ? createError.message : "Impossible d'ajouter le document.");
     } finally {
       setSubmittingAdd(false);
     }
@@ -1341,11 +1981,18 @@ function ProductionDetail({
         if (contextSelection?.type === "option" && contextSelection.optionId === option.id) {
           setContextSelection(null);
         }
-      } else {
+      } else if (confirmDelete.type === "link") {
         const link = event.links.find((item) => item.id === confirmDelete.linkId);
         if (!link) return;
         await onDeleteLink(link);
         if (contextSelection?.type === "link" && contextSelection.linkId === link.id) {
+          setContextSelection(null);
+        }
+      } else {
+        const group = event.documentGroups.find((item) => item.id === confirmDelete.groupId);
+        if (!group) return;
+        await onDeleteDocumentGroup(group);
+        if (contextSelection?.type === "document" && contextSelection.groupId === group.id) {
           setContextSelection(null);
         }
       }
@@ -1361,8 +2008,11 @@ function ProductionDetail({
   return (
     <section className="flex flex-1 flex-col gap-5">
       <Card className="premium-surface p-5 sm:p-8">
-        <div className="mb-8 flex items-center justify-between">
-          <StatusBadge status={event.status} large />
+        <div className="flex items-start justify-between gap-4">
+          <div className="min-w-0 flex-1">
+            <h1 className="truncate text-4xl font-semibold leading-tight text-stone-950 sm:text-6xl">{event.clientName}</h1>
+            <p className="mt-2 truncate text-base font-medium text-stone-500">{event.eventName}</p>
+          </div>
           <div className="flex items-center gap-2">
             <button onClick={goPrevious} disabled={!hasPrevious} className={calendarArrowClassName} aria-label="Événement précédent">
               ←
@@ -1372,15 +2022,11 @@ function ProductionDetail({
             </button>
           </div>
         </div>
-        <div>
-          <h1 className="text-4xl font-semibold leading-tight text-stone-950 sm:text-6xl">{event.clientName}</h1>
-          <p className="mt-2 text-base font-medium text-stone-500">{event.eventName}</p>
-        </div>
         <ProductionTimeline event={event} />
       </Card>
 
       <Card className="premium-surface p-3 sm:p-5">
-        <div className="grid grid-cols-2 gap-2 sm:gap-4 lg:items-start">
+        <div className="grid grid-cols-3 gap-2 sm:gap-4 lg:items-start">
           <div className="min-w-0">
             <SectionHeader
               label="Options"
@@ -1402,10 +2048,12 @@ function ProductionDetail({
                 </InlineAddButton>
               </InlineAddForm>
             )}
-            <div className="grid grid-cols-2 gap-1.5 sm:gap-2">
+            <div className="grid grid-cols-1 gap-1.5 sm:gap-2">
               {event.options.map((option) => {
                 const Icon = getOptionIcon(option.label);
                 const optionTone = getOptionTone(option.status);
+                const optionAssignee = getOptionAssignee(option);
+                const optionAssigneeInitials = optionAssignee ? getOptionCollaboratorProfile(optionAssignee)?.initials : null;
                 const isSelectedOption = contextSelection?.type === "option" && contextSelection.optionId === option.id;
                 const isConfirmingDelete = confirmDelete?.type === "option" && confirmDelete.optionId === option.id;
                 return (
@@ -1421,7 +2069,12 @@ function ProductionDetail({
                   >
                     <button onClick={() => selectOption(option)} className="flex min-h-16 min-w-0 flex-1 items-center gap-1.5 px-2 py-3 text-left sm:gap-2 sm:px-3">
                       <Icon className={cn("h-5 w-5 shrink-0", optionTone.icon)} />
-                      <span className={cn("truncate pr-5 text-base font-semibold", optionTone.text)}>{option.label}</span>
+                      <span className={cn("min-w-0 flex-1 truncate pr-1 text-base font-semibold", optionTone.text)}>{option.label}</span>
+                      {option.status === "incomplete" && optionAssigneeInitials && (
+                        <span className="ml-auto mr-6 shrink-0 rounded-full border border-emerald-300 bg-white/75 px-2 py-0.5 text-base font-bold leading-tight text-emerald-800">
+                          {optionAssigneeInitials}
+                        </span>
+                      )}
                     </button>
                     <button
                       onClick={(event) => {
@@ -1452,13 +2105,12 @@ function ProductionDetail({
           <div className="min-w-0">
             <SectionHeader
               label="Liens"
-              align="right"
               tone="link"
               addLabel="Ajouter un lien"
               onAdd={() => setAddForm((current) => (current === "link" ? null : "link"))}
             />
             {addForm === "link" && (
-              <InlineAddForm onSubmit={addLink} eventId={event.id} align="right">
+              <InlineAddForm onSubmit={addLink} eventId={event.id}>
                 <input
                   required
                   value={linkName}
@@ -1471,7 +2123,7 @@ function ProductionDetail({
                 </InlineAddButton>
               </InlineAddForm>
             )}
-            <div className="grid grid-cols-2 gap-1.5 sm:gap-2">
+            <div className="grid grid-cols-1 gap-1.5 sm:gap-2">
               {event.links.map((link) => {
                 const Icon = getLinkIcon(link.label);
                 const isSelectedLink = contextSelection?.type === "link" && contextSelection.linkId === link.id;
@@ -1518,6 +2170,77 @@ function ProductionDetail({
               })}
             </div>
           </div>
+
+          <div className="min-w-0">
+            <SectionHeader
+              label="Documents"
+              tone="document"
+              addLabel="Ajouter un document"
+              onAdd={() => setAddForm((current) => (current === "document" ? null : "document"))}
+            />
+            {addForm === "document" && (
+              <InlineAddForm onSubmit={addDocumentGroup} eventId={event.id}>
+                <input
+                  required
+                  value={documentName}
+                  onChange={(inputEvent) => setDocumentName(inputEvent.target.value)}
+                  placeholder="Nom du document"
+                  className={inlineAddInputClassName}
+                />
+                <InlineAddButton tone="document" disabled={submittingAdd}>
+                  Ajouter
+                </InlineAddButton>
+              </InlineAddForm>
+            )}
+            <div className="grid grid-cols-1 gap-1.5 sm:gap-2">
+              {event.documentGroups.map((group) => {
+                const Icon = getDocumentGroupIcon(group);
+                const documentTone = getDocumentTone(group.files.length > 0);
+                const isSelectedDocument = contextSelection?.type === "document" && contextSelection.groupId === group.id;
+                const isConfirmingDelete = confirmDelete?.type === "document" && confirmDelete.groupId === group.id;
+                return (
+                  <div
+                    key={group.id}
+                    className={cn(
+                      "group relative flex min-h-16 items-center gap-1.5 rounded-xl border-2 transition sm:gap-2",
+                      documentTone.surface,
+                      documentTone.border,
+                      documentTone.hover,
+                      isSelectedDocument && documentTone.selected,
+                    )}
+                  >
+                    <button
+                      onClick={() => selectDocumentGroup(group)}
+                      className="flex min-h-16 min-w-0 flex-1 items-center gap-1.5 px-2 py-3 text-left sm:gap-2 sm:px-3"
+                    >
+                      <Icon className={cn("h-5 w-5 shrink-0", documentTone.icon)} />
+                      <span className={cn("truncate pr-5 text-base font-semibold", documentTone.text)}>{group.label}</span>
+                    </button>
+                    <button
+                      onClick={(buttonEvent) => {
+                        buttonEvent.stopPropagation();
+                        setConfirmDelete({ type: "document", groupId: group.id });
+                      }}
+                      className="absolute right-1.5 top-1.5 flex h-6 w-6 items-center justify-center rounded-full text-amber-500 opacity-100 transition hover:bg-white/70 hover:text-amber-800 focus:opacity-100 [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover:opacity-100"
+                      aria-label="Supprimer ce document"
+                    >
+                      <X className="h-3.5 w-3.5" />
+                    </button>
+                    {isConfirmingDelete && (
+                      <div className="absolute right-1 top-9 z-30">
+                        <DeleteConfirmBubble
+                          label="Supprimer ce document ?"
+                          deleting={deletingItem}
+                          onCancel={() => setConfirmDelete(null)}
+                          onConfirm={() => void deleteSelectedGridItem()}
+                        />
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
         </div>
         {manageError && <div className="mt-3 text-base font-medium text-rose-700">{manageError}</div>}
       </Card>
@@ -1526,18 +2249,20 @@ function ProductionDetail({
         event={event}
         selection={contextSelection}
         onToggleOption={onToggleOption}
+        onRenameOption={onRenameOption}
         onCreateOptionItem={onCreateOptionItem}
         onDeleteOptionItem={onDeleteOptionItem}
-        onSaveLink={onSaveLink}
+        onToggleOptionAssignee={onToggleOptionAssignee}
+        teamMembers={teamMembers}
+        onRenameLink={onRenameLink}
+        onSaveLinkEntries={onSaveLinkEntries}
+        onRenameDocumentGroup={onRenameDocumentGroup}
+        onUploadDocument={onUploadDocument}
+        onDeleteDocumentFile={onDeleteDocumentFile}
+        onOpenDocument={onOpenDocument}
+        onDownloadDocument={onDownloadDocument}
       />
 
-      <Panel title="To do list">
-        <div className="grid gap-3 md:grid-cols-2">
-          {event.tasks.map((task) => (
-            <PreparationCard key={task.id} task={task} onToggle={() => void onToggleTask(task)} />
-          ))}
-        </div>
-      </Panel>
     </section>
   );
 }
@@ -1550,13 +2275,62 @@ function getLinkIcon(label: string) {
   return getAutomaticIcon(label, ExternalLink);
 }
 
+function getDocumentGroupIcon(group: EventDocumentGroup) {
+  return getAutomaticIcon(group.label, File);
+}
+
+function getDocumentFileIcon(document: EventDocument) {
+  const extension = getFileExtension(document.fileName);
+  const fileType = document.fileType?.toLowerCase() ?? "";
+
+  if (fileType.includes("spreadsheet") || ["xls", "xlsx", "csv"].includes(extension)) return FileSpreadsheet;
+  if (fileType.includes("presentation") || ["ppt", "pptx", "key"].includes(extension)) return Presentation;
+  if (fileType.includes("pdf") || extension === "pdf") return FileText;
+  if (fileType.includes("word") || ["doc", "docx"].includes(extension)) return FileText;
+  if (["txt", "md", "rtf"].includes(extension)) return FileText;
+
+  return File;
+}
+
 function getAutomaticIcon(label: string, fallbackIcon: LucideIcon) {
   const normalizedLabel = normalizeLabel(label);
   return iconKeywordRules.find((rule) => rule.keywords.some((keyword) => normalizedLabel.includes(normalizeLabel(keyword))))?.icon ?? fallbackIcon;
 }
 
+function isPlatformLink(link: EventLink) {
+  return platformLinkLabels.has(normalizeLabel(link.label));
+}
+
 function getLinkState(link: EventLink): LinkStatus {
-  return link.status === "available" && link.url?.trim() ? "available" : "missing";
+  const isPlatform = isPlatformLink(link);
+
+  if (link.entries.length > 0) {
+    return link.entries.some((entry) => isLinkEntryDraftComplete({ url: entry.url ?? "", streamKey: entry.streamKey ?? "" }, isPlatform))
+      ? "available"
+      : "missing";
+  }
+
+  return isLinkEntryDraftComplete({ url: link.url ?? "", streamKey: link.streamKey ?? "" }, isPlatform) ? "available" : "missing";
+}
+
+function getDocumentTone(hasFiles: boolean) {
+  return hasFiles
+    ? {
+        surface: "bg-amber-200/90",
+        border: "border-amber-400/70",
+        hover: "hover:bg-amber-200",
+        icon: "text-amber-900",
+        text: "text-amber-950",
+        selected: "border-amber-700 ring-2 ring-amber-700/20",
+      }
+    : {
+        surface: "bg-amber-50/80",
+        border: "border-amber-100",
+        hover: "hover:bg-amber-100/60",
+        icon: "text-amber-600",
+        text: "text-stone-700",
+        selected: "border-amber-700 ring-2 ring-amber-700/20",
+      };
 }
 
 function getOptionTone(state: CompletionStatus) {
@@ -1595,116 +2369,425 @@ function getLinkTone(state: LinkStatus) {
       };
 }
 
+function getTimelineDate(eventDate: string, time: string | null) {
+  if (!time) return null;
+  const timelineDate = new Date(`${eventDate}T${time}`);
+  return Number.isNaN(timelineDate.getTime()) ? null : timelineDate;
+}
+
+function getActiveTimelineIndex(moments: { date: Date | null }[]) {
+  const now = new Date();
+  let activeIndex = -1;
+
+  moments.forEach((moment, index) => {
+    if (moment.date && moment.date.getTime() <= now.getTime()) {
+      activeIndex = index;
+    }
+  });
+
+  if (activeIndex === -1) return null;
+  const lastMoment = moments[moments.length - 1]?.date;
+  if (lastMoment && now.getTime() > lastMoment.getTime()) return null;
+  return activeIndex;
+}
+
 function ProductionTimeline({ event }: { event: ProductionEvent }) {
   const moments = [
-    { label: "Arrivée client", time: formatTime(event.clientArrivalTime) },
-    { label: "Début live", time: formatTime(event.startTime) },
-    { label: "Fin live", time: formatTime(event.endTime) },
-    { label: "Fin journée", time: formatTime(event.endOfDayTime) },
+    { label: "Arrivée client", time: formatTime(event.clientArrivalTime), date: getTimelineDate(event.date, event.clientArrivalTime) },
+    { label: "Début live", time: formatTime(event.startTime), date: getTimelineDate(event.date, event.startTime) },
+    { label: "Fin live", time: formatTime(event.endTime), date: getTimelineDate(event.date, event.endTime) },
+    { label: "Fin journée", time: formatTime(event.endOfDayTime), date: getTimelineDate(event.date, event.endOfDayTime) },
   ];
+  const activeIndex = getActiveTimelineIndex(moments);
 
   return (
     <div className="mt-8">
       <div className="relative flex w-full justify-between">
-        <div className="absolute left-2 right-2 top-2 h-px bg-stone-200" />
-        {moments.map((moment, index) => (
-          <div key={moment.label} className={cn("relative min-w-0 flex-1", index === 0 ? "text-left" : index === moments.length - 1 ? "text-right" : "text-center")}>
-            <span
-              className={cn(
-                "block h-4 w-4 rounded-full border-2 border-stone-300 bg-white",
-                index === 0 ? "mr-auto" : index === moments.length - 1 ? "ml-auto" : "mx-auto",
-              )}
-            />
-            <div className="mt-3 truncate font-semibold text-stone-950">{moment.label}</div>
-            <div className="mt-1 text-stone-500">{moment.time}</div>
-          </div>
-        ))}
+        <div className="absolute left-2.5 right-2.5 top-2.5 h-[2px] bg-[#bb2720]/20" />
+        {moments.map((moment, index) => {
+          const isActive = activeIndex === index;
+          const isPast = !isActive && moment.date && moment.date.getTime() < new Date().getTime();
+          const dotClassName = isActive
+            ? "border-[#bb2720] bg-[#bb2720]"
+            : isPast
+              ? "border-stone-400 bg-stone-300"
+              : "border-stone-300 bg-white";
+          const labelClassName = isActive ? "text-[#bb2720]" : isPast ? "text-stone-500" : "text-stone-700";
+
+          return (
+            <div key={moment.label} className={cn("relative min-w-0 flex-1", index === 0 ? "text-left" : index === moments.length - 1 ? "text-right" : "text-center")}>
+              <span
+                className={cn(
+                  "block h-5 w-5 rounded-full border-2",
+                  dotClassName,
+                  index === 0 ? "mr-auto" : index === moments.length - 1 ? "ml-auto" : "mx-auto",
+                )}
+              />
+              <div className={cn("mt-3 truncate font-semibold", labelClassName)}>{moment.label}</div>
+              <div className={cn("mt-1.5", index === 0 ? "text-left" : index === moments.length - 1 ? "text-right" : "text-center")}>
+                <span className="inline-flex rounded-full bg-slate-100 px-2.5 py-1 text-base font-semibold leading-none text-slate-600 ring-1 ring-slate-200/70">
+                  {moment.time}
+                </span>
+              </div>
+            </div>
+          );
+        })}
       </div>
     </div>
   );
+}
+
+function InlineEditableTitle({
+  value,
+  onSave,
+  className,
+  inputClassName,
+}: {
+  value: string;
+  onSave: (value: string) => Promise<void>;
+  className?: string;
+  inputClassName?: string;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(value);
+  const [saving, setSaving] = useState(false);
+  const inputRef = useRef<HTMLInputElement | null>(null);
+
+  useEffect(() => {
+    if (!editing) setDraft(value);
+  }, [editing, value]);
+
+  useEffect(() => {
+    if (!editing) return;
+    inputRef.current?.focus();
+    inputRef.current?.select();
+  }, [editing]);
+
+  async function saveTitle() {
+    if (saving) return;
+    const nextValue = formatTitleCase(draft);
+    if (!nextValue || nextValue === value) {
+      setDraft(value);
+      setEditing(false);
+      return;
+    }
+
+    setSaving(true);
+    try {
+      await onSave(nextValue);
+      setEditing(false);
+    } catch {
+      inputRef.current?.focus();
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  if (editing) {
+    return (
+      <input
+        ref={inputRef}
+        value={draft}
+        disabled={saving}
+        onChange={(event) => setDraft(event.target.value)}
+        onBlur={() => void saveTitle()}
+        onKeyDown={(event) => {
+          if (event.key === "Enter") {
+            event.preventDefault();
+            void saveTitle();
+          }
+          if (event.key === "Escape") {
+            event.preventDefault();
+            setDraft(value);
+            setEditing(false);
+          }
+        }}
+        className={cn(
+          "h-8 min-w-0 rounded-lg border border-stone-200 bg-white px-2 text-base font-semibold outline-none transition focus:border-stone-300 disabled:opacity-70",
+          inputClassName,
+        )}
+      />
+    );
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={() => setEditing(true)}
+      className={cn("min-w-0 truncate text-left", className)}
+    >
+      {value}
+    </button>
+  );
+}
+
+function LinkValueRow({
+  value,
+  placeholder,
+  icon: Icon,
+  copied,
+  copyLabel,
+  completed,
+  onChange,
+  onCopy,
+  openable = false,
+}: {
+  value: string;
+  placeholder: string;
+  icon: LucideIcon;
+  copied: boolean;
+  copyLabel: string;
+  completed: boolean;
+  onChange: (value: string) => void;
+  onCopy: () => void;
+  openable?: boolean;
+}) {
+  const trimmedValue = value.trim();
+  const canOpen = openable && Boolean(getValidUrl(trimmedValue));
+  const rowTone = getLinkTone(completed ? "available" : "missing");
+
+  return (
+    <div className="flex w-full min-w-0 items-center gap-2">
+      <div className={cn("inline-flex min-h-9 min-w-0 flex-1 items-center gap-2 rounded-full border px-3 py-1.5 transition focus-within:border-sky-400", rowTone.surface, rowTone.border)}>
+        <Icon className={cn("h-4 w-4 shrink-0", rowTone.icon)} />
+        <input
+          value={value}
+          onChange={(event) => onChange(event.target.value)}
+          placeholder={placeholder}
+          className={cn("min-w-0 flex-1 bg-transparent text-base font-semibold outline-none placeholder:text-sky-300", rowTone.text)}
+        />
+        {canOpen && (
+          <button
+            type="button"
+            onClick={() => openUrl(trimmedValue)}
+            className={cn("hidden shrink-0 rounded-full px-2 py-0.5 text-base font-semibold transition hover:bg-white/70 sm:inline-flex", rowTone.icon)}
+          >
+            Ouvrir
+          </button>
+        )}
+      </div>
+      <button
+        type="button"
+        onClick={onCopy}
+        disabled={!trimmedValue}
+        className={cn(
+          "flex h-9 w-9 shrink-0 items-center justify-center rounded-full border transition disabled:cursor-not-allowed disabled:opacity-35",
+          rowTone.surface,
+          rowTone.border,
+          rowTone.icon,
+          rowTone.hover,
+          copied && "bg-sky-200 text-sky-900",
+        )}
+        aria-label={copyLabel}
+      >
+        <Copy className="h-3.5 w-3.5" />
+      </button>
+    </div>
+  );
+}
+
+function getValidUrl(value: string) {
+  if (!value) return null;
+
+  try {
+    return new URL(value);
+  } catch {
+    try {
+      return new URL(`https://${value}`);
+    } catch {
+      return null;
+    }
+  }
+}
+
+function openUrl(value: string) {
+  const url = getValidUrl(value);
+  if (!url) return;
+  window.open(url.href, "_blank", "noopener,noreferrer");
 }
 
 function ContextDetailBlock({
   event,
   selection,
   onToggleOption,
+  onRenameOption,
   onCreateOptionItem,
   onDeleteOptionItem,
-  onSaveLink,
+  onToggleOptionAssignee,
+  teamMembers,
+  onRenameLink,
+  onSaveLinkEntries,
+  onRenameDocumentGroup,
+  onUploadDocument,
+  onDeleteDocumentFile,
+  onOpenDocument,
+  onDownloadDocument,
 }: {
   event: ProductionEvent;
   selection: ContextSelection;
   onToggleOption: (option: EventOption) => Promise<void>;
+  onRenameOption: (option: EventOption, label: string) => Promise<EventOption>;
   onCreateOptionItem: (option: EventOption, label: string) => Promise<EventOptionItem>;
   onDeleteOptionItem: (option: EventOption, item: EventOptionItem) => Promise<void>;
-  onSaveLink: (link: EventLink, url: string) => Promise<EventLink>;
+  onToggleOptionAssignee: (option: EventOption, member: TeamMember) => Promise<void>;
+  teamMembers: TeamMember[];
+  onRenameLink: (link: EventLink, label: string) => Promise<EventLink>;
+  onSaveLinkEntries: (link: EventLink, drafts: LinkEntryDraft[]) => Promise<EventLink>;
+  onRenameDocumentGroup: (group: EventDocumentGroup, label: string) => Promise<EventDocumentGroup>;
+  onUploadDocument: (group: EventDocumentGroup, file: globalThis.File) => Promise<EventDocument>;
+  onDeleteDocumentFile: (document: EventDocument) => Promise<void>;
+  onOpenDocument: (document: EventDocument) => Promise<void>;
+  onDownloadDocument: (document: EventDocument) => Promise<void>;
 }) {
   const selectedOption = selection?.type === "option" ? event.options.find((option) => option.id === selection.optionId) ?? null : null;
   const selectedLink = selection?.type === "link" ? event.links.find((link) => link.id === selection.linkId) ?? null : null;
+  const selectedDocumentGroup = selection?.type === "document" ? event.documentGroups.find((group) => group.id === selection.groupId) ?? null : null;
   const selectedOptionId = selectedOption?.id ?? "";
   const selectedLinkId = selectedLink?.id ?? "";
-  const selectedLinkUrl = selectedLink?.url ?? "";
-  const [linkInput, setLinkInput] = useState(selectedLinkUrl);
+  const selectedDocumentGroupId = selectedDocumentGroup?.id ?? "";
+  const selectedLinkIsPlatform = selectedLink ? isPlatformLink(selectedLink) : false;
+  const [linkEntryDrafts, setLinkEntryDrafts] = useState<LinkEntryDraft[]>(() => selectedLink ? createLinkEntryDrafts(selectedLink, selectedLinkIsPlatform) : []);
+  const [lastSavedLinkEntrySignature, setLastSavedLinkEntrySignature] = useState(() => selectedLink ? serializeLinkEntries(selectedLink.entries, selectedLinkIsPlatform) : "[]");
   const [savingLink, setSavingLink] = useState(false);
   const [linkSaveError, setLinkSaveError] = useState<string | null>(null);
-  const [linkCopied, setLinkCopied] = useState(false);
+  const [copiedLinkField, setCopiedLinkField] = useState<string | null>(null);
   const [addingOptionItem, setAddingOptionItem] = useState(false);
   const [optionItemInput, setOptionItemInput] = useState("");
   const [savingOptionItem, setSavingOptionItem] = useState(false);
   const [optionItemError, setOptionItemError] = useState<string | null>(null);
-  const hasUnsavedLinkChanges = linkInput.trim() !== selectedLinkUrl.trim();
-  const hasSavedLinkUrl = selectedLinkUrl.trim().length > 0;
-  const linkSaveLabel = savingLink ? "Enregistrement..." : hasSavedLinkUrl && !hasUnsavedLinkChanges ? "Enregistré" : "Enregistrer";
+  const [optionAssigneeError, setOptionAssigneeError] = useState<string | null>(null);
+  const [titleRenameError, setTitleRenameError] = useState<string | null>(null);
+  const [draggingDocumentFiles, setDraggingDocumentFiles] = useState(false);
+  const [uploadingDocumentFiles, setUploadingDocumentFiles] = useState(false);
+  const [documentOpenError, setDocumentOpenError] = useState<string | null>(null);
+  const linkEntryDraftSignature = serializeLinkEntryDrafts(linkEntryDrafts, selectedLinkIsPlatform);
+  const hasUnsavedLinkChanges = selectedLink ? linkEntryDraftSignature !== lastSavedLinkEntrySignature : false;
 
   useEffect(() => {
-    setLinkInput(selectedLinkUrl);
+    setLinkEntryDrafts(selectedLink ? createLinkEntryDrafts(selectedLink, selectedLinkIsPlatform) : []);
+    setLastSavedLinkEntrySignature(selectedLink ? serializeLinkEntries(selectedLink.entries, selectedLinkIsPlatform) : "[]");
     setSavingLink(false);
     setLinkSaveError(null);
-    setLinkCopied(false);
-  }, [selectedLinkId, selectedLinkUrl]);
+    setCopiedLinkField(null);
+  }, [selectedLinkId]);
 
   useEffect(() => {
-    if (!linkCopied) return;
+    if (!selectedLink || !hasUnsavedLinkChanges) return;
+
+    const saveTimer = window.setTimeout(() => {
+      setSavingLink(true);
+      setLinkSaveError(null);
+      void onSaveLinkEntries(selectedLink, linkEntryDrafts)
+        .then((updatedLink) => {
+          const updatedDrafts = createLinkEntryDrafts(updatedLink, selectedLinkIsPlatform);
+          setLinkEntryDrafts(updatedDrafts);
+          setLastSavedLinkEntrySignature(serializeLinkEntries(updatedLink.entries, selectedLinkIsPlatform));
+        })
+        .catch((saveError) => {
+          setLinkSaveError(saveError instanceof Error ? saveError.message : "Impossible d'enregistrer le lien.");
+        })
+        .finally(() => {
+          setSavingLink(false);
+        });
+    }, 500);
+
+    return () => window.clearTimeout(saveTimer);
+  }, [hasUnsavedLinkChanges, linkEntryDrafts, onSaveLinkEntries, selectedLink, selectedLinkIsPlatform]);
+
+  useEffect(() => {
+    if (!copiedLinkField) return;
 
     const resetTimer = window.setTimeout(() => {
-      setLinkCopied(false);
+      setCopiedLinkField(null);
     }, 2500);
 
     return () => window.clearTimeout(resetTimer);
-  }, [linkCopied]);
+  }, [copiedLinkField]);
 
   useEffect(() => {
     setAddingOptionItem(false);
     setOptionItemInput("");
     setSavingOptionItem(false);
     setOptionItemError(null);
-  }, [selectedLinkId, selectedOptionId]);
+    setOptionAssigneeError(null);
+    setTitleRenameError(null);
+    setDraggingDocumentFiles(false);
+    setUploadingDocumentFiles(false);
+    setDocumentOpenError(null);
+  }, [selectedDocumentGroupId, selectedLinkId, selectedOptionId]);
 
-  async function saveSelectedLink() {
-    if (!selectedLink) return;
-
-    setSavingLink(true);
-    setLinkSaveError(null);
+  async function copyLinkValue(value: string | null | undefined, field: string) {
+    const valueToCopy = value?.trim();
+    if (!valueToCopy) return;
 
     try {
-      const updatedLink = await onSaveLink(selectedLink, linkInput);
-      setLinkInput(updatedLink.url ?? "");
-    } catch (saveError) {
-      setLinkSaveError(saveError instanceof Error ? saveError.message : "Impossible d'enregistrer le lien.");
-    } finally {
-      setSavingLink(false);
+      await navigator.clipboard?.writeText(valueToCopy);
+      setCopiedLinkField(field);
+    } catch {
+      setCopiedLinkField(null);
     }
   }
 
-  async function copySelectedLink() {
-    const linkUrl = selectedLink?.url?.trim();
-    if (!linkUrl) return;
+  function updateLinkEntryDraft(index: number, field: "url" | "streamKey", value: string) {
+    setLinkEntryDrafts((current) => {
+      const nextDrafts = current.map((draft, draftIndex) => (
+        draftIndex === index ? { ...draft, [field]: value } : draft
+      ));
+      return normalizeLinkEntryDrafts(nextDrafts, selectedLinkIsPlatform);
+    });
+  }
+
+  function getCopiedLinkField(index: number, field: "url" | "streamKey") {
+    return `${index}:${field}`;
+  }
+
+  async function uploadFilesToSelectedGroup(files: FileList | File[]) {
+    if (!selectedDocumentGroup) return;
+    const selectedFiles = Array.from(files);
+    if (selectedFiles.length === 0) return;
+
+    setUploadingDocumentFiles(true);
+    setDocumentOpenError(null);
 
     try {
-      await navigator.clipboard?.writeText(linkUrl);
-      setLinkCopied(true);
-    } catch {
-      setLinkCopied(false);
+      for (const file of selectedFiles) {
+        await onUploadDocument(selectedDocumentGroup, file);
+      }
+      setDraggingDocumentFiles(false);
+    } catch (uploadError) {
+      setDocumentOpenError(uploadError instanceof Error ? uploadError.message : "Impossible d'ajouter le fichier.");
+    } finally {
+      setUploadingDocumentFiles(false);
+    }
+  }
+
+  async function removeDocumentFile(file: EventDocument) {
+    setDocumentOpenError(null);
+
+    try {
+      await onDeleteDocumentFile(file);
+    } catch (deleteError) {
+      setDocumentOpenError(deleteError instanceof Error ? deleteError.message : "Impossible de supprimer ce fichier.");
+    }
+  }
+
+  async function openDocumentFile(file: EventDocument) {
+    setDocumentOpenError(null);
+
+    try {
+      await onOpenDocument(file);
+    } catch (openError) {
+      setDocumentOpenError(openError instanceof Error ? openError.message : "Impossible d'ouvrir le document.");
+    }
+  }
+
+  async function downloadDocumentFile(file: EventDocument) {
+    setDocumentOpenError(null);
+
+    try {
+      await onDownloadDocument(file);
+    } catch (downloadError) {
+      setDocumentOpenError(downloadError instanceof Error ? downloadError.message : "Impossible de télécharger le document.");
     }
   }
 
@@ -1740,6 +2823,54 @@ function ContextDetailBlock({
     }
   }
 
+  async function toggleSelectedOptionAssignee(member: TeamMember) {
+    if (!selectedOption) return;
+
+    setOptionAssigneeError(null);
+
+    try {
+      await onToggleOptionAssignee(selectedOption, member);
+    } catch (assignError) {
+      setOptionAssigneeError(assignError instanceof Error ? assignError.message : "Impossible de modifier les collaborateurs.");
+    }
+  }
+
+  async function renameSelectedOption(label: string) {
+    if (!selectedOption) return;
+    setTitleRenameError(null);
+
+    try {
+      await onRenameOption(selectedOption, label);
+    } catch (renameError) {
+      setTitleRenameError(renameError instanceof Error ? renameError.message : "Impossible de renommer l'option.");
+      throw renameError;
+    }
+  }
+
+  async function renameSelectedLink(label: string) {
+    if (!selectedLink) return;
+    setTitleRenameError(null);
+
+    try {
+      await onRenameLink(selectedLink, label);
+    } catch (renameError) {
+      setTitleRenameError(renameError instanceof Error ? renameError.message : "Impossible de renommer le lien.");
+      throw renameError;
+    }
+  }
+
+  async function renameSelectedDocumentGroup(label: string) {
+    if (!selectedDocumentGroup) return;
+    setTitleRenameError(null);
+
+    try {
+      await onRenameDocumentGroup(selectedDocumentGroup, label);
+    } catch (renameError) {
+      setTitleRenameError(renameError instanceof Error ? renameError.message : "Impossible de renommer le document.");
+      throw renameError;
+    }
+  }
+
   if (!selection) return null;
 
   if (selection.type === "link" && selectedLink) {
@@ -1748,55 +2879,153 @@ function ContextDetailBlock({
 
     return (
       <Card className="w-full border-sky-200 bg-white p-4 sm:p-5">
-        <div className="link-detail-block flex w-full min-w-0 flex-col gap-2">
-          <div className="top-row flex w-full min-w-0 items-center">
+        <div className="link-detail-block flex w-full min-w-0 flex-col gap-3">
+          <div className="top-row flex w-full min-w-0 items-center justify-between gap-3">
             <div className={cn("flex min-w-0 items-center gap-2 text-base font-semibold", linkTone.text)}>
-              <span className="truncate">{selectedLink.label}</span>
-              <button
-                type="button"
-                onClick={() => void copySelectedLink()}
-                disabled={linkState !== "available"}
-                className={cn(
-                  "flex h-7 w-7 shrink-0 items-center justify-center rounded-full transition disabled:cursor-not-allowed disabled:opacity-35",
-                  linkCopied ? "bg-sky-200 text-sky-900" : "bg-sky-50/60 text-sky-300 hover:bg-sky-100 hover:text-sky-600",
-                )}
-                aria-label="Copier le lien"
-                title={linkCopied ? "Lien copié" : "Copier le lien"}
-              >
-                <Copy className="h-3.5 w-3.5" />
-              </button>
+              <InlineEditableTitle
+                value={selectedLink.label}
+                onSave={renameSelectedLink}
+                className="truncate"
+                inputClassName="border-sky-200 text-sky-950 focus:border-sky-400"
+              />
             </div>
           </div>
-          <div className="url-editor-row flex w-full min-w-0 items-center gap-2">
-            <input
-              value={linkInput}
-              onChange={(event) => {
-                setLinkInput(event.target.value);
-              }}
-              placeholder="https://..."
-              className={cn(
-                "h-12 w-0 min-w-0 flex-1 rounded-2xl border border-sky-200 bg-white px-4 text-base font-medium text-stone-950 outline-none transition placeholder:text-stone-300 focus:border-sky-400",
-              )}
-            />
-            <button
-              type="button"
-              onClick={() => void saveSelectedLink()}
-              disabled={savingLink}
-              className={cn(
-                "h-12 shrink-0 whitespace-nowrap rounded-2xl border px-4 text-base font-semibold disabled:cursor-not-allowed disabled:opacity-60",
-                linkTone.surface,
-                linkTone.border,
-                linkTone.text,
-              )}
-            >
-              {linkSaveLabel}
-            </button>
+          <div className="url-editor-row flex w-full min-w-0 flex-col gap-2">
+            {linkEntryDrafts.map((draft, index) => {
+              const entryCompleted = isLinkEntryDraftComplete(draft, selectedLinkIsPlatform);
+
+              return (
+                <div key={draft.id ?? `draft-${index}`} className={cn("flex w-full min-w-0 flex-col gap-2", selectedLinkIsPlatform && index > 0 && "pt-1")}>
+                  <LinkValueRow
+                    value={draft.url}
+                    placeholder={selectedLinkIsPlatform ? "URL" : "https://..."}
+                    icon={Link}
+                    copied={copiedLinkField === getCopiedLinkField(index, "url")}
+                    copyLabel="Copier l'URL"
+                    completed={entryCompleted}
+                    onChange={(value) => updateLinkEntryDraft(index, "url", value)}
+                    onCopy={() => void copyLinkValue(draft.url, getCopiedLinkField(index, "url"))}
+                    openable
+                  />
+                  {selectedLinkIsPlatform && (
+                    <LinkValueRow
+                      value={draft.streamKey}
+                      placeholder="Clé de stream"
+                      icon={KeyRound}
+                      copied={copiedLinkField === getCopiedLinkField(index, "streamKey")}
+                      copyLabel="Copier la clé de stream"
+                      completed={entryCompleted}
+                      onChange={(value) => updateLinkEntryDraft(index, "streamKey", value)}
+                      onCopy={() => void copyLinkValue(draft.streamKey, getCopiedLinkField(index, "streamKey"))}
+                    />
+                  )}
+                </div>
+              );
+            })}
           </div>
           {linkSaveError && (
             <div className="text-base font-medium text-rose-700">
               {linkSaveError}
             </div>
           )}
+          {titleRenameError && <div className="text-base font-medium text-rose-700">{titleRenameError}</div>}
+        </div>
+      </Card>
+    );
+  }
+
+  if (selection.type === "document" && selectedDocumentGroup) {
+    const documentTone = getDocumentTone(selectedDocumentGroup.files.length > 0);
+    const Icon = getDocumentGroupIcon(selectedDocumentGroup);
+
+    return (
+      <Card className="w-full border-amber-200 bg-white p-4 sm:p-5">
+        <div className="flex w-full min-w-0 flex-col gap-3">
+          <div className="flex w-full min-w-0 items-center justify-between gap-3">
+            <div className={cn("flex min-w-0 items-center gap-2 text-base font-semibold", documentTone.text)}>
+              <Icon className={cn("h-5 w-5 shrink-0", documentTone.icon)} />
+              <InlineEditableTitle
+                value={selectedDocumentGroup.label}
+                onSave={renameSelectedDocumentGroup}
+                className="truncate"
+                inputClassName="border-amber-200 text-amber-950 focus:border-amber-400"
+              />
+            </div>
+          </div>
+          <div
+            onDragOver={(dragEvent) => {
+              dragEvent.preventDefault();
+              setDraggingDocumentFiles(true);
+            }}
+            onDragLeave={() => setDraggingDocumentFiles(false)}
+            onDrop={(dropEvent) => {
+              dropEvent.preventDefault();
+              setDraggingDocumentFiles(false);
+              void uploadFilesToSelectedGroup(dropEvent.dataTransfer.files);
+            }}
+            className={cn(
+              "rounded-xl border border-amber-200 bg-white p-2 transition",
+              draggingDocumentFiles && "border-amber-300 bg-amber-50",
+            )}
+          >
+            <label className="flex min-h-16 cursor-pointer items-center justify-center rounded-lg border border-dashed border-amber-200 bg-amber-50/60 px-3 text-center text-base font-semibold text-amber-800 transition hover:bg-amber-100">
+              {uploadingDocumentFiles ? "Upload..." : "Déposer ou choisir"}
+              <input
+                type="file"
+                multiple
+                className="sr-only"
+                onChange={(inputEvent) => {
+                  if (inputEvent.target.files) {
+                    void uploadFilesToSelectedGroup(inputEvent.target.files);
+                    inputEvent.target.value = "";
+                  }
+                }}
+              />
+            </label>
+          </div>
+          {selectedDocumentGroup.files.length > 0 && (
+            <div className="flex flex-col gap-2">
+              {selectedDocumentGroup.files.map((file) => {
+                const FileIcon = getDocumentFileIcon(file);
+                return (
+                  <div key={file.id} className="flex w-full min-w-0 items-center gap-2">
+                    <div className={cn("group inline-flex min-h-9 min-w-0 flex-1 items-center gap-2 rounded-full border px-3 py-1.5", documentTone.surface, documentTone.border)}>
+                      <button onClick={() => void openDocumentFile(file)} className="flex min-w-0 flex-1 items-center gap-2 text-left">
+                        <FileIcon className={cn("h-4 w-4 shrink-0", documentTone.icon)} />
+                        <span className={cn("min-w-0 truncate text-base font-semibold", documentTone.text)}>{file.fileName}</span>
+                        <span className="shrink-0 text-base font-medium text-amber-700/70">{formatFileSize(file.fileSize)}</span>
+                      </button>
+                      <button
+                        onClick={() => void removeDocumentFile(file)}
+                        className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-amber-500 opacity-100 transition hover:bg-white/70 hover:text-amber-800 focus:opacity-100 [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover:opacity-100"
+                        aria-label="Supprimer ce fichier"
+                      >
+                        <X className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
+                    <button
+                      onClick={() => void downloadDocumentFile(file)}
+                      className={cn(
+                        "flex h-9 w-9 shrink-0 items-center justify-center rounded-full border transition hover:bg-amber-100",
+                        documentTone.surface,
+                        documentTone.border,
+                        documentTone.icon,
+                      )}
+                      aria-label="Télécharger ce fichier"
+                      title="Télécharger"
+                    >
+                      <Download className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+          {selectedDocumentGroup.files.length === 0 && (
+            <div className="text-base font-medium text-amber-700/70">Aucun fichier</div>
+          )}
+          {titleRenameError && <div className="text-base font-medium text-rose-700">{titleRenameError}</div>}
+          {documentOpenError && <div className="text-base font-medium text-rose-700">{documentOpenError}</div>}
         </div>
       </Card>
     );
@@ -1805,12 +3034,24 @@ function ContextDetailBlock({
   if (!selectedOption) return null;
 
   const optionTone = getOptionTone(selectedOption.status);
+  const optionCollaborators = optionCollaboratorProfiles
+    .map((profile) => {
+      const member = teamMembers.find((item) => item.firstName === profile.firstName);
+      return member ? { ...profile, member } : null;
+    })
+    .filter((entry): entry is (typeof optionCollaboratorProfiles)[number] & { member: TeamMember } => Boolean(entry));
+  const selectedOptionAssignee = getOptionAssignee(selectedOption);
 
   return (
     <Card className="border-emerald-200 bg-white p-4 sm:p-5">
       <div className="flex items-center justify-between gap-3">
         <div className={cn("flex min-w-0 items-center gap-2 text-base font-semibold", optionTone.text)}>
-          <span className="truncate">{selectedOption.label}</span>
+          <InlineEditableTitle
+            value={selectedOption.label}
+            onSave={renameSelectedOption}
+            className="truncate"
+            inputClassName="border-emerald-200 text-emerald-950 focus:border-emerald-400"
+          />
         </div>
         <button
           onClick={() => void onToggleOption(selectedOption)}
@@ -1826,6 +3067,7 @@ function ContextDetailBlock({
           {selectedOption.status === "completed" ? "Fait" : "À faire"}
         </button>
       </div>
+      {titleRenameError && <div className="mt-2 text-base font-medium text-rose-700">{titleRenameError}</div>}
       <div className="mt-3">
         <div className="flex flex-wrap items-center gap-2">
           {!addingOptionItem ? (
@@ -1866,6 +3108,29 @@ function ContextDetailBlock({
         </div>
         {optionItemError && <div className="text-base font-medium text-rose-700">{optionItemError}</div>}
       </div>
+      <div className="mt-4">
+        <div className="mb-2 text-base font-semibold uppercase tracking-[0.16em] text-stone-500">Collaborateurs</div>
+        <div className="flex flex-wrap gap-2">
+          {optionCollaborators.map(({ member }) => {
+            const isAssigned = selectedOptionAssignee?.id === member.id;
+            return (
+              <button
+                key={member.id}
+                onClick={() => void toggleSelectedOptionAssignee(member)}
+                className={cn(
+                  "rounded-full border px-3 py-1.5 text-base font-semibold transition",
+                  isAssigned
+                    ? "border-emerald-400/70 bg-emerald-200/90 text-emerald-950 hover:bg-emerald-200"
+                    : "border-emerald-100 bg-emerald-50/80 text-stone-700 hover:bg-emerald-100/55",
+                )}
+              >
+                {member.firstName}
+              </button>
+            );
+          })}
+        </div>
+        {optionAssigneeError && <div className="mt-2 text-base font-medium text-rose-700">{optionAssigneeError}</div>}
+      </div>
     </Card>
   );
 }
@@ -1875,31 +3140,6 @@ function splitStoredDetails(details: string | null) {
     .split(/\n|,/)
     .map((detail) => detail.trim())
     .filter(Boolean);
-}
-
-function PreparationCard({ task, onToggle }: { task: TaskItem; onToggle: () => void }) {
-  const state: State = task.status === "completed" ? "ok" : "waiting";
-
-  return (
-    <div className={cn("min-h-16 rounded-xl border-2 p-4", stateStyles[state].panel)}>
-      <div className="flex items-start justify-between gap-4">
-        <div className="truncate text-base font-semibold text-stone-950">{task.title}</div>
-        <button onClick={onToggle} className="shrink-0" aria-label={task.status === "completed" ? "Marquer incomplet" : "Marquer terminé"}>
-          <StateIcon state={state} />
-        </button>
-      </div>
-      <div className="mt-3 flex min-w-0 items-center justify-between gap-4">
-        <div className="min-w-0 flex-1 overflow-hidden text-ellipsis whitespace-nowrap text-base text-stone-600">{task.subtitle}</div>
-        <div className="flex shrink-0 flex-nowrap justify-end gap-1.5">
-          {task.assignees.map((assignee) => (
-            <span key={assignee.id} className="whitespace-nowrap rounded-full border border-stone-200 bg-white px-2.5 py-1 text-base font-medium text-stone-700">
-              {assignee.firstName}
-            </span>
-          ))}
-        </div>
-      </div>
-    </div>
-  );
 }
 
 function CreateEventModal({
@@ -1919,7 +3159,6 @@ function CreateEventModal({
     startTime: "10:00",
     endTime: "11:30",
     endOfDayTime: "13:00",
-    status: "Brouillon",
   });
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -1961,15 +3200,6 @@ function CreateEventModal({
           </Field>
           <Field label="Date">
             <input required type="date" value={form.date} onChange={(event) => updateField("date", event.target.value)} className={formInputClassName} />
-          </Field>
-          <Field label="Statut">
-            <select value={form.status} onChange={(event) => updateField("status", event.target.value as EventStatus)} className={formInputClassName}>
-              {statusOptions.map((status) => (
-                <option key={status} value={status}>
-                  {status}
-                </option>
-              ))}
-            </select>
           </Field>
           <Field label="Arrivée client">
             <input type="time" value={form.clientArrivalTime} onChange={(event) => updateField("clientArrivalTime", event.target.value)} className={formInputClassName} />
@@ -2071,22 +3301,6 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
   );
 }
 
-function StateIcon({ state }: { state: State }) {
-  if (state === "ok") {
-    return (
-      <span className={cn("flex h-7 w-7 items-center justify-center rounded-full", stateStyles[state].icon)}>
-        <Check className="h-4 w-4" />
-      </span>
-    );
-  }
-
-  return (
-    <span className={cn("flex h-7 w-7 items-center justify-center rounded-full", stateStyles[state].icon)}>
-      <Clock3 className="h-4 w-4" />
-    </span>
-  );
-}
-
 function StatusBadge({ status, large = false }: { status: EventStatus; large?: boolean }) {
   return (
     <span className={cn("inline-flex items-center rounded-full text-base font-bold ring-1", large ? "px-3 py-1.5" : "px-2.5 py-1 leading-tight", statusStyles[status])}>
@@ -2122,7 +3336,9 @@ function SectionHeader({
   const addTone =
     tone === "option"
       ? "border-emerald-200 bg-emerald-50 text-emerald-700 hover:border-emerald-300 hover:bg-emerald-100"
-      : "border-sky-200 bg-sky-50 text-sky-700 hover:border-sky-300 hover:bg-sky-100";
+      : tone === "link"
+        ? "border-sky-200 bg-sky-50 text-sky-700 hover:border-sky-300 hover:bg-sky-100"
+        : "border-amber-200 bg-amber-50 text-amber-700 hover:border-amber-300 hover:bg-amber-100";
 
   return (
     <div className={cn("mb-3 flex items-center gap-2", align === "right" ? "justify-end" : "justify-start")}>
@@ -2151,7 +3367,9 @@ function InlineAddButton({
   const toneClassName =
     tone === "option"
       ? "bg-emerald-600 hover:bg-emerald-700 disabled:bg-stone-300"
-      : "bg-sky-600 hover:bg-sky-700 disabled:bg-stone-300";
+      : tone === "link"
+        ? "bg-sky-600 hover:bg-sky-700 disabled:bg-stone-300"
+        : "bg-amber-600 hover:bg-amber-700 disabled:bg-stone-300";
 
   return (
     <button disabled={disabled} className={cn("h-9 shrink-0 rounded-xl px-3 text-base font-semibold text-white transition", toneClassName)}>
