@@ -14,7 +14,6 @@ import {
   ExternalLink,
   FileStack,
   FileText,
-  Mic2,
   MonitorPlay,
   Palette,
   Presentation,
@@ -24,6 +23,8 @@ import {
   ShieldCheck,
   Timer,
   Wifi,
+  Webcam,
+  X,
   type LucideIcon,
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
@@ -43,6 +44,7 @@ type ItemKind = "option" | "link";
 
 type EventRow = Database["public"]["Tables"]["events"]["Row"];
 type EventOptionRow = Database["public"]["Tables"]["event_options"]["Row"];
+type EventOptionItemRow = Database["public"]["Tables"]["event_option_items"]["Row"];
 type EventLinkRow = Database["public"]["Tables"]["event_links"]["Row"];
 type TaskRow = Database["public"]["Tables"]["tasks"]["Row"];
 type TeamMemberRow = Database["public"]["Tables"]["team_members"]["Row"];
@@ -73,6 +75,14 @@ type EventOption = {
   label: string;
   status: CompletionStatus;
   details: string | null;
+  createdAt: string;
+  items: EventOptionItem[];
+};
+
+type EventOptionItem = {
+  id: string;
+  optionId: string;
+  label: string;
   createdAt: string;
 };
 
@@ -116,6 +126,10 @@ type ContextSelection =
   | { type: "option"; optionId: string }
   | { type: "link"; linkId: string; copied: boolean }
   | null;
+
+type DeleteSelection =
+  | { type: "option"; optionId: string }
+  | { type: "link"; linkId: string };
 
 type CreateEventInput = {
   clientName: string;
@@ -168,7 +182,7 @@ const iconKeywordRules: { keywords: string[]; icon: LucideIcon }[] = [
   { keywords: ["sous titres", "sous-titres", "subtitles", "caption"], icon: Captions },
   { keywords: ["camera", "cam"], icon: Camera },
   { keywords: ["montage", "edit", "edition"], icon: Scissors },
-  { keywords: ["duplex", "micro", "mic", "invite"], icon: Mic2 },
+  { keywords: ["duplex", "visio", "remote", "invite"], icon: Webcam },
   { keywords: ["conducteur", "run of show"], icon: FileStack },
 ];
 
@@ -253,6 +267,15 @@ function mapTeamMember(row: TeamMemberRow): TeamMember {
   };
 }
 
+function mapEventOptionItem(row: EventOptionItemRow): EventOptionItem {
+  return {
+    id: row.id,
+    optionId: row.option_id,
+    label: row.label,
+    createdAt: row.created_at,
+  };
+}
+
 function mapEvent(row: EventQueryRow): ProductionEvent {
   const options = [...(row.event_options ?? [])]
     .sort((a, b) => a.created_at.localeCompare(b.created_at))
@@ -263,6 +286,7 @@ function mapEvent(row: EventQueryRow): ProductionEvent {
       status: option.status,
       details: option.details,
       createdAt: option.created_at,
+      items: [],
     }));
 
   const links = [...(row.event_links ?? [])]
@@ -309,6 +333,24 @@ function mapEvent(row: EventQueryRow): ProductionEvent {
   };
 }
 
+function withOptionItems(events: ProductionEvent[], items: EventOptionItem[]) {
+  const itemsByOptionId = new Map<string, EventOptionItem[]>();
+
+  for (const item of items) {
+    const optionItems = itemsByOptionId.get(item.optionId) ?? [];
+    optionItems.push(item);
+    itemsByOptionId.set(item.optionId, optionItems);
+  }
+
+  return events.map((event) => ({
+    ...event,
+    options: event.options.map((option) => ({
+      ...option,
+      items: itemsByOptionId.get(option.id) ?? [],
+    })),
+  }));
+}
+
 async function fetchEvents() {
   if (!supabase) {
     throw new Error("Configuration Supabase manquante.");
@@ -333,7 +375,23 @@ async function fetchEvents() {
     .order("start_time", { ascending: true });
 
   if (error) throw error;
-  return ((data ?? []) as EventQueryRow[]).map(mapEvent);
+  const events = ((data ?? []) as EventQueryRow[]).map(mapEvent);
+  const optionIds = events.flatMap((event) => event.options.map((option) => option.id));
+
+  if (optionIds.length === 0) return events;
+
+  const { data: itemData, error: itemError } = await supabase
+    .from("event_option_items")
+    .select("*")
+    .in("option_id", optionIds)
+    .order("created_at", { ascending: true });
+
+  if (itemError) {
+    console.error("Failed to load event_option_items. Apply supabase/migrations/002_event_option_items.sql if the table is missing.", itemError);
+    return events;
+  }
+
+  return withOptionItems(events, (itemData ?? []).map(mapEventOptionItem));
 }
 
 async function fetchTeamMembers() {
@@ -436,15 +494,18 @@ export default function Home() {
 
     if (eventError) throw eventError;
 
-    await Promise.all([
-      supabase.from("event_options").insert(
-        defaultOptions.map((option) => ({
-          event_id: event.id,
-          label: option.label,
-          status: "incomplete" as CompletionStatus,
-          details: option.details,
-        })),
-      ),
+    const [{ data: insertedOptions, error: optionError }, { error: linkError }] = await Promise.all([
+      supabase
+        .from("event_options")
+        .insert(
+          defaultOptions.map((option) => ({
+            event_id: event.id,
+            label: option.label,
+            status: "incomplete" as CompletionStatus,
+            details: option.details,
+          })),
+        )
+        .select(),
       supabase.from("event_links").insert(
         defaultLinks.map((label) => ({
           event_id: event.id,
@@ -454,6 +515,22 @@ export default function Home() {
         })),
       ),
     ]);
+
+    if (optionError) throw optionError;
+    if (linkError) throw linkError;
+
+    const defaultOptionItems = (insertedOptions ?? []).flatMap((option) => {
+      const defaultOption = defaultOptions.find((item) => item.label === option.label);
+      return splitStoredDetails(defaultOption?.details ?? "").map((label) => ({
+        option_id: option.id,
+        label,
+      }));
+    });
+
+    if (defaultOptionItems.length > 0) {
+      const { error: optionItemError } = await supabase.from("event_option_items").insert(defaultOptionItems);
+      if (optionItemError) throw optionItemError;
+    }
 
     const { data: insertedTasks, error: taskError } = await supabase
       .from("tasks")
@@ -596,6 +673,7 @@ export default function Home() {
       status: data.status,
       details: data.details,
       createdAt: data.created_at,
+      items: [],
     };
 
     setEvents((current) =>
@@ -627,6 +705,98 @@ export default function Home() {
           ? {
               ...event,
               options: event.options.filter((item) => item.id !== option.id),
+            }
+          : event,
+      ),
+    );
+  }
+
+  async function createEventOptionItem(option: EventOption, label: string) {
+    if (!supabase) {
+      throw new Error("Configuration Supabase manquante.");
+    }
+
+    const nextLabel = label.trim();
+    if (!nextLabel) {
+      throw new Error("Le nom de l'élément est requis.");
+    }
+
+    const { data, error: insertError } = await supabase
+      .from("event_option_items")
+      .insert({
+        option_id: option.id,
+        label: nextLabel,
+      })
+      .select()
+      .single();
+
+    if (insertError) {
+      console.error("Failed to create event_option_items row", {
+        optionId: option.id,
+        label: nextLabel,
+        error: insertError,
+      });
+      if (insertError.code === "PGRST205" || insertError.code === "42P01") {
+        throw new Error("Table Supabase event_option_items manquante. Applique la migration 002_event_option_items.sql.");
+      }
+      throw insertError;
+    }
+
+    const optionItem = mapEventOptionItem(data);
+
+    setEvents((current) =>
+      current.map((event) =>
+        event.id === option.eventId
+          ? {
+              ...event,
+              options: event.options.map((item) =>
+                item.id === option.id
+                  ? {
+                      ...item,
+                      items: [...item.items, optionItem],
+                    }
+                  : item,
+              ),
+            }
+          : event,
+      ),
+    );
+
+    return optionItem;
+  }
+
+  async function deleteEventOptionItem(option: EventOption, optionItem: EventOptionItem) {
+    if (!supabase) {
+      throw new Error("Configuration Supabase manquante.");
+    }
+
+    const { error: deleteError } = await supabase.from("event_option_items").delete().eq("id", optionItem.id);
+
+    if (deleteError) {
+      console.error("Failed to delete event_option_items row", {
+        optionId: option.id,
+        itemId: optionItem.id,
+        error: deleteError,
+      });
+      if (deleteError.code === "PGRST205" || deleteError.code === "42P01") {
+        throw new Error("Table Supabase event_option_items manquante. Applique la migration 002_event_option_items.sql.");
+      }
+      throw deleteError;
+    }
+
+    setEvents((current) =>
+      current.map((event) =>
+        event.id === option.eventId
+          ? {
+              ...event,
+              options: event.options.map((item) =>
+                item.id === option.id
+                  ? {
+                      ...item,
+                      items: item.items.filter((detailItem) => detailItem.id !== optionItem.id),
+                    }
+                  : item,
+              ),
             }
           : event,
       ),
@@ -769,6 +939,8 @@ export default function Home() {
             onToggleTask={toggleTask}
             onCreateOption={createEventOption}
             onDeleteOption={deleteEventOption}
+            onCreateOptionItem={createEventOptionItem}
+            onDeleteOptionItem={deleteEventOptionItem}
             onCreateLink={createEventLink}
             onDeleteLink={deleteEventLink}
             onSaveLink={updateLinkUrl}
@@ -1055,6 +1227,8 @@ function ProductionDetail({
   onToggleTask,
   onCreateOption,
   onDeleteOption,
+  onCreateOptionItem,
+  onDeleteOptionItem,
   onCreateLink,
   onDeleteLink,
   onSaveLink,
@@ -1068,6 +1242,8 @@ function ProductionDetail({
   onToggleTask: (task: TaskItem) => Promise<void>;
   onCreateOption: (eventId: string, label: string) => Promise<EventOption>;
   onDeleteOption: (option: EventOption) => Promise<void>;
+  onCreateOptionItem: (option: EventOption, label: string) => Promise<EventOptionItem>;
+  onDeleteOptionItem: (option: EventOption, item: EventOptionItem) => Promise<void>;
   onCreateLink: (eventId: string, input: { label: string; url: string }) => Promise<EventLink>;
   onDeleteLink: (link: EventLink) => Promise<void>;
   onSaveLink: (link: EventLink, url: string) => Promise<EventLink>;
@@ -1078,6 +1254,8 @@ function ProductionDetail({
   const [linkName, setLinkName] = useState("");
   const [manageError, setManageError] = useState<string | null>(null);
   const [submittingAdd, setSubmittingAdd] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState<DeleteSelection | null>(null);
+  const [deletingItem, setDeletingItem] = useState(false);
 
   useEffect(() => {
     setContextSelection((current) => {
@@ -1149,6 +1327,37 @@ function ProductionDetail({
     }
   }
 
+  async function deleteSelectedGridItem() {
+    if (!confirmDelete) return;
+
+    setDeletingItem(true);
+    setManageError(null);
+
+    try {
+      if (confirmDelete.type === "option") {
+        const option = event.options.find((item) => item.id === confirmDelete.optionId);
+        if (!option) return;
+        await onDeleteOption(option);
+        if (contextSelection?.type === "option" && contextSelection.optionId === option.id) {
+          setContextSelection(null);
+        }
+      } else {
+        const link = event.links.find((item) => item.id === confirmDelete.linkId);
+        if (!link) return;
+        await onDeleteLink(link);
+        if (contextSelection?.type === "link" && contextSelection.linkId === link.id) {
+          setContextSelection(null);
+        }
+      }
+
+      setConfirmDelete(null);
+    } catch (deleteError) {
+      setManageError(deleteError instanceof Error ? deleteError.message : "Impossible de supprimer cet élément.");
+    } finally {
+      setDeletingItem(false);
+    }
+  }
+
   return (
     <section className="flex flex-1 flex-col gap-5">
       <Card className="premium-surface p-5 sm:p-8">
@@ -1198,21 +1407,43 @@ function ProductionDetail({
                 const Icon = getOptionIcon(option.label);
                 const optionTone = getOptionTone(option.status);
                 const isSelectedOption = contextSelection?.type === "option" && contextSelection.optionId === option.id;
+                const isConfirmingDelete = confirmDelete?.type === "option" && confirmDelete.optionId === option.id;
                 return (
-                  <button
+                  <div
                     key={option.id}
-                    onClick={() => selectOption(option)}
                     className={cn(
-                      "flex min-h-16 items-center gap-1.5 rounded-xl border-2 px-2 py-3 text-left transition sm:gap-2 sm:px-3",
+                      "group relative flex min-h-16 items-center gap-1.5 rounded-xl border-2 transition sm:gap-2",
                       optionTone.surface,
                       optionTone.border,
                       optionTone.hover,
                       isSelectedOption && "border-emerald-700 ring-2 ring-emerald-700/20",
                     )}
                   >
-                    <Icon className={cn("h-5 w-5 shrink-0", optionTone.icon)} />
-                    <span className={cn("truncate text-base font-semibold", optionTone.text)}>{option.label}</span>
-                  </button>
+                    <button onClick={() => selectOption(option)} className="flex min-h-16 min-w-0 flex-1 items-center gap-1.5 px-2 py-3 text-left sm:gap-2 sm:px-3">
+                      <Icon className={cn("h-5 w-5 shrink-0", optionTone.icon)} />
+                      <span className={cn("truncate pr-5 text-base font-semibold", optionTone.text)}>{option.label}</span>
+                    </button>
+                    <button
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        setConfirmDelete({ type: "option", optionId: option.id });
+                      }}
+                      className="absolute right-1.5 top-1.5 flex h-6 w-6 items-center justify-center rounded-full text-emerald-500 opacity-100 transition hover:bg-white/70 hover:text-emerald-800 focus:opacity-100 [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover:opacity-100"
+                      aria-label="Supprimer cette option"
+                    >
+                      <X className="h-3.5 w-3.5" />
+                    </button>
+                    {isConfirmingDelete && (
+                      <div className="absolute right-1 top-9 z-30">
+                        <DeleteConfirmBubble
+                          label="Supprimer cette option ?"
+                          deleting={deletingItem}
+                          onCancel={() => setConfirmDelete(null)}
+                          onConfirm={() => void deleteSelectedGridItem()}
+                        />
+                      </div>
+                    )}
+                  </div>
                 );
               })}
             </div>
@@ -1245,24 +1476,44 @@ function ProductionDetail({
                 const Icon = getLinkIcon(link.label);
                 const isSelectedLink = contextSelection?.type === "link" && contextSelection.linkId === link.id;
                 const linkTone = getLinkTone(getLinkState(link));
+                const isConfirmingDelete = confirmDelete?.type === "link" && confirmDelete.linkId === link.id;
                 return (
-                  <button
+                  <div
                     key={link.id}
-                    onClick={() => selectLink(link)}
                     className={cn(
-                      "flex min-h-16 items-center justify-between gap-1.5 rounded-xl border-2 px-2 py-3 text-left transition sm:gap-2 sm:px-3",
+                      "group relative flex min-h-16 items-center gap-1.5 rounded-xl border-2 transition sm:gap-2",
                       linkTone.surface,
                       linkTone.border,
                       linkTone.hover,
                       isSelectedLink && "border-sky-700 ring-2 ring-sky-700/20",
                     )}
                   >
-                    <span className="flex min-w-0 items-center gap-1.5 sm:gap-2">
+                    <button onClick={() => selectLink(link)} className="flex min-h-16 min-w-0 flex-1 items-center gap-1.5 px-2 py-3 text-left sm:gap-2 sm:px-3">
                       <Icon className={cn("h-5 w-5 shrink-0", linkTone.icon)} />
-                      <span className={cn("truncate text-base font-semibold", linkTone.text)}>{link.label}</span>
-                    </span>
-                    <ExternalLink className="hidden h-4 w-4 shrink-0 text-sky-400 sm:block" />
-                  </button>
+                      <span className={cn("truncate pr-5 text-base font-semibold", linkTone.text)}>{link.label}</span>
+                    </button>
+                    <ExternalLink className="mr-8 hidden h-4 w-4 shrink-0 text-sky-400 sm:block" />
+                    <button
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        setConfirmDelete({ type: "link", linkId: link.id });
+                      }}
+                      className="absolute right-1.5 top-1.5 flex h-6 w-6 items-center justify-center rounded-full text-sky-500 opacity-100 transition hover:bg-white/70 hover:text-sky-800 focus:opacity-100 [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover:opacity-100"
+                      aria-label="Supprimer ce lien"
+                    >
+                      <X className="h-3.5 w-3.5" />
+                    </button>
+                    {isConfirmingDelete && (
+                      <div className="absolute right-1 top-9 z-30">
+                        <DeleteConfirmBubble
+                          label="Supprimer ce lien ?"
+                          deleting={deletingItem}
+                          onCancel={() => setConfirmDelete(null)}
+                          onConfirm={() => void deleteSelectedGridItem()}
+                        />
+                      </div>
+                    )}
+                  </div>
                 );
               })}
             </div>
@@ -1274,10 +1525,9 @@ function ProductionDetail({
       <ContextDetailBlock
         event={event}
         selection={contextSelection}
-        onClearSelection={() => setContextSelection(null)}
         onToggleOption={onToggleOption}
-        onDeleteOption={onDeleteOption}
-        onDeleteLink={onDeleteLink}
+        onCreateOptionItem={onCreateOptionItem}
+        onDeleteOptionItem={onDeleteOptionItem}
         onSaveLink={onSaveLink}
       />
 
@@ -1377,18 +1627,16 @@ function ProductionTimeline({ event }: { event: ProductionEvent }) {
 function ContextDetailBlock({
   event,
   selection,
-  onClearSelection,
   onToggleOption,
-  onDeleteOption,
-  onDeleteLink,
+  onCreateOptionItem,
+  onDeleteOptionItem,
   onSaveLink,
 }: {
   event: ProductionEvent;
   selection: ContextSelection;
-  onClearSelection: () => void;
   onToggleOption: (option: EventOption) => Promise<void>;
-  onDeleteOption: (option: EventOption) => Promise<void>;
-  onDeleteLink: (link: EventLink) => Promise<void>;
+  onCreateOptionItem: (option: EventOption, label: string) => Promise<EventOptionItem>;
+  onDeleteOptionItem: (option: EventOption, item: EventOptionItem) => Promise<void>;
   onSaveLink: (link: EventLink, url: string) => Promise<EventLink>;
 }) {
   const selectedOption = selection?.type === "option" ? event.options.find((option) => option.id === selection.optionId) ?? null : null;
@@ -1400,9 +1648,10 @@ function ContextDetailBlock({
   const [savingLink, setSavingLink] = useState(false);
   const [linkSaveError, setLinkSaveError] = useState<string | null>(null);
   const [linkCopied, setLinkCopied] = useState(false);
-  const [confirmingDelete, setConfirmingDelete] = useState(false);
-  const [deletingItem, setDeletingItem] = useState(false);
-  const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [addingOptionItem, setAddingOptionItem] = useState(false);
+  const [optionItemInput, setOptionItemInput] = useState("");
+  const [savingOptionItem, setSavingOptionItem] = useState(false);
+  const [optionItemError, setOptionItemError] = useState<string | null>(null);
   const hasUnsavedLinkChanges = linkInput.trim() !== selectedLinkUrl.trim();
   const hasSavedLinkUrl = selectedLinkUrl.trim().length > 0;
   const linkSaveLabel = savingLink ? "Enregistrement..." : hasSavedLinkUrl && !hasUnsavedLinkChanges ? "Enregistré" : "Enregistrer";
@@ -1425,9 +1674,10 @@ function ContextDetailBlock({
   }, [linkCopied]);
 
   useEffect(() => {
-    setConfirmingDelete(false);
-    setDeletingItem(false);
-    setDeleteError(null);
+    setAddingOptionItem(false);
+    setOptionItemInput("");
+    setSavingOptionItem(false);
+    setOptionItemError(null);
   }, [selectedLinkId, selectedOptionId]);
 
   async function saveSelectedLink() {
@@ -1458,22 +1708,35 @@ function ContextDetailBlock({
     }
   }
 
-  async function deleteSelectedItem() {
-    setDeletingItem(true);
-    setDeleteError(null);
+  async function addOptionItem(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!selectedOption) return;
+
+    setSavingOptionItem(true);
+    setOptionItemError(null);
 
     try {
-      if (selectedOption) {
-        await onDeleteOption(selectedOption);
-      } else if (selectedLink) {
-        await onDeleteLink(selectedLink);
-      }
+      await onCreateOptionItem(selectedOption, optionItemInput);
+      setOptionItemInput("");
+      setAddingOptionItem(false);
+    } catch (saveError) {
+      console.error("Unable to add option detail item", saveError);
+      setOptionItemError(saveError instanceof Error ? saveError.message : "Impossible d'ajouter cet élément.");
+    } finally {
+      setSavingOptionItem(false);
+    }
+  }
 
-      setConfirmingDelete(false);
-      onClearSelection();
-    } catch (removeError) {
-      setDeleteError(removeError instanceof Error ? removeError.message : "Impossible de supprimer cet élément.");
-      setDeletingItem(false);
+  async function removeOptionItem(optionItem: EventOptionItem) {
+    if (!selectedOption) return;
+
+    setOptionItemError(null);
+
+    try {
+      await onDeleteOptionItem(selectedOption, optionItem);
+    } catch (deleteError) {
+      console.error("Unable to delete option detail item", deleteError);
+      setOptionItemError(deleteError instanceof Error ? deleteError.message : "Impossible de supprimer cet élément.");
     }
   }
 
@@ -1484,12 +1747,13 @@ function ContextDetailBlock({
     const linkTone = getLinkTone(linkState);
 
     return (
-      <Card className="border-sky-200 bg-white p-4 sm:p-5">
-        <div className="w-full">
-          <div className="flex w-full items-start justify-between gap-4">
+      <Card className="w-full border-sky-200 bg-white p-4 sm:p-5">
+        <div className="link-detail-block flex w-full min-w-0 flex-col gap-2">
+          <div className="top-row flex w-full min-w-0 items-center">
             <div className={cn("flex min-w-0 items-center gap-2 text-base font-semibold", linkTone.text)}>
               <span className="truncate">{selectedLink.label}</span>
               <button
+                type="button"
                 onClick={() => void copySelectedLink()}
                 disabled={linkState !== "available"}
                 className={cn(
@@ -1502,17 +1766,8 @@ function ContextDetailBlock({
                 <Copy className="h-3.5 w-3.5" />
               </button>
             </div>
-            <DetailDeleteAction
-              confirmLabel="Supprimer ce lien ?"
-              confirming={confirmingDelete}
-              deleting={deletingItem}
-              error={deleteError}
-              onAskConfirm={() => setConfirmingDelete(true)}
-              onCancel={() => setConfirmingDelete(false)}
-              onConfirm={() => void deleteSelectedItem()}
-            />
           </div>
-          <div className="mt-3 flex w-full items-stretch gap-2">
+          <div className="url-editor-row flex w-full min-w-0 items-center gap-2">
             <input
               value={linkInput}
               onChange={(event) => {
@@ -1520,14 +1775,15 @@ function ContextDetailBlock({
               }}
               placeholder="https://..."
               className={cn(
-                "h-12 min-w-0 w-full flex-1 rounded-2xl border border-sky-200 bg-white px-4 text-base font-medium text-stone-950 outline-none transition placeholder:text-stone-300 focus:border-sky-400",
+                "h-12 w-0 min-w-0 flex-1 rounded-2xl border border-sky-200 bg-white px-4 text-base font-medium text-stone-950 outline-none transition placeholder:text-stone-300 focus:border-sky-400",
               )}
             />
             <button
+              type="button"
               onClick={() => void saveSelectedLink()}
               disabled={savingLink}
               className={cn(
-                "h-12 shrink-0 rounded-2xl border px-4 text-base font-semibold disabled:cursor-not-allowed disabled:opacity-60",
+                "h-12 shrink-0 whitespace-nowrap rounded-2xl border px-4 text-base font-semibold disabled:cursor-not-allowed disabled:opacity-60",
                 linkTone.surface,
                 linkTone.border,
                 linkTone.text,
@@ -1537,7 +1793,7 @@ function ContextDetailBlock({
             </button>
           </div>
           {linkSaveError && (
-            <div className="mt-2 text-base font-medium text-rose-700">
+            <div className="text-base font-medium text-rose-700">
               {linkSaveError}
             </div>
           )}
@@ -1548,59 +1804,77 @@ function ContextDetailBlock({
 
   if (!selectedOption) return null;
 
-  const details = splitDetails(selectedOption.details);
   const optionTone = getOptionTone(selectedOption.status);
 
   return (
     <Card className="border-emerald-200 bg-white p-4 sm:p-5">
-      <div className="flex items-start justify-between gap-3">
+      <div className="flex items-center justify-between gap-3">
         <div className={cn("flex min-w-0 items-center gap-2 text-base font-semibold", optionTone.text)}>
           <span className="truncate">{selectedOption.label}</span>
-          <button
-            onClick={() => void onToggleOption(selectedOption)}
-            className={cn("flex h-7 w-7 shrink-0 items-center justify-center rounded-full transition", optionTone.surface, optionTone.icon)}
-            aria-label={selectedOption.status === "completed" ? "Marquer incomplet" : "Marquer terminé"}
-            title={selectedOption.status === "completed" ? "Terminé" : "À faire"}
-          >
-            {selectedOption.status === "completed" ? <Check className="h-3.5 w-3.5" /> : <Clock3 className="h-3.5 w-3.5" />}
-          </button>
         </div>
-        <DetailDeleteAction
-          confirmLabel="Supprimer cette option ?"
-          confirming={confirmingDelete}
-          deleting={deletingItem}
-          error={deleteError}
-          onAskConfirm={() => setConfirmingDelete(true)}
-          onCancel={() => setConfirmingDelete(false)}
-          onConfirm={() => void deleteSelectedItem()}
-        />
+        <button
+          onClick={() => void onToggleOption(selectedOption)}
+          className={cn(
+            "shrink-0 rounded-full border px-3 py-1.5 text-base font-semibold transition",
+            optionTone.surface,
+            optionTone.border,
+            optionTone.text,
+            selectedOption.status === "completed" ? "hover:bg-emerald-100" : "hover:bg-emerald-50",
+          )}
+          aria-label={selectedOption.status === "completed" ? "Marquer incomplet" : "Marquer terminé"}
+        >
+          {selectedOption.status === "completed" ? "Fait" : "À faire"}
+        </button>
       </div>
-      <div className="mt-3 flex gap-2 overflow-x-auto pb-1">
-        {details.map((detail) => (
-          <span
-            key={detail}
-            className={cn(
-              "shrink-0 rounded-full border px-3 py-1.5 text-base font-semibold",
-              optionTone.surface,
-              optionTone.border,
-              optionTone.text,
-            )}
-          >
-            {detail}
-          </span>
+      <div className="mt-3">
+        <div className="flex flex-wrap items-center gap-2">
+          {!addingOptionItem ? (
+            <button
+              onClick={() => setAddingOptionItem(true)}
+              className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-emerald-200 bg-emerald-50 text-base font-semibold leading-none text-emerald-700 transition hover:bg-emerald-100"
+              aria-label="Ajouter un élément"
+              title="Ajouter un élément"
+            >
+              +
+            </button>
+          ) : (
+            <form onSubmit={addOptionItem} className="flex min-w-0 flex-1 flex-wrap items-center gap-2">
+              <input
+                required
+                value={optionItemInput}
+                onChange={(event) => setOptionItemInput(event.target.value)}
+                placeholder="Nouvel élément"
+                className="h-9 min-w-0 flex-1 rounded-xl border border-emerald-200 bg-white px-3 text-base font-medium text-stone-950 outline-none transition placeholder:text-stone-300 focus:border-emerald-400"
+              />
+              <button disabled={savingOptionItem} className="h-9 shrink-0 rounded-xl bg-emerald-600 px-3 text-base font-semibold text-white transition hover:bg-emerald-700 disabled:bg-stone-300">
+                Ajouter
+              </button>
+            </form>
+          )}
+        {selectedOption.items.map((item) => (
+          <div key={item.id} className={cn("group inline-flex min-h-9 w-fit max-w-full items-center gap-2 rounded-full border px-3 py-1.5", optionTone.surface, optionTone.border)}>
+            <span className={cn("min-w-0 truncate text-base font-semibold", optionTone.text)}>{item.label}</span>
+            <button
+              onClick={() => void removeOptionItem(item)}
+              className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-emerald-500 opacity-100 transition hover:bg-white/70 hover:text-emerald-800 focus:opacity-100 [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover:opacity-100"
+              aria-label="Supprimer cet élément"
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
+          </div>
         ))}
+        </div>
+        {optionItemError && <div className="text-base font-medium text-rose-700">{optionItemError}</div>}
       </div>
     </Card>
   );
 }
 
-function splitDetails(details: string | null) {
-  const values = (details ?? "")
+function splitStoredDetails(details: string | null) {
+  return (details ?? "")
     .split(/\n|,/)
     .map((detail) => detail.trim())
     .filter(Boolean);
-
-  return values.length > 0 ? values : ["Information à compléter"];
 }
 
 function PreparationCard({ task, onToggle }: { task: TaskItem; onToggle: () => void }) {
@@ -1908,40 +2182,6 @@ function InlineAddForm({
     >
       {children}
     </form>
-  );
-}
-
-function DetailDeleteAction({
-  confirmLabel,
-  confirming,
-  deleting,
-  error,
-  onAskConfirm,
-  onCancel,
-  onConfirm,
-}: {
-  confirmLabel: string;
-  confirming: boolean;
-  deleting: boolean;
-  error: string | null;
-  onAskConfirm: () => void;
-  onCancel: () => void;
-  onConfirm: () => void;
-}) {
-  return (
-    <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
-      {error && <span className="text-base font-medium text-rose-700">{error}</span>}
-      {!confirming ? (
-        <button
-          onClick={onAskConfirm}
-          className="rounded-full border border-stone-200 bg-transparent px-3 py-1.5 text-base font-semibold text-stone-400 transition hover:border-rose-200 hover:bg-rose-50 hover:text-rose-700"
-        >
-          Supprimer
-        </button>
-      ) : (
-        <DeleteConfirmBubble label={confirmLabel} deleting={deleting} onCancel={onCancel} onConfirm={onConfirm} />
-      )}
-    </div>
   );
 }
 

@@ -57,6 +57,22 @@ export type Database = {
         Update: Partial<Database["public"]["Tables"]["event_options"]["Insert"]>;
         Relationships: [];
       };
+      event_option_items: {
+        Row: {
+          id: string;
+          option_id: string;
+          label: string;
+          created_at: string;
+        };
+        Insert: {
+          id?: string;
+          option_id: string;
+          label: string;
+          created_at?: string;
+        };
+        Update: Partial<Database["public"]["Tables"]["event_option_items"]["Insert"]>;
+        Relationships: [];
+      };
       event_links: {
         Row: {
           id: string;
