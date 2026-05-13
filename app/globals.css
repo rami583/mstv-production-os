@@ -1,0 +1,47 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: light;
+  --font-ui: "SF Pro Rounded", ui-rounded, -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif;
+  --background: 38 35% 95%;
+  --foreground: 24 15% 10%;
+  --muted: 28 9% 43%;
+  --border: 30 17% 86%;
+  --accent: 31 22% 32%;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  font-family: var(--font-ui);
+  background: #f7f9fb;
+}
+
+button,
+a {
+  font-family: inherit;
+  -webkit-tap-highlight-color: transparent;
+}
+
+::selection {
+  background: rgba(191, 171, 139, 0.34);
+}
+
+.premium-surface {
+  background: #ffffff;
+  border: 1px solid rgba(214, 205, 193, 0.86);
+}
+
+.quiet-scrollbar {
+  scrollbar-color: rgba(120, 109, 95, 0.28) transparent;
+}
