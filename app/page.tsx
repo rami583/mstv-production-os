@@ -2,19 +2,28 @@
 
 import {
   AlertCircle,
+  Brush,
+  Camera,
+  Captions,
   Check,
+  CircleHelp,
+  CirclePlay,
   Clock3,
   Cloud,
+  Copy,
   ExternalLink,
   FileStack,
-  Film,
+  FileText,
   Mic2,
   MonitorPlay,
   Palette,
+  Presentation,
+  Radio,
+  Scissors,
   Search,
+  ShieldCheck,
   Timer,
-  UserRound,
-  WandSparkles,
+  Wifi,
   type LucideIcon,
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
@@ -143,26 +152,24 @@ const stateStyles: Record<State, { panel: string; icon: string; label: string }>
   },
 };
 
-const optionMeta: Record<string, { label: string; icon: LucideIcon }> = {
-  habillage: { label: "Habillage", icon: Palette },
-  plateforme: { label: "Plateforme", icon: MonitorPlay },
-  maquillage: { label: "Maquillage", icon: WandSparkles },
-  duplex: { label: "Duplex", icon: Mic2 },
-  replay: { label: "Replay", icon: Film },
-  slides: { label: "Slides", icon: FileStack },
-  timer: { label: "Timer", icon: Timer },
-  moderation: { label: "Modération", icon: UserRound },
-};
-
-const linkIconByLabel: { pattern: string; icon: LucideIcon }[] = [
-  { pattern: "drive", icon: Cloud },
-  { pattern: "habillage", icon: Palette },
-  { pattern: "événement", icon: MonitorPlay },
-  { pattern: "evenement", icon: MonitorPlay },
-  { pattern: "live", icon: MonitorPlay },
-  { pattern: "conducteur", icon: FileStack },
-  { pattern: "slides", icon: FileStack },
-  { pattern: "replay", icon: Film },
+const iconKeywordRules: { keywords: string[]; icon: LucideIcon }[] = [
+  { keywords: ["drive", "dossier", "cloud"], icon: Cloud },
+  { keywords: ["replay", "video", "vod"], icon: CirclePlay },
+  { keywords: ["slides", "slide", "presentation", "deck"], icon: Presentation },
+  { keywords: ["wifi", "wi fi", "reseau", "internet"], icon: Wifi },
+  { keywords: ["streaming", "stream", "live", "direct"], icon: Radio },
+  { keywords: ["maquillage", "makeup"], icon: Brush },
+  { keywords: ["habillage", "design", "graphique"], icon: Palette },
+  { keywords: ["timer", "chrono", "compte a rebours"], icon: Timer },
+  { keywords: ["prompteur", "texte", "script"], icon: FileText },
+  { keywords: ["plateforme", "platform", "livemaker", "evenement"], icon: MonitorPlay },
+  { keywords: ["quiz", "question", "q&a", "qa"], icon: CircleHelp },
+  { keywords: ["moderation", "moderateur", "chat"], icon: ShieldCheck },
+  { keywords: ["sous titres", "sous-titres", "subtitles", "caption"], icon: Captions },
+  { keywords: ["camera", "cam"], icon: Camera },
+  { keywords: ["montage", "edit", "edition"], icon: Scissors },
+  { keywords: ["duplex", "micro", "mic", "invite"], icon: Mic2 },
+  { keywords: ["conducteur", "run of show"], icon: FileStack },
 ];
 
 const defaultOptions = [
@@ -227,6 +234,15 @@ function normalizeLabel(label: string) {
     .replace(/[\u0300-\u036f]/g, "")
     .toLowerCase()
     .trim();
+}
+
+function formatTitleCase(label: string) {
+  return label
+    .trim()
+    .toLocaleLowerCase("fr-FR")
+    .replace(/(^|[^\p{L}\p{N}])([\p{L}])/gu, (_, separator: string, letter: string) => {
+      return `${separator}${letter.toLocaleUpperCase("fr-FR")}`;
+    });
 }
 
 function mapTeamMember(row: TeamMemberRow): TeamMember {
@@ -550,6 +566,141 @@ export default function Home() {
     return updatedLink;
   }
 
+  async function createEventOption(eventId: string, label: string) {
+    if (!supabase) {
+      throw new Error("Configuration Supabase manquante.");
+    }
+
+    const nextLabel = formatTitleCase(label);
+    if (!nextLabel) {
+      throw new Error("Le nom de l'option est requis.");
+    }
+
+    const { data, error: insertError } = await supabase
+      .from("event_options")
+      .insert({
+        event_id: eventId,
+        label: nextLabel,
+        status: "incomplete",
+        details: null,
+      })
+      .select()
+      .single();
+
+    if (insertError) throw insertError;
+
+    const option: EventOption = {
+      id: data.id,
+      eventId: data.event_id,
+      label: data.label,
+      status: data.status,
+      details: data.details,
+      createdAt: data.created_at,
+    };
+
+    setEvents((current) =>
+      current.map((event) =>
+        event.id === eventId
+          ? {
+              ...event,
+              options: [...event.options, option],
+            }
+          : event,
+      ),
+    );
+
+    return option;
+  }
+
+  async function deleteEventOption(option: EventOption) {
+    if (!supabase) {
+      throw new Error("Configuration Supabase manquante.");
+    }
+
+    const { error: deleteError } = await supabase.from("event_options").delete().eq("id", option.id);
+
+    if (deleteError) throw deleteError;
+
+    setEvents((current) =>
+      current.map((event) =>
+        event.id === option.eventId
+          ? {
+              ...event,
+              options: event.options.filter((item) => item.id !== option.id),
+            }
+          : event,
+      ),
+    );
+  }
+
+  async function createEventLink(eventId: string, input: { label: string; url: string }) {
+    if (!supabase) {
+      throw new Error("Configuration Supabase manquante.");
+    }
+
+    const nextLabel = formatTitleCase(input.label);
+    const nextUrl = input.url.trim();
+    if (!nextLabel) {
+      throw new Error("Le nom du lien est requis.");
+    }
+
+    const { data, error: insertError } = await supabase
+      .from("event_links")
+      .insert({
+        event_id: eventId,
+        label: nextLabel,
+        url: nextUrl || null,
+        status: nextUrl ? "available" : "missing",
+      })
+      .select()
+      .single();
+
+    if (insertError) throw insertError;
+
+    const link: EventLink = {
+      id: data.id,
+      eventId: data.event_id,
+      label: data.label,
+      url: data.url,
+      status: data.status,
+      createdAt: data.created_at,
+    };
+
+    setEvents((current) =>
+      current.map((event) =>
+        event.id === eventId
+          ? {
+              ...event,
+              links: [...event.links, link],
+            }
+          : event,
+      ),
+    );
+
+    return link;
+  }
+
+  async function deleteEventLink(link: EventLink) {
+    if (!supabase) {
+      throw new Error("Configuration Supabase manquante.");
+    }
+
+    const { error: deleteError } = await supabase.from("event_links").delete().eq("id", link.id);
+
+    if (deleteError) throw deleteError;
+
+    setEvents((current) =>
+      current.map((event) =>
+        event.id === link.eventId
+          ? {
+              ...event,
+              links: event.links.filter((item) => item.id !== link.id),
+            }
+          : event,
+      ),
+    );
+  }
+
   async function deleteCurrentEvent() {
     if (!supabase) {
       throw new Error("Configuration Supabase manquante.");
@@ -616,6 +767,10 @@ export default function Home() {
             goNext={() => navigateEvent(1)}
             onToggleOption={toggleOption}
             onToggleTask={toggleTask}
+            onCreateOption={createEventOption}
+            onDeleteOption={deleteEventOption}
+            onCreateLink={createEventLink}
+            onDeleteLink={deleteEventLink}
             onSaveLink={updateLinkUrl}
           />
         )}
@@ -898,6 +1053,10 @@ function ProductionDetail({
   goNext,
   onToggleOption,
   onToggleTask,
+  onCreateOption,
+  onDeleteOption,
+  onCreateLink,
+  onDeleteLink,
   onSaveLink,
 }: {
   event: ProductionEvent;
@@ -907,24 +1066,43 @@ function ProductionDetail({
   goNext: () => void;
   onToggleOption: (option: EventOption) => Promise<void>;
   onToggleTask: (task: TaskItem) => Promise<void>;
+  onCreateOption: (eventId: string, label: string) => Promise<EventOption>;
+  onDeleteOption: (option: EventOption) => Promise<void>;
+  onCreateLink: (eventId: string, input: { label: string; url: string }) => Promise<EventLink>;
+  onDeleteLink: (link: EventLink) => Promise<void>;
   onSaveLink: (link: EventLink, url: string) => Promise<EventLink>;
 }) {
-  const [contextSelection, setContextSelection] = useState<ContextSelection>(event.options[0] ? { type: "option", optionId: event.options[0].id } : null);
+  const [contextSelection, setContextSelection] = useState<ContextSelection>(null);
+  const [addForm, setAddForm] = useState<ItemKind | null>(null);
+  const [optionName, setOptionName] = useState("");
+  const [linkName, setLinkName] = useState("");
+  const [manageError, setManageError] = useState<string | null>(null);
+  const [submittingAdd, setSubmittingAdd] = useState(false);
 
   useEffect(() => {
     setContextSelection((current) => {
+      if (!current) return null;
       if (current?.type === "option" && event.options.some((option) => option.id === current.optionId)) return current;
       if (current?.type === "link" && event.links.some((link) => link.id === current.linkId)) return current;
-      return event.options[0] ? { type: "option", optionId: event.options[0].id } : event.links[0] ? { type: "link", linkId: event.links[0].id, copied: false } : null;
+      return null;
     });
   }, [event.id, event.links, event.options]);
 
   function selectOption(option: EventOption) {
-    setContextSelection({ type: "option", optionId: option.id });
+    setContextSelection((current) =>
+      current?.type === "option" && current.optionId === option.id ? null : { type: "option", optionId: option.id },
+    );
   }
 
   function selectLink(link: EventLink) {
-    setContextSelection({ type: "link", linkId: link.id, copied: false });
+    let selectedSameLink = false;
+    setContextSelection((current) => {
+      selectedSameLink = current?.type === "link" && current.linkId === link.id;
+      return selectedSameLink ? null : { type: "link", linkId: link.id, copied: false };
+    });
+
+    if (selectedSameLink) return;
+
     const linkUrl = link.url?.trim();
     if (!linkUrl) return;
 
@@ -934,6 +1112,40 @@ function ProductionDetail({
         () => setContextSelection((current) => (current?.type === "link" && current.linkId === link.id ? { ...current, copied: true } : current)),
         () => setContextSelection((current) => (current?.type === "link" && current.linkId === link.id ? { ...current, copied: false } : current)),
       );
+    }
+  }
+
+  async function addOption(formEvent: React.FormEvent<HTMLFormElement>) {
+    formEvent.preventDefault();
+    setSubmittingAdd(true);
+    setManageError(null);
+
+    try {
+      const option = await onCreateOption(event.id, optionName);
+      setOptionName("");
+      setAddForm(null);
+      setContextSelection({ type: "option", optionId: option.id });
+    } catch (createError) {
+      setManageError(createError instanceof Error ? createError.message : "Impossible d'ajouter l'option.");
+    } finally {
+      setSubmittingAdd(false);
+    }
+  }
+
+  async function addLink(formEvent: React.FormEvent<HTMLFormElement>) {
+    formEvent.preventDefault();
+    setSubmittingAdd(true);
+    setManageError(null);
+
+    try {
+      const link = await onCreateLink(event.id, { label: linkName, url: "" });
+      setLinkName("");
+      setAddForm(null);
+      setContextSelection({ type: "link", linkId: link.id, copied: false });
+    } catch (createError) {
+      setManageError(createError instanceof Error ? createError.message : "Impossible d'ajouter le lien.");
+    } finally {
+      setSubmittingAdd(false);
     }
   }
 
@@ -961,7 +1173,26 @@ function ProductionDetail({
       <Card className="premium-surface p-3 sm:p-5">
         <div className="grid grid-cols-2 gap-2 sm:gap-4 lg:items-start">
           <div className="min-w-0">
-            <SectionLabel>Options</SectionLabel>
+            <SectionHeader
+              label="Options"
+              tone="option"
+              addLabel="Ajouter une option"
+              onAdd={() => setAddForm((current) => (current === "option" ? null : "option"))}
+            />
+            {addForm === "option" && (
+              <InlineAddForm onSubmit={addOption} eventId={event.id}>
+                <input
+                  required
+                  value={optionName}
+                  onChange={(inputEvent) => setOptionName(inputEvent.target.value)}
+                  placeholder="Nom de l'option"
+                  className={inlineAddInputClassName}
+                />
+                <InlineAddButton tone="option" disabled={submittingAdd}>
+                  Ajouter
+                </InlineAddButton>
+              </InlineAddForm>
+            )}
             <div className="grid grid-cols-2 gap-1.5 sm:gap-2">
               {event.options.map((option) => {
                 const Icon = getOptionIcon(option.label);
@@ -988,7 +1219,27 @@ function ProductionDetail({
           </div>
 
           <div className="min-w-0">
-            <SectionLabel align="right">Liens</SectionLabel>
+            <SectionHeader
+              label="Liens"
+              align="right"
+              tone="link"
+              addLabel="Ajouter un lien"
+              onAdd={() => setAddForm((current) => (current === "link" ? null : "link"))}
+            />
+            {addForm === "link" && (
+              <InlineAddForm onSubmit={addLink} eventId={event.id} align="right">
+                <input
+                  required
+                  value={linkName}
+                  onChange={(inputEvent) => setLinkName(inputEvent.target.value)}
+                  placeholder="Nom du lien"
+                  className={inlineAddInputClassName}
+                />
+                <InlineAddButton tone="link" disabled={submittingAdd}>
+                  Ajouter
+                </InlineAddButton>
+              </InlineAddForm>
+            )}
             <div className="grid grid-cols-2 gap-1.5 sm:gap-2">
               {event.links.map((link) => {
                 const Icon = getLinkIcon(link.label);
@@ -1017,9 +1268,18 @@ function ProductionDetail({
             </div>
           </div>
         </div>
+        {manageError && <div className="mt-3 text-base font-medium text-rose-700">{manageError}</div>}
       </Card>
 
-      <ContextDetailBlock event={event} selection={contextSelection} onToggleOption={onToggleOption} onSaveLink={onSaveLink} />
+      <ContextDetailBlock
+        event={event}
+        selection={contextSelection}
+        onClearSelection={() => setContextSelection(null)}
+        onToggleOption={onToggleOption}
+        onDeleteOption={onDeleteOption}
+        onDeleteLink={onDeleteLink}
+        onSaveLink={onSaveLink}
+      />
 
       <Panel title="To do list">
         <div className="grid gap-3 md:grid-cols-2">
@@ -1033,13 +1293,16 @@ function ProductionDetail({
 }
 
 function getOptionIcon(label: string) {
-  const normalizedLabel = normalizeLabel(label);
-  return optionMeta[normalizedLabel]?.icon ?? Check;
+  return getAutomaticIcon(label, Check);
 }
 
 function getLinkIcon(label: string) {
+  return getAutomaticIcon(label, ExternalLink);
+}
+
+function getAutomaticIcon(label: string, fallbackIcon: LucideIcon) {
   const normalizedLabel = normalizeLabel(label);
-  return linkIconByLabel.find((item) => normalizedLabel.includes(item.pattern))?.icon ?? ExternalLink;
+  return iconKeywordRules.find((rule) => rule.keywords.some((keyword) => normalizedLabel.includes(normalizeLabel(keyword))))?.icon ?? fallbackIcon;
 }
 
 function getLinkState(link: EventLink): LinkStatus {
@@ -1114,21 +1377,32 @@ function ProductionTimeline({ event }: { event: ProductionEvent }) {
 function ContextDetailBlock({
   event,
   selection,
+  onClearSelection,
   onToggleOption,
+  onDeleteOption,
+  onDeleteLink,
   onSaveLink,
 }: {
   event: ProductionEvent;
   selection: ContextSelection;
+  onClearSelection: () => void;
   onToggleOption: (option: EventOption) => Promise<void>;
+  onDeleteOption: (option: EventOption) => Promise<void>;
+  onDeleteLink: (link: EventLink) => Promise<void>;
   onSaveLink: (link: EventLink, url: string) => Promise<EventLink>;
 }) {
   const selectedOption = selection?.type === "option" ? event.options.find((option) => option.id === selection.optionId) ?? null : null;
   const selectedLink = selection?.type === "link" ? event.links.find((link) => link.id === selection.linkId) ?? null : null;
+  const selectedOptionId = selectedOption?.id ?? "";
   const selectedLinkId = selectedLink?.id ?? "";
   const selectedLinkUrl = selectedLink?.url ?? "";
   const [linkInput, setLinkInput] = useState(selectedLinkUrl);
   const [savingLink, setSavingLink] = useState(false);
   const [linkSaveError, setLinkSaveError] = useState<string | null>(null);
+  const [linkCopied, setLinkCopied] = useState(false);
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
+  const [deletingItem, setDeletingItem] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
   const hasUnsavedLinkChanges = linkInput.trim() !== selectedLinkUrl.trim();
   const hasSavedLinkUrl = selectedLinkUrl.trim().length > 0;
   const linkSaveLabel = savingLink ? "Enregistrement..." : hasSavedLinkUrl && !hasUnsavedLinkChanges ? "Enregistré" : "Enregistrer";
@@ -1137,7 +1411,24 @@ function ContextDetailBlock({
     setLinkInput(selectedLinkUrl);
     setSavingLink(false);
     setLinkSaveError(null);
+    setLinkCopied(false);
   }, [selectedLinkId, selectedLinkUrl]);
+
+  useEffect(() => {
+    if (!linkCopied) return;
+
+    const resetTimer = window.setTimeout(() => {
+      setLinkCopied(false);
+    }, 2500);
+
+    return () => window.clearTimeout(resetTimer);
+  }, [linkCopied]);
+
+  useEffect(() => {
+    setConfirmingDelete(false);
+    setDeletingItem(false);
+    setDeleteError(null);
+  }, [selectedLinkId, selectedOptionId]);
 
   async function saveSelectedLink() {
     if (!selectedLink) return;
@@ -1155,10 +1446,40 @@ function ContextDetailBlock({
     }
   }
 
+  async function copySelectedLink() {
+    const linkUrl = selectedLink?.url?.trim();
+    if (!linkUrl) return;
+
+    try {
+      await navigator.clipboard?.writeText(linkUrl);
+      setLinkCopied(true);
+    } catch {
+      setLinkCopied(false);
+    }
+  }
+
+  async function deleteSelectedItem() {
+    setDeletingItem(true);
+    setDeleteError(null);
+
+    try {
+      if (selectedOption) {
+        await onDeleteOption(selectedOption);
+      } else if (selectedLink) {
+        await onDeleteLink(selectedLink);
+      }
+
+      setConfirmingDelete(false);
+      onClearSelection();
+    } catch (removeError) {
+      setDeleteError(removeError instanceof Error ? removeError.message : "Impossible de supprimer cet élément.");
+      setDeletingItem(false);
+    }
+  }
+
   if (!selection) return null;
 
   if (selection.type === "link" && selectedLink) {
-    const Icon = getLinkIcon(selectedLink.label);
     const linkState = getLinkState(selectedLink);
     const linkTone = getLinkTone(linkState);
 
@@ -1166,17 +1487,30 @@ function ContextDetailBlock({
       <Card className="border-sky-200 bg-white p-4 sm:p-5">
         <div className="w-full">
           <div className="flex w-full items-start justify-between gap-4">
-            <div className={cn("flex items-center gap-2 text-base font-semibold", linkTone.text)}>
-              <span className={cn("flex h-8 w-8 items-center justify-center rounded-full", linkTone.surface, linkTone.icon)}>
-                <Icon className="h-4 w-4" />
-              </span>
-              {selectedLink.label}
+            <div className={cn("flex min-w-0 items-center gap-2 text-base font-semibold", linkTone.text)}>
+              <span className="truncate">{selectedLink.label}</span>
+              <button
+                onClick={() => void copySelectedLink()}
+                disabled={linkState !== "available"}
+                className={cn(
+                  "flex h-7 w-7 shrink-0 items-center justify-center rounded-full transition disabled:cursor-not-allowed disabled:opacity-35",
+                  linkCopied ? "bg-sky-200 text-sky-900" : "bg-sky-50/60 text-sky-300 hover:bg-sky-100 hover:text-sky-600",
+                )}
+                aria-label="Copier le lien"
+                title={linkCopied ? "Lien copié" : "Copier le lien"}
+              >
+                <Copy className="h-3.5 w-3.5" />
+              </button>
             </div>
-            {linkState === "available" && selection.copied && (
-              <span className="shrink-0 rounded-full bg-white px-3 py-1.5 text-base font-semibold text-sky-700 ring-1 ring-sky-100">
-                Lien copié
-              </span>
-            )}
+            <DetailDeleteAction
+              confirmLabel="Supprimer ce lien ?"
+              confirming={confirmingDelete}
+              deleting={deletingItem}
+              error={deleteError}
+              onAskConfirm={() => setConfirmingDelete(true)}
+              onCancel={() => setConfirmingDelete(false)}
+              onConfirm={() => void deleteSelectedItem()}
+            />
           </div>
           <div className="mt-3 flex w-full items-stretch gap-2">
             <input
@@ -1214,25 +1548,32 @@ function ContextDetailBlock({
 
   if (!selectedOption) return null;
 
-  const Icon = getOptionIcon(selectedOption.label);
   const details = splitDetails(selectedOption.details);
   const optionTone = getOptionTone(selectedOption.status);
 
   return (
     <Card className="border-emerald-200 bg-white p-4 sm:p-5">
-      <div className="flex items-center justify-between gap-3">
+      <div className="flex items-start justify-between gap-3">
         <div className={cn("flex min-w-0 items-center gap-2 text-base font-semibold", optionTone.text)}>
-          <span className={cn("flex h-8 w-8 shrink-0 items-center justify-center rounded-full", optionTone.surface, optionTone.icon)}>
-            <Icon className="h-4 w-4" />
-          </span>
           <span className="truncate">{selectedOption.label}</span>
+          <button
+            onClick={() => void onToggleOption(selectedOption)}
+            className={cn("flex h-7 w-7 shrink-0 items-center justify-center rounded-full transition", optionTone.surface, optionTone.icon)}
+            aria-label={selectedOption.status === "completed" ? "Marquer incomplet" : "Marquer terminé"}
+            title={selectedOption.status === "completed" ? "Terminé" : "À faire"}
+          >
+            {selectedOption.status === "completed" ? <Check className="h-3.5 w-3.5" /> : <Clock3 className="h-3.5 w-3.5" />}
+          </button>
         </div>
-        <button
-          onClick={() => void onToggleOption(selectedOption)}
-          className={cn("shrink-0 rounded-full border px-3 py-1.5 text-base font-semibold", optionTone.surface, optionTone.border, optionTone.text)}
-        >
-          {selectedOption.status === "completed" ? "Terminé" : "À faire"}
-        </button>
+        <DetailDeleteAction
+          confirmLabel="Supprimer cette option ?"
+          confirming={confirmingDelete}
+          deleting={deletingItem}
+          error={deleteError}
+          onAskConfirm={() => setConfirmingDelete(true)}
+          onCancel={() => setConfirmingDelete(false)}
+          onConfirm={() => void deleteSelectedItem()}
+        />
       </div>
       <div className="mt-3 flex gap-2 overflow-x-auto pb-1">
         {details.map((detail) => (
@@ -1488,8 +1829,146 @@ function HeaderIcon({ label, icon: Icon }: { label: string; icon: LucideIcon }) 
   );
 }
 
-function SectionLabel({ children, align = "left" }: { children: React.ReactNode; align?: "left" | "right" }) {
-  return <h2 className={cn("mb-3 text-base font-semibold uppercase tracking-[0.16em] text-stone-500", align === "right" && "text-right")}>{children}</h2>;
+const inlineAddInputClassName =
+  "h-9 min-w-0 rounded-xl border border-stone-200 bg-white px-3 text-base font-medium text-stone-950 outline-none transition placeholder:text-stone-300 focus:border-[#bb2720]/40";
+
+function SectionHeader({
+  label,
+  align = "left",
+  tone,
+  addLabel,
+  onAdd,
+}: {
+  label: string;
+  align?: "left" | "right";
+  tone: ItemKind;
+  addLabel: string;
+  onAdd: () => void;
+}) {
+  const addTone =
+    tone === "option"
+      ? "border-emerald-200 bg-emerald-50 text-emerald-700 hover:border-emerald-300 hover:bg-emerald-100"
+      : "border-sky-200 bg-sky-50 text-sky-700 hover:border-sky-300 hover:bg-sky-100";
+
+  return (
+    <div className={cn("mb-3 flex items-center gap-2", align === "right" ? "justify-end" : "justify-start")}>
+      <h2 className={cn("text-base font-semibold uppercase tracking-[0.16em] text-stone-500", align === "right" && "text-right")}>{label}</h2>
+      <button
+        onClick={onAdd}
+        className={cn("flex h-6 w-6 items-center justify-center rounded-full border text-base font-semibold leading-none transition", addTone)}
+        aria-label={addLabel}
+        title={addLabel}
+      >
+        +
+      </button>
+    </div>
+  );
+}
+
+function InlineAddButton({
+  tone,
+  disabled,
+  children,
+}: {
+  tone: ItemKind;
+  disabled: boolean;
+  children: React.ReactNode;
+}) {
+  const toneClassName =
+    tone === "option"
+      ? "bg-emerald-600 hover:bg-emerald-700 disabled:bg-stone-300"
+      : "bg-sky-600 hover:bg-sky-700 disabled:bg-stone-300";
+
+  return (
+    <button disabled={disabled} className={cn("h-9 shrink-0 rounded-xl px-3 text-base font-semibold text-white transition", toneClassName)}>
+      {children}
+    </button>
+  );
+}
+
+function InlineAddForm({
+  children,
+  onSubmit,
+  eventId,
+  align = "left",
+}: {
+  children: React.ReactNode;
+  onSubmit: (event: React.FormEvent<HTMLFormElement>) => void;
+  eventId: string;
+  align?: "left" | "right";
+}) {
+  return (
+    <form
+      onSubmit={onSubmit}
+      data-event-id={eventId}
+      className={cn(
+        "mb-2 flex flex-col gap-2 rounded-xl border border-stone-200 bg-white p-2 sm:flex-row",
+        align === "right" && "sm:justify-end",
+      )}
+    >
+      {children}
+    </form>
+  );
+}
+
+function DetailDeleteAction({
+  confirmLabel,
+  confirming,
+  deleting,
+  error,
+  onAskConfirm,
+  onCancel,
+  onConfirm,
+}: {
+  confirmLabel: string;
+  confirming: boolean;
+  deleting: boolean;
+  error: string | null;
+  onAskConfirm: () => void;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  return (
+    <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
+      {error && <span className="text-base font-medium text-rose-700">{error}</span>}
+      {!confirming ? (
+        <button
+          onClick={onAskConfirm}
+          className="rounded-full border border-stone-200 bg-transparent px-3 py-1.5 text-base font-semibold text-stone-400 transition hover:border-rose-200 hover:bg-rose-50 hover:text-rose-700"
+        >
+          Supprimer
+        </button>
+      ) : (
+        <DeleteConfirmBubble label={confirmLabel} deleting={deleting} onCancel={onCancel} onConfirm={onConfirm} />
+      )}
+    </div>
+  );
+}
+
+function DeleteConfirmBubble({
+  label,
+  deleting,
+  onCancel,
+  onConfirm,
+}: {
+  label: string;
+  deleting: boolean;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  return (
+    <div className="flex max-w-full flex-wrap items-center justify-end gap-2 rounded-xl border border-stone-200 bg-white px-3 py-2">
+      <div className="text-base font-semibold text-stone-700">{label}</div>
+      <div className="flex justify-end gap-1.5">
+        <button onClick={onCancel} disabled={deleting} className="rounded-full border border-stone-200 px-3 py-1.5 text-base font-semibold text-stone-600 disabled:text-stone-300">
+          Annuler
+        </button>
+        <button onClick={onConfirm} disabled={deleting} className="rounded-full bg-[#bb2720] px-3 py-1.5 text-base font-semibold text-white disabled:bg-stone-300">
+          Supprimer
+        </button>
+      </div>
+    </div>
+  );
 }
 
 function Panel({ title, children }: { title: string; children: React.ReactNode }) {
