@@ -168,6 +168,19 @@ type CreateEventInput = {
   startTime: string;
   endTime: string;
   endOfDayTime: string;
+  optionLabels?: string[];
+};
+
+type QuoteExtractionResult = {
+  quoteReference: string;
+  clientName: string;
+  eventName: string;
+  date: string;
+  clientArrivalTime: string;
+  startTime: string;
+  endTime: string;
+  endOfDayTime: string;
+  services: string[];
 };
 
 const statusStyles: Record<EventStatus, string> = {
@@ -308,6 +321,151 @@ function normalizeEventTimeInput(input: CreateEventInput): CreateEventInput {
     endTime: normalizeCompactTimeInput(input.endTime),
     endOfDayTime: normalizeCompactTimeInput(input.endOfDayTime),
   };
+}
+
+function uniqueLabels(labels: string[]) {
+  const seen = new Set<string>();
+  return labels
+    .map((label) => formatTitleCase(label))
+    .filter((label) => {
+      const key = normalizeLabel(label);
+      if (!key || seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+}
+
+function parseFrenchDateToKey(value: string) {
+  const numericMatch = value.match(/\b(\d{1,2})[\/.-](\d{1,2})[\/.-](\d{2,4})\b/);
+  if (numericMatch) {
+    const [, day, month, year] = numericMatch;
+    const fullYear = year.length === 2 ? `20${year}` : year;
+    return `${fullYear}-${month.padStart(2, "0")}-${day.padStart(2, "0")}`;
+  }
+
+  const monthByName: Record<string, string> = {
+    janvier: "01",
+    fevrier: "02",
+    mars: "03",
+    avril: "04",
+    mai: "05",
+    juin: "06",
+    juillet: "07",
+    aout: "08",
+    septembre: "09",
+    octobre: "10",
+    novembre: "11",
+    decembre: "12",
+  };
+  const normalized = normalizeLabel(value);
+  const textMatch = normalized.match(/\b(\d{1,2})\s+(janvier|fevrier|mars|avril|mai|juin|juillet|aout|septembre|octobre|novembre|decembre)\s+(\d{4})\b/);
+  if (!textMatch) return "";
+
+  const [, day, monthName, year] = textMatch;
+  return `${year}-${monthByName[monthName]}-${day.padStart(2, "0")}`;
+}
+
+function findLineValue(lines: string[], patterns: RegExp[]) {
+  for (const line of lines) {
+    for (const pattern of patterns) {
+      const match = line.match(pattern);
+      if (match?.[1]) return match[1].trim();
+    }
+  }
+  return "";
+}
+
+function extractQuoteServices(text: string) {
+  const serviceRules = [
+    { label: "Habillage", keywords: ["habillage", "graphisme", "identite visuelle"] },
+    { label: "Plateforme", keywords: ["plateforme", "livemaker", "streaming", "diffusion"] },
+    { label: "Duplex", keywords: ["duplex", "visio", "invite distant", "remote"] },
+    { label: "Slides", keywords: ["slides", "presentation", "powerpoint", "deck"] },
+    { label: "Replay", keywords: ["replay", "vod"] },
+    { label: "Modération", keywords: ["moderation", "moderateur", "chat"] },
+    { label: "Conducteur", keywords: ["conducteur", "deroule", "run of show"] },
+    { label: "Sous-Titres", keywords: ["sous titres", "sous-titres", "caption"] },
+    { label: "Prompteur", keywords: ["prompteur", "script"] },
+    { label: "Timer", keywords: ["timer", "chrono", "compte a rebours"] },
+    { label: "Captation", keywords: ["captation", "camera", "tournage"] },
+    { label: "Maquillage", keywords: ["maquillage", "makeup"] },
+    { label: "Montage", keywords: ["montage", "post-production", "edition"] },
+    { label: "Quiz", keywords: ["quiz", "questionnaire", "q&a"] },
+    { label: "Wifi", keywords: ["wifi", "wi fi", "internet"] },
+  ];
+  const normalizedText = normalizeLabel(text);
+  return uniqueLabels(serviceRules.filter((rule) => rule.keywords.some((keyword) => normalizedText.includes(normalizeLabel(keyword)))).map((rule) => rule.label));
+}
+
+function extractQuoteFields(text: string, fallbackDate: string, fileName: string): QuoteExtractionResult {
+  const lines = text
+    .split(/\n+/)
+    .map((line) => line.replace(/\s+/g, " ").trim())
+    .filter(Boolean);
+  const compactText = lines.join(" ");
+  const quoteReference =
+    findLineValue(lines, [
+      /\b(?:devis|référence|reference|ref\.?)\s*(?:n[°o]\s*)?[:#-]?\s*([A-Z0-9][A-Z0-9._/-]{2,})/i,
+      /\bn[°o]\s*devis\s*[:#-]?\s*([A-Z0-9][A-Z0-9._/-]{2,})/i,
+    ]) || "";
+  const clientName = formatTitleCase(
+    findLineValue(lines, [
+      /\bclient\s*[:#-]\s*(.+)$/i,
+      /\bsoci[eé]t[eé]\s*[:#-]\s*(.+)$/i,
+      /\bentreprise\s*[:#-]\s*(.+)$/i,
+    ]),
+  );
+  const eventName =
+    formatTitleCase(
+      findLineValue(lines, [
+        /\b(?:événement|evenement|event|projet|prestation)\s*[:#-]\s*(.+)$/i,
+        /\bobjet\s*[:#-]\s*(.+)$/i,
+      ]),
+    ) || formatTitleCase(fileName.replace(/\.[^.]+$/, "").replace(/[-_]+/g, " "));
+  const date =
+    parseFrenchDateToKey(
+      findLineValue(lines, [
+        /\b(?:date|jour)\s*[:#-]\s*(.+)$/i,
+        /\b(?:le)\s+(\d{1,2}\s+[A-Za-zéûîôàèùç]+\s+\d{4})\b/i,
+      ]) || compactText,
+    ) || fallbackDate;
+  const timeRangeMatch = compactText.match(/\b(\d{1,2})\s*[:hH]\s*(\d{2})\s*(?:-|–|—|à|a|jusqu(?:'|’)?a)\s*(\d{1,2})\s*[:hH]\s*(\d{2})\b/);
+  const arrivalMatch = compactText.match(/\barriv[eé]e(?:\s+client)?\D{0,24}(\d{1,2})(?:\s*[:hH]\s*(\d{2}))?\b/i);
+
+  return {
+    quoteReference,
+    clientName,
+    eventName,
+    date,
+    clientArrivalTime: arrivalMatch ? normalizeCompactTimeInput(`${arrivalMatch[1]}${arrivalMatch[2] ?? ""}`) : "",
+    startTime: timeRangeMatch ? normalizeCompactTimeInput(`${timeRangeMatch[1]}${timeRangeMatch[2]}`) : "",
+    endTime: timeRangeMatch ? normalizeCompactTimeInput(`${timeRangeMatch[3]}${timeRangeMatch[4]}`) : "",
+    endOfDayTime: "",
+    services: extractQuoteServices(text),
+  };
+}
+
+async function extractPdfText(file: File) {
+  const pdfjs = await import("pdfjs-dist");
+  pdfjs.GlobalWorkerOptions.workerSrc = new URL("pdfjs-dist/build/pdf.worker.mjs", import.meta.url).toString();
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  const pdf = await pdfjs.getDocument({ data: bytes }).promise;
+  const pages: string[] = [];
+
+  for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber += 1) {
+    const page = await pdf.getPage(pageNumber);
+    const content = await page.getTextContent();
+    const pageText = content.items
+      .map((item) => {
+        if (!("str" in item)) return "";
+        const text = item.str;
+        return "hasEOL" in item && item.hasEOL ? `${text}\n` : `${text} `;
+      })
+      .join("");
+    pages.push(pageText);
+  }
+
+  return pages.join("\n");
 }
 
 function eventSortValue(event: ProductionEvent) {
@@ -711,6 +869,7 @@ export default function Home() {
   const [selectedDateKey, setSelectedDateKey] = useState(formatDateKey(today));
   const [createMenuOpen, setCreateMenuOpen] = useState(false);
   const [createModalOpen, setCreateModalOpen] = useState(false);
+  const [quoteImportOpen, setQuoteImportOpen] = useState(false);
   const [editingEvent, setEditingEvent] = useState<ProductionEvent | null>(null);
   const [editingReturnScreen, setEditingReturnScreen] = useState<Screen>("calendar");
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
@@ -793,11 +952,19 @@ export default function Home() {
 
     if (eventError) throw eventError;
 
+    const optionDefinitions = uniqueLabels([...defaultOptions.map((option) => option.label), ...(normalizedInput.optionLabels ?? [])]).map((label) => {
+      const defaultOption = defaultOptions.find((option) => normalizeLabel(option.label) === normalizeLabel(label));
+      return {
+        label,
+        details: defaultOption?.details ?? "",
+      };
+    });
+
     const [{ data: insertedOptions, error: optionError }, { error: linkError }] = await Promise.all([
       supabase
         .from("event_options")
         .insert(
-          defaultOptions.map((option) => ({
+          optionDefinitions.map((option) => ({
             event_id: event.id,
             label: option.label,
             status: "incomplete" as CompletionStatus,
@@ -819,7 +986,7 @@ export default function Home() {
     if (linkError) throw linkError;
 
     const defaultOptionItems = (insertedOptions ?? []).flatMap((option) => {
-      const defaultOption = defaultOptions.find((item) => item.label === option.label);
+      const defaultOption = optionDefinitions.find((item) => item.label === option.label);
       return splitStoredDetails(defaultOption?.details ?? "").map((label) => ({
         option_id: option.id,
         label,
@@ -1654,6 +1821,10 @@ export default function Home() {
           goToday={goToday}
           createMenuOpen={createMenuOpen}
           setCreateMenuOpen={setCreateMenuOpen}
+          onImportQuote={() => {
+            setQuoteImportOpen(true);
+            setCreateMenuOpen(false);
+          }}
           onCreateEvent={() => {
             setEditingEvent(null);
             setEditingReturnScreen("calendar");
@@ -1751,6 +1922,17 @@ export default function Home() {
         />
       )}
 
+      {quoteImportOpen && (
+        <QuoteImportModal
+          selectedDateKey={selectedDateKey}
+          onClose={() => setQuoteImportOpen(false)}
+          onConfirm={async (input) => {
+            await createEvent(input);
+            setQuoteImportOpen(false);
+          }}
+        />
+      )}
+
       {deleteDialogOpen && selectedEvent && (
         <DeleteEventDialog
           event={selectedEvent}
@@ -1770,6 +1952,7 @@ function AppHeader({
   goToday,
   createMenuOpen,
   setCreateMenuOpen,
+  onImportQuote,
   onCreateEvent,
   canEditEvent,
   onEditEvent,
@@ -1783,6 +1966,7 @@ function AppHeader({
   goToday: () => void;
   createMenuOpen: boolean;
   setCreateMenuOpen: (open: boolean | ((current: boolean) => boolean)) => void;
+  onImportQuote: () => void;
   onCreateEvent: () => void;
   canEditEvent: boolean;
   onEditEvent: () => void;
@@ -1827,6 +2011,7 @@ function AppHeader({
       </div>
       {createMenuOpen && (
         <CreateMenu
+          onImportQuote={onImportQuote}
           onCreateEvent={onCreateEvent}
           canEditEvent={canEditEvent}
           onEditEvent={onEditEvent}
@@ -1839,12 +2024,14 @@ function AppHeader({
 }
 
 function CreateMenu({
+  onImportQuote,
   onCreateEvent,
   canEditEvent,
   onEditEvent,
   canDeleteEvent,
   onDeleteEvent,
 }: {
+  onImportQuote: () => void;
   onCreateEvent: () => void;
   canEditEvent: boolean;
   onEditEvent: () => void;
@@ -1854,11 +2041,10 @@ function CreateMenu({
   return (
     <div className="absolute right-1 top-14 z-40 w-56 rounded-2xl border border-stone-200 bg-white/95 p-1.5 backdrop-blur-xl">
       <button
-        disabled
-        className="flex w-full cursor-not-allowed items-center justify-between rounded-xl px-4 py-3 text-left text-base font-medium text-stone-400"
+        onClick={onImportQuote}
+        className="block w-full rounded-xl px-4 py-3 text-left text-base font-medium text-stone-700 transition hover:bg-[#bb2720]/[0.05] hover:text-stone-950"
       >
-        <span>Importer un devis</span>
-        <span className="text-base font-medium text-stone-300">Bientôt</span>
+        Importer un devis
       </button>
       <button
         onClick={onCreateEvent}
@@ -3547,6 +3733,189 @@ function CreateEventModal({
           <button disabled={submitting} className="rounded-full bg-[#bb2720] px-4 py-2 text-base font-semibold text-white disabled:bg-stone-300">
             {submitting ? (isEditing ? "Modification..." : "Création...") : isEditing ? "Modifier" : "Créer"}
           </button>
+        </div>
+      </form>
+    </div>
+  );
+}
+
+function QuoteImportModal({
+  selectedDateKey,
+  onClose,
+  onConfirm,
+}: {
+  selectedDateKey: string;
+  onClose: () => void;
+  onConfirm: (input: CreateEventInput) => Promise<void>;
+}) {
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const [fileName, setFileName] = useState("");
+  const [quoteReference, setQuoteReference] = useState("");
+  const [form, setForm] = useState<CreateEventInput>({
+    clientName: "",
+    eventName: "",
+    date: selectedDateKey,
+    clientArrivalTime: "",
+    startTime: "",
+    endTime: "",
+    endOfDayTime: "",
+    optionLabels: [],
+  });
+  const [serviceText, setServiceText] = useState("");
+  const [step, setStep] = useState<"upload" | "review">("upload");
+  const [extracting, setExtracting] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  function updateField<Key extends keyof CreateEventInput>(key: Key, value: CreateEventInput[Key]) {
+    setForm((current) => ({ ...current, [key]: value }));
+  }
+
+  async function handleFile(file: File | null) {
+    if (!file) return;
+    if (file.type !== "application/pdf" && !file.name.toLowerCase().endsWith(".pdf")) {
+      setError("Importez un fichier PDF.");
+      return;
+    }
+
+    setExtracting(true);
+    setError(null);
+    setFileName(file.name);
+
+    try {
+      const text = await extractPdfText(file);
+      const extracted = extractQuoteFields(text, selectedDateKey, file.name);
+      setQuoteReference(extracted.quoteReference);
+      setForm({
+        clientName: extracted.clientName,
+        eventName: extracted.eventName,
+        date: extracted.date,
+        clientArrivalTime: extracted.clientArrivalTime,
+        startTime: extracted.startTime,
+        endTime: extracted.endTime,
+        endOfDayTime: extracted.endOfDayTime,
+        optionLabels: extracted.services,
+      });
+      setServiceText(extracted.services.join("\n"));
+      setStep("review");
+    } catch (extractError) {
+      console.error("Failed to extract quote PDF text", extractError);
+      setError("Impossible de lire ce PDF. Vérifiez qu'il contient bien du texte sélectionnable.");
+    } finally {
+      setExtracting(false);
+    }
+  }
+
+  async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setSubmitting(true);
+    setError(null);
+
+    try {
+      const normalizedForm = normalizeEventTimeInput({
+        ...form,
+        optionLabels: uniqueLabels(serviceText.split(/\n|,/).map((service) => service.trim()).filter(Boolean)),
+      });
+      await onConfirm(normalizedForm);
+    } catch (submitError) {
+      setError(submitError instanceof Error ? submitError.message : "Impossible de créer l'événement depuis ce devis.");
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-end bg-stone-950/10 p-3 sm:items-center sm:justify-center sm:p-6">
+      <form onSubmit={handleSubmit} className="w-full rounded-3xl border border-stone-200 bg-white p-5 sm:max-w-2xl sm:p-6">
+        <div className="mb-5 flex items-center justify-between gap-4">
+          <div>
+            <h2 className="text-base font-semibold text-stone-950">{step === "upload" ? "Importer un devis" : "Voici ce que j'ai compris du devis"}</h2>
+            {fileName && <p className="mt-1 truncate text-base font-medium text-stone-500">{fileName}</p>}
+          </div>
+          <button type="button" onClick={onClose} className="rounded-full border border-stone-200 px-3 py-1.5 text-base font-semibold text-stone-600">
+            Fermer
+          </button>
+        </div>
+
+        {step === "upload" ? (
+          <label
+            onDragOver={(event) => event.preventDefault()}
+            onDrop={(event) => {
+              event.preventDefault();
+              void handleFile(event.dataTransfer.files.item(0));
+            }}
+            className="flex min-h-44 cursor-pointer flex-col items-center justify-center rounded-3xl border border-dashed border-stone-300 bg-stone-50 px-4 py-8 text-center transition hover:bg-stone-100/70"
+          >
+            <FileText className="mb-3 h-7 w-7 text-stone-500" />
+            <span className="text-base font-semibold text-stone-800">{extracting ? "Lecture du devis..." : "Déposez un PDF ici"}</span>
+            <span className="mt-1 text-base font-medium text-stone-500">ou cliquez pour sélectionner un fichier</span>
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="application/pdf,.pdf"
+              disabled={extracting}
+              onChange={(event) => void handleFile(event.target.files?.item(0) ?? null)}
+              className="hidden"
+            />
+          </label>
+        ) : (
+          <>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <Field label="Référence devis">
+                <input value={quoteReference} onChange={(event) => setQuoteReference(event.target.value)} className={formInputClassName} />
+              </Field>
+              <Field label="Client">
+                <input required value={form.clientName} onChange={(event) => updateField("clientName", event.target.value)} className={formInputClassName} />
+              </Field>
+              <Field label="Événement">
+                <input required value={form.eventName} onChange={(event) => updateField("eventName", event.target.value)} className={formInputClassName} />
+              </Field>
+              <Field label="Date">
+                <input required type="date" value={form.date} onChange={(event) => updateField("date", event.target.value)} className={formInputClassName} />
+              </Field>
+              <Field label="Arrivée client">
+                <TimeTextInput value={form.clientArrivalTime} onChange={(value) => updateField("clientArrivalTime", value)} className={formInputClassName} />
+              </Field>
+              <Field label="Début">
+                <TimeTextInput value={form.startTime} onChange={(value) => updateField("startTime", value)} className={formInputClassName} />
+              </Field>
+              <Field label="Fin">
+                <TimeTextInput value={form.endTime} onChange={(value) => updateField("endTime", value)} className={formInputClassName} />
+              </Field>
+              <Field label="Fin journée">
+                <TimeTextInput value={form.endOfDayTime} onChange={(value) => updateField("endOfDayTime", value)} className={formInputClassName} />
+              </Field>
+            </div>
+
+            <label className="mt-3 block text-base font-semibold text-stone-500">
+              <span className="mb-1.5 block">Services / options détectés</span>
+              <textarea
+                value={serviceText}
+                onChange={(event) => setServiceText(event.target.value)}
+                rows={4}
+                className="w-full resize-none rounded-2xl border border-stone-200 bg-white px-3 py-2 text-base font-medium text-stone-950 outline-none transition focus:border-[#bb2720]/50"
+                placeholder="Un service par ligne"
+              />
+            </label>
+          </>
+        )}
+
+        {error && <div className="mt-4 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-base font-medium text-rose-700">{error}</div>}
+
+        <div className="mt-6 flex justify-end gap-2">
+          {step === "review" && (
+            <button type="button" onClick={() => setStep("upload")} disabled={submitting} className="rounded-full border border-stone-200 bg-white px-4 py-2 text-base font-semibold text-stone-600 disabled:text-stone-300">
+              Remplacer le PDF
+            </button>
+          )}
+          <button type="button" onClick={onClose} disabled={submitting || extracting} className="rounded-full border border-stone-200 bg-white px-4 py-2 text-base font-semibold text-stone-600 disabled:text-stone-300">
+            Annuler
+          </button>
+          {step === "review" && (
+            <button disabled={submitting} className="rounded-full bg-[#bb2720] px-4 py-2 text-base font-semibold text-white disabled:bg-stone-300">
+              {submitting ? "Création..." : "Créer l'événement"}
+            </button>
+          )}
         </div>
       </form>
     </div>
