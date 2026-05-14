@@ -1953,7 +1953,7 @@ export default function Home() {
   }
 
   return (
-    <main className="relative min-h-screen overflow-hidden bg-[#f7f9fb] text-stone-950">
+    <main className="relative h-screen h-[100svh] overflow-hidden bg-[#f7f9fb] text-stone-950">
       <div
         onDragEnter={(event) => {
           if (!hasPdfDragItem(event.dataTransfer)) return;
@@ -1980,7 +1980,7 @@ export default function Home() {
           setGlobalQuoteDragActive(false);
           openQuoteImport(pdfFile);
         }}
-        className="relative mx-auto flex min-h-screen w-full max-w-7xl flex-col px-4 py-4 sm:px-6 lg:px-8"
+        className="relative mx-auto flex h-full min-h-0 w-full max-w-7xl flex-col px-4 pb-[calc(1rem+env(safe-area-inset-bottom))] pt-[calc(1rem+env(safe-area-inset-top))] sm:px-6 lg:px-8"
       >
         <AppHeader
           screen={screen}
@@ -2021,54 +2021,56 @@ export default function Home() {
           }}
         />
 
-        {error && <StatusMessage tone="error">{error}</StatusMessage>}
-        {loading && <StatusMessage>Chargement des productions...</StatusMessage>}
+        <div className="flex min-h-0 flex-1 flex-col">
+          {error && <StatusMessage tone="error">{error}</StatusMessage>}
+          {loading && <StatusMessage>Chargement des productions...</StatusMessage>}
 
-        {!loading && screen === "calendar" && (
-          <CalendarDashboard
-            events={events}
-            onOpen={openEvent}
-            visibleMonth={visibleMonth}
-            selectedDateKey={selectedDateKey}
-            onDeleteRequest={setDeleteDialogEvent}
-            setSelectedDateKey={setSelectedDateKey}
-            changeMonth={changeMonth}
-          />
-        )}
+          {!loading && screen === "calendar" && (
+            <CalendarDashboard
+              events={events}
+              onOpen={openEvent}
+              visibleMonth={visibleMonth}
+              selectedDateKey={selectedDateKey}
+              onDeleteRequest={setDeleteDialogEvent}
+              setSelectedDateKey={setSelectedDateKey}
+              changeMonth={changeMonth}
+            />
+          )}
 
-        {!loading && screen === "detail" && selectedEvent && (
-          <ProductionDetail
-            event={selectedEvent}
-            teamMembers={teamMembers}
-            hasPrevious={hasPreviousEvent}
-            hasNext={hasNextEvent}
-            goPrevious={() => navigateEvent(-1)}
-            goNext={() => navigateEvent(1)}
-            onUpdateEventTime={updateEventTime}
-            onToggleOption={toggleOption}
-            onCreateOption={createEventOption}
-            onDeleteOption={deleteEventOption}
-            onRenameOption={renameEventOption}
-            onCreateOptionItem={createEventOptionItem}
-            onDeleteOptionItem={deleteEventOptionItem}
-            onToggleOptionAssignee={toggleOptionAssignee}
-            onCreateLink={createEventLink}
-            onDeleteLink={deleteEventLink}
-            onRenameLink={renameEventLink}
-            onSaveLinkEntries={syncEventLinkEntries}
-            onCreateDocumentGroup={createEventDocumentGroup}
-            onDeleteDocumentGroup={deleteEventDocumentGroup}
-            onRenameDocumentGroup={renameEventDocumentGroup}
-            onUploadDocument={uploadEventDocument}
-            onDeleteDocumentFile={deleteEventDocument}
-            onOpenDocument={openEventDocument}
-            onDownloadDocument={downloadEventDocument}
-          />
-        )}
+          {!loading && screen === "detail" && selectedEvent && (
+            <ProductionDetail
+              event={selectedEvent}
+              teamMembers={teamMembers}
+              hasPrevious={hasPreviousEvent}
+              hasNext={hasNextEvent}
+              goPrevious={() => navigateEvent(-1)}
+              goNext={() => navigateEvent(1)}
+              onUpdateEventTime={updateEventTime}
+              onToggleOption={toggleOption}
+              onCreateOption={createEventOption}
+              onDeleteOption={deleteEventOption}
+              onRenameOption={renameEventOption}
+              onCreateOptionItem={createEventOptionItem}
+              onDeleteOptionItem={deleteEventOptionItem}
+              onToggleOptionAssignee={toggleOptionAssignee}
+              onCreateLink={createEventLink}
+              onDeleteLink={deleteEventLink}
+              onRenameLink={renameEventLink}
+              onSaveLinkEntries={syncEventLinkEntries}
+              onCreateDocumentGroup={createEventDocumentGroup}
+              onDeleteDocumentGroup={deleteEventDocumentGroup}
+              onRenameDocumentGroup={renameEventDocumentGroup}
+              onUploadDocument={uploadEventDocument}
+              onDeleteDocumentFile={deleteEventDocument}
+              onOpenDocument={openEventDocument}
+              onDownloadDocument={downloadEventDocument}
+            />
+          )}
 
-        {!loading && screen === "detail" && !selectedEvent && (
-          <StatusMessage>Aucune production à afficher.</StatusMessage>
-        )}
+          {!loading && screen === "detail" && !selectedEvent && (
+            <StatusMessage>Aucune production à afficher.</StatusMessage>
+          )}
+        </div>
       </div>
 
       {globalQuoteDragActive && (
@@ -2327,103 +2329,107 @@ function CalendarDashboard({
   }, [calendarDays, month, selectedDateKey, setSelectedDateKey, year]);
 
   return (
-    <section className="flex flex-1 flex-col gap-4">
-      <div className="flex items-end justify-between px-1 pt-1">
-        <h1 className="text-4xl font-semibold leading-none text-stone-950 sm:text-6xl">{monthTitle}</h1>
-        <div className="flex items-center gap-2">
-          <button onClick={() => changeMonth(-1)} className={calendarArrowClassName} aria-label="Mois précédent">
-            ←
-          </button>
-          <button onClick={() => changeMonth(1)} className={calendarArrowClassName} aria-label="Mois suivant">
-            →
-          </button>
+    <section className="flex min-h-0 flex-1 flex-col gap-4 overflow-hidden">
+      <div className="shrink-0">
+        <div className="flex items-end justify-between px-1 pt-1">
+          <h1 className="text-4xl font-semibold leading-none text-stone-950 sm:text-6xl">{monthTitle}</h1>
+          <div className="flex items-center gap-2">
+            <button onClick={() => changeMonth(-1)} className={calendarArrowClassName} aria-label="Mois précédent">
+              ←
+            </button>
+            <button onClick={() => changeMonth(1)} className={calendarArrowClassName} aria-label="Mois suivant">
+              →
+            </button>
+          </div>
         </div>
-      </div>
-      <div className="overflow-hidden rounded-[1.75rem] bg-white/70 p-0">
-        <div className="grid grid-cols-7">
-          {weekdays.map((weekday, index) => (
-            <div key={`${weekday}-${index}`} className="flex min-w-0 items-center justify-center px-1 py-2.5 text-base font-semibold uppercase tracking-normal text-stone-500">
-              <span className="block w-full text-center leading-none">{weekday}</span>
-            </div>
-          ))}
-        </div>
-        <div className="grid grid-cols-7">
-          {Array.from({ length: leadingEmptyDays }).map((_, index) => (
-            <div key={`empty-${index}`} className="h-[70px] border-b border-stone-200/45 bg-white/25 sm:h-[88px] lg:h-[128px]" />
-          ))}
-          {calendarDays.map(({ day, events: dayEvents, markers, dateKey }, index) => {
-            const position = leadingEmptyDays + index;
-            const isLastRow = position >= totalCells - 7;
-            const isWeekend = position % 7 >= 5;
-            const isCurrentDay = dateKey === todayKey;
-            const isSelected = dateKey === selectedDateKey;
-            const publicHolidayMarker = markers.find((marker) => marker.type === "publicHoliday");
-            const schoolHolidayMarker = markers.find((marker) => marker.type === "schoolHoliday");
-            const markerLabel = markers.map((marker) => marker.label).join(" • ");
-            const dayDots = [
-              publicHolidayMarker ? { key: "public-holiday", className: "bg-sky-400/80" } : null,
-              schoolHolidayMarker ? { key: "school-holiday", className: "bg-amber-400/80" } : null,
-              ...dayEvents.slice(0, 4).map((event) => ({ key: event.id, className: "bg-[#bb2720]" })),
-            ].filter(Boolean).slice(0, 4) as { key: string; className: string }[];
+        <div className="mt-4 overflow-hidden rounded-[1.75rem] bg-white/70 p-0">
+          <div className="grid grid-cols-7">
+            {weekdays.map((weekday, index) => (
+              <div key={`${weekday}-${index}`} className="flex min-w-0 items-center justify-center px-1 py-2.5 text-base font-semibold uppercase tracking-normal text-stone-500">
+                <span className="block w-full text-center leading-none">{weekday}</span>
+              </div>
+            ))}
+          </div>
+          <div className="grid grid-cols-7">
+            {Array.from({ length: leadingEmptyDays }).map((_, index) => (
+              <div key={`empty-${index}`} className="h-[70px] border-b border-stone-200/45 bg-white/25 sm:h-[88px] lg:h-[clamp(72px,9svh,112px)]" />
+            ))}
+            {calendarDays.map(({ day, events: dayEvents, markers, dateKey }, index) => {
+              const position = leadingEmptyDays + index;
+              const isLastRow = position >= totalCells - 7;
+              const isWeekend = position % 7 >= 5;
+              const isCurrentDay = dateKey === todayKey;
+              const isSelected = dateKey === selectedDateKey;
+              const publicHolidayMarker = markers.find((marker) => marker.type === "publicHoliday");
+              const schoolHolidayMarker = markers.find((marker) => marker.type === "schoolHoliday");
+              const markerLabel = markers.map((marker) => marker.label).join(" • ");
+              const dayDots = [
+                publicHolidayMarker ? { key: "public-holiday", className: "bg-sky-400/80" } : null,
+                schoolHolidayMarker ? { key: "school-holiday", className: "bg-amber-400/80" } : null,
+                ...dayEvents.slice(0, 4).map((event) => ({ key: event.id, className: "bg-[#bb2720]" })),
+              ].filter(Boolean).slice(0, 4) as { key: string; className: string }[];
 
-            return (
-              <button
-                key={dateKey}
-                onClick={() => setSelectedDateKey(dateKey)}
-                title={markerLabel || undefined}
-                className={cn(
-                  "group flex h-[70px] flex-col items-center justify-start gap-1 bg-white/35 px-1 py-2.5 transition hover:bg-white/80 sm:h-[88px] sm:py-3 lg:h-[128px] lg:px-2 lg:py-4",
-                  schoolHolidayMarker && "bg-amber-50/60 hover:bg-amber-50/85",
-                  publicHolidayMarker && "bg-sky-50/70 hover:bg-sky-50/90",
-                  !isLastRow && "border-b border-stone-200/45",
-                )}
-              >
-                <span className="flex w-full items-start justify-center gap-1">
-                  <span
-                    className={cn(
-                      "flex h-8 w-8 items-center justify-center rounded-full text-lg font-semibold text-stone-800 lg:h-10 lg:w-10 lg:text-xl",
-                      isWeekend && !isSelected && "text-stone-500",
-                      isSelected && "bg-[#bb2720] text-white",
-                      !isSelected && isCurrentDay && "text-[#bb2720]",
+              return (
+                <button
+                  key={dateKey}
+                  onClick={() => setSelectedDateKey(dateKey)}
+                  title={markerLabel || undefined}
+                  className={cn(
+                    "group flex h-[70px] flex-col items-center justify-start gap-1 bg-white/35 px-1 py-2.5 transition hover:bg-white/80 sm:h-[88px] sm:py-3 lg:h-[clamp(72px,9svh,112px)] lg:px-2 lg:py-4",
+                    schoolHolidayMarker && "bg-amber-50/60 hover:bg-amber-50/85",
+                    publicHolidayMarker && "bg-sky-50/70 hover:bg-sky-50/90",
+                    !isLastRow && "border-b border-stone-200/45",
+                  )}
+                >
+                  <span className="flex w-full items-start justify-center gap-1">
+                    <span
+                      className={cn(
+                        "flex h-8 w-8 items-center justify-center rounded-full text-lg font-semibold text-stone-800 lg:h-10 lg:w-10 lg:text-xl",
+                        isWeekend && !isSelected && "text-stone-500",
+                        isSelected && "bg-[#bb2720] text-white",
+                        !isSelected && isCurrentDay && "text-[#bb2720]",
+                      )}
+                    >
+                      {day}
+                    </span>
+                    {markers.length > 0 && (
+                      <span className="mt-1 hidden min-w-0 flex-wrap justify-end gap-1 lg:flex">
+                        {publicHolidayMarker && <span className="h-1.5 w-1.5 rounded-full bg-sky-400/80" />}
+                        {schoolHolidayMarker && <span className="h-1.5 w-1.5 rounded-full bg-amber-400/80" />}
+                      </span>
                     )}
-                  >
-                    {day}
                   </span>
-                  {markers.length > 0 && (
-                    <span className="mt-1 hidden min-w-0 flex-wrap justify-end gap-1 lg:flex">
-                      {publicHolidayMarker && <span className="h-1.5 w-1.5 rounded-full bg-sky-400/80" />}
-                      {schoolHolidayMarker && <span className="h-1.5 w-1.5 rounded-full bg-amber-400/80" />}
+                  {dayDots.length > 0 && (
+                    <span className="flex min-h-3 w-full items-center justify-center gap-0.5 px-0.5 lg:hidden">
+                      {dayDots.map((dot) => (
+                        <span key={dot.key} className={cn("h-1.5 w-1.5 shrink-0 rounded-full", dot.className)} />
+                      ))}
                     </span>
                   )}
-                </span>
-                {dayDots.length > 0 && (
-                  <span className="flex min-h-3 w-full items-center justify-center gap-0.5 px-0.5 lg:hidden">
-                    {dayDots.map((dot) => (
-                      <span key={dot.key} className={cn("h-1.5 w-1.5 shrink-0 rounded-full", dot.className)} />
-                    ))}
-                  </span>
-                )}
-                {markers.length > 0 && (
-                  <span className="hidden max-w-full truncate text-base font-semibold leading-tight text-stone-500 opacity-0 transition group-hover:opacity-100 lg:block">
-                    {markers[0].label}
-                  </span>
-                )}
-                {dayEvents.length > 0 && (
-                  <span className="hidden max-w-full gap-0.5 lg:mt-2 lg:flex lg:gap-1">
-                    {dayEvents.slice(0, 3).map((event) => (
-                      <span key={event.id} className="h-2 w-2 shrink-0 rounded-full bg-[#bb2720] lg:h-2.5 lg:w-2.5" />
-                    ))}
-                  </span>
-                )}
-              </button>
-            );
-          })}
-          {Array.from({ length: trailingEmptyDays }).map((_, index) => (
-            <div key={`trailing-${index}`} className="h-[70px] bg-white/25 sm:h-[88px] lg:h-[128px]" />
-          ))}
+                  {markers.length > 0 && (
+                    <span className="hidden max-w-full truncate text-base font-semibold leading-tight text-stone-500 opacity-0 transition group-hover:opacity-100 lg:block">
+                      {markers[0].label}
+                    </span>
+                  )}
+                  {dayEvents.length > 0 && (
+                    <span className="hidden max-w-full gap-0.5 lg:mt-2 lg:flex lg:gap-1">
+                      {dayEvents.slice(0, 3).map((event) => (
+                        <span key={event.id} className="h-2 w-2 shrink-0 rounded-full bg-[#bb2720] lg:h-2.5 lg:w-2.5" />
+                      ))}
+                    </span>
+                  )}
+                </button>
+              );
+            })}
+            {Array.from({ length: trailingEmptyDays }).map((_, index) => (
+              <div key={`trailing-${index}`} className="h-[70px] bg-white/25 sm:h-[88px] lg:h-[clamp(72px,9svh,112px)]" />
+            ))}
+          </div>
         </div>
       </div>
-      <SelectedDayEvents markers={selectedMarkers} events={selectedEvents} onOpen={onOpen} onDeleteRequest={onDeleteRequest} />
+      <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain pb-2">
+        <SelectedDayEvents markers={selectedMarkers} events={selectedEvents} onOpen={onOpen} onDeleteRequest={onDeleteRequest} />
+      </div>
     </section>
   );
 }
@@ -2838,8 +2844,8 @@ function ProductionDetail({
   }
 
   return (
-    <section className="flex flex-1 flex-col gap-5">
-      <Card className="premium-surface p-5 sm:p-8">
+    <section className="flex min-h-0 flex-1 flex-col gap-5 overflow-hidden">
+      <Card className="premium-surface shrink-0 p-5 sm:p-8">
         <div className="flex items-start justify-between gap-4">
           <div className="min-w-0 flex-1">
             <h1 className="truncate text-4xl font-semibold leading-tight text-stone-950 sm:text-6xl">{event.clientName}</h1>
@@ -2857,6 +2863,7 @@ function ProductionDetail({
         <ProductionTimeline event={event} onUpdateTime={onUpdateEventTime} />
       </Card>
 
+      <div className="min-h-0 flex-1 space-y-5 overflow-y-auto overscroll-contain pb-2">
       <Card className="premium-surface overflow-hidden p-3 sm:p-5">
         <div className="grid grid-cols-[repeat(3,minmax(0,1fr))] gap-1.5 sm:gap-4 lg:items-start">
           <div className="min-w-0">
@@ -3077,24 +3084,24 @@ function ProductionDetail({
         {manageError && <div className="mt-3 text-base font-medium text-rose-700">{manageError}</div>}
       </Card>
 
-      <ContextDetailBlock
-        event={event}
-        selection={contextSelection}
-        onToggleOption={onToggleOption}
-        onRenameOption={onRenameOption}
-        onCreateOptionItem={onCreateOptionItem}
-        onDeleteOptionItem={onDeleteOptionItem}
-        onToggleOptionAssignee={onToggleOptionAssignee}
-        teamMembers={teamMembers}
-        onRenameLink={onRenameLink}
-        onSaveLinkEntries={onSaveLinkEntries}
-        onRenameDocumentGroup={onRenameDocumentGroup}
-        onUploadDocument={onUploadDocument}
-        onDeleteDocumentFile={onDeleteDocumentFile}
-        onOpenDocument={onOpenDocument}
-        onDownloadDocument={onDownloadDocument}
-      />
-
+        <ContextDetailBlock
+          event={event}
+          selection={contextSelection}
+          onToggleOption={onToggleOption}
+          onRenameOption={onRenameOption}
+          onCreateOptionItem={onCreateOptionItem}
+          onDeleteOptionItem={onDeleteOptionItem}
+          onToggleOptionAssignee={onToggleOptionAssignee}
+          teamMembers={teamMembers}
+          onRenameLink={onRenameLink}
+          onSaveLinkEntries={onSaveLinkEntries}
+          onRenameDocumentGroup={onRenameDocumentGroup}
+          onUploadDocument={onUploadDocument}
+          onDeleteDocumentFile={onDeleteDocumentFile}
+          onOpenDocument={onOpenDocument}
+          onDownloadDocument={onDownloadDocument}
+        />
+      </div>
     </section>
   );
 }
