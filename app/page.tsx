@@ -32,7 +32,7 @@ import {
   X,
   type LucideIcon,
 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { Card } from "@/components/ui/card";
 import {
   publicHolidays,
@@ -951,7 +951,7 @@ export default function Home() {
   const [globalQuoteDragActive, setGlobalQuoteDragActive] = useState(false);
   const [editingEvent, setEditingEvent] = useState<ProductionEvent | null>(null);
   const [editingReturnScreen, setEditingReturnScreen] = useState<Screen>("calendar");
-  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
+  const [deleteDialogEvent, setDeleteDialogEvent] = useState<ProductionEvent | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -1948,7 +1948,7 @@ export default function Home() {
     setSelectedId(null);
     setScreen("calendar");
     setCreateMenuOpen(false);
-    setDeleteDialogOpen(false);
+    setDeleteDialogEvent(null);
     await reloadData(null);
   }
 
@@ -2014,7 +2014,9 @@ export default function Home() {
               clientName: selectedEvent?.clientName ?? null,
               eventName: selectedEvent?.eventName ?? null,
             });
-            setDeleteDialogOpen(true);
+            if (selectedEvent) {
+              setDeleteDialogEvent(selectedEvent);
+            }
             setCreateMenuOpen(false);
           }}
         />
@@ -2033,6 +2035,7 @@ export default function Home() {
               setEditingReturnScreen("calendar");
               setCreateModalOpen(true);
             }}
+            onDeleteRequest={setDeleteDialogEvent}
             setSelectedDateKey={setSelectedDateKey}
             changeMonth={changeMonth}
           />
@@ -2120,10 +2123,10 @@ export default function Home() {
         />
       )}
 
-      {deleteDialogOpen && selectedEvent && (
+      {deleteDialogEvent && (
         <DeleteEventDialog
-          event={selectedEvent}
-          onClose={() => setDeleteDialogOpen(false)}
+          event={deleteDialogEvent}
+          onClose={() => setDeleteDialogEvent(null)}
           onConfirm={deleteCurrentEvent}
         />
       )}
@@ -2281,6 +2284,7 @@ function CalendarDashboard({
   events,
   onOpen,
   onEdit,
+  onDeleteRequest,
   visibleMonth,
   selectedDateKey,
   setSelectedDateKey,
@@ -2289,6 +2293,7 @@ function CalendarDashboard({
   events: ProductionEvent[];
   onOpen: (id: string) => void;
   onEdit: (event: ProductionEvent) => void;
+  onDeleteRequest: (event: ProductionEvent) => void;
   visibleMonth: Date;
   selectedDateKey: string;
   setSelectedDateKey: (dateKey: string) => void;
@@ -2425,7 +2430,7 @@ function CalendarDashboard({
           ))}
         </div>
       </div>
-      <SelectedDayEvents markers={selectedMarkers} events={selectedEvents} onOpen={onOpen} onEdit={onEdit} />
+      <SelectedDayEvents markers={selectedMarkers} events={selectedEvents} onOpen={onOpen} onEdit={onEdit} onDeleteRequest={onDeleteRequest} />
     </section>
   );
 }
@@ -2435,12 +2440,30 @@ function SelectedDayEvents({
   events,
   onOpen,
   onEdit,
+  onDeleteRequest,
 }: {
   markers: CalendarMarker[];
   events: ProductionEvent[];
   onOpen: (id: string) => void;
   onEdit: (event: ProductionEvent) => void;
+  onDeleteRequest: (event: ProductionEvent) => void;
 }) {
+  const [openDeleteEventId, setOpenDeleteEventId] = useState<string | null>(null);
+  const sectionRef = useRef<HTMLElement | null>(null);
+
+  useEffect(() => {
+    if (!openDeleteEventId) return;
+
+    function handlePointerDown(event: PointerEvent) {
+      if (!sectionRef.current?.contains(event.target as Node)) {
+        setOpenDeleteEventId(null);
+      }
+    }
+
+    document.addEventListener("pointerdown", handlePointerDown);
+    return () => document.removeEventListener("pointerdown", handlePointerDown);
+  }, [openDeleteEventId]);
+
   if (markers.length === 0 && events.length === 0) return null;
   const orderedMarkers = [...markers].sort((a, b) => {
     if (a.type === b.type) return 0;
@@ -2448,42 +2471,30 @@ function SelectedDayEvents({
   });
 
   return (
-    <section className="space-y-1.5 lg:space-y-2">
+    <section
+      ref={sectionRef}
+      onPointerDown={(pointerEvent) => {
+        if (openDeleteEventId && !(pointerEvent.target as HTMLElement).closest("[data-calendar-swipe-row]")) {
+          setOpenDeleteEventId(null);
+        }
+      }}
+      className="space-y-1.5 lg:space-y-2"
+    >
       {events.map((event) => (
-        <div
+        <SwipeableCalendarEventRow
           key={event.id}
-          onClick={() => onOpen(event.id)}
-          onKeyDown={(keyEvent) => {
-            if (keyEvent.key === "Enter" || keyEvent.key === " ") {
-              keyEvent.preventDefault();
-              onOpen(event.id);
-            }
+          event={event}
+          isDeleteOpen={openDeleteEventId === event.id}
+          hasOpenDelete={Boolean(openDeleteEventId)}
+          onOpenDelete={() => setOpenDeleteEventId(event.id)}
+          onCloseDelete={() => setOpenDeleteEventId(null)}
+          onOpenEvent={onOpen}
+          onEdit={onEdit}
+          onDeleteRequest={(eventToDelete) => {
+            setOpenDeleteEventId(null);
+            onDeleteRequest(eventToDelete);
           }}
-          role="button"
-          tabIndex={0}
-          className="relative grid min-h-20 w-full cursor-pointer grid-cols-[3px_1fr_auto] items-center gap-4 rounded-xl bg-white/70 px-4 py-4 text-left transition hover:bg-white lg:gap-5 lg:px-5"
-        >
-          <span className="h-full min-h-14 rounded-full bg-[#bb2720]" />
-          <span className="min-w-0">
-            <span className="block text-base font-semibold leading-snug text-stone-950">{event.clientName}</span>
-            <span className="block truncate text-base text-stone-500">{event.eventName}</span>
-          </span>
-          <button
-            type="button"
-            onClick={(clickEvent) => {
-              clickEvent.stopPropagation();
-              onEdit(event);
-            }}
-            className="absolute right-3 top-2 rounded-full border border-stone-200 bg-white px-3 py-1 text-base font-semibold text-stone-500 transition hover:border-stone-300 hover:text-stone-800"
-          >
-            Modifier
-          </button>
-          {formatTimeRange(event.startTime, event.endTime) && (
-            <span className="pl-2 pt-6 text-right text-base font-medium text-stone-500 sm:pt-5">
-              {formatTimeRange(event.startTime, event.endTime)}
-            </span>
-          )}
-        </div>
+        />
       ))}
       {orderedMarkers.map((marker) => {
         const isPublicHoliday = marker.type === "publicHoliday";
@@ -2506,6 +2517,165 @@ function SelectedDayEvents({
         );
       })}
     </section>
+  );
+}
+
+const calendarEventDeleteActionWidth = 104;
+
+function SwipeableCalendarEventRow({
+  event,
+  isDeleteOpen,
+  hasOpenDelete,
+  onOpenDelete,
+  onCloseDelete,
+  onOpenEvent,
+  onEdit,
+  onDeleteRequest,
+}: {
+  event: ProductionEvent;
+  isDeleteOpen: boolean;
+  hasOpenDelete: boolean;
+  onOpenDelete: () => void;
+  onCloseDelete: () => void;
+  onOpenEvent: (id: string) => void;
+  onEdit: (event: ProductionEvent) => void;
+  onDeleteRequest: (event: ProductionEvent) => void;
+}) {
+  const [dragOffset, setDragOffset] = useState(0);
+  const [isDragging, setIsDragging] = useState(false);
+  const pointerStartRef = useRef<{ pointerId: number; x: number; y: number } | null>(null);
+  const suppressClickRef = useRef(false);
+  const baseOffset = isDeleteOpen ? -calendarEventDeleteActionWidth : 0;
+  const visibleOffset = isDragging ? dragOffset : baseOffset;
+  const timeRange = formatTimeRange(event.startTime, event.endTime);
+
+  function handlePointerDown(pointerEvent: ReactPointerEvent<HTMLDivElement>) {
+    if ((pointerEvent.target as HTMLElement).closest("[data-swipe-action]")) return;
+
+    pointerStartRef.current = {
+      pointerId: pointerEvent.pointerId,
+      x: pointerEvent.clientX,
+      y: pointerEvent.clientY,
+    };
+    setIsDragging(true);
+    setDragOffset(baseOffset);
+    pointerEvent.currentTarget.setPointerCapture(pointerEvent.pointerId);
+  }
+
+  function handlePointerMove(pointerEvent: ReactPointerEvent<HTMLDivElement>) {
+    const pointerStart = pointerStartRef.current;
+    if (!pointerStart) return;
+
+    const deltaX = pointerEvent.clientX - pointerStart.x;
+    const deltaY = pointerEvent.clientY - pointerStart.y;
+
+    if (Math.abs(deltaY) > Math.abs(deltaX) && Math.abs(deltaY) > 8) {
+      suppressClickRef.current = true;
+      return;
+    }
+
+    const nextOffset = Math.max(-calendarEventDeleteActionWidth, Math.min(0, baseOffset + deltaX));
+    if (Math.abs(deltaX) > 6) {
+      suppressClickRef.current = true;
+      pointerEvent.preventDefault();
+    }
+    setDragOffset(nextOffset);
+  }
+
+  function handlePointerUp(pointerEvent: ReactPointerEvent<HTMLDivElement>) {
+    const pointerStart = pointerStartRef.current;
+    if (!pointerStart) return;
+
+    const deltaX = pointerEvent.clientX - pointerStart.x;
+    const shouldOpen = dragOffset < -calendarEventDeleteActionWidth / 2;
+    const shouldClose = isDeleteOpen && deltaX > calendarEventDeleteActionWidth / 3;
+
+    pointerStartRef.current = null;
+    setIsDragging(false);
+    setDragOffset(0);
+
+    if (shouldClose || !shouldOpen) {
+      onCloseDelete();
+    } else {
+      onOpenDelete();
+    }
+  }
+
+  function handleRowClick() {
+    if (suppressClickRef.current) {
+      suppressClickRef.current = false;
+      return;
+    }
+
+    if (hasOpenDelete) {
+      onCloseDelete();
+      return;
+    }
+
+    onOpenEvent(event.id);
+  }
+
+  return (
+    <div data-calendar-swipe-row className="relative overflow-hidden rounded-xl">
+      <button
+        type="button"
+        data-swipe-action
+        onClick={(clickEvent) => {
+          clickEvent.stopPropagation();
+          onDeleteRequest(event);
+        }}
+        className="absolute inset-y-0 right-0 flex w-[104px] items-center justify-center rounded-r-xl bg-[#bb2720] text-base font-semibold text-white transition hover:bg-[#a9231d]"
+      >
+        Supprimer
+      </button>
+      <div
+        onPointerDown={handlePointerDown}
+        onPointerMove={handlePointerMove}
+        onPointerUp={handlePointerUp}
+        onPointerCancel={() => {
+          pointerStartRef.current = null;
+          setIsDragging(false);
+          setDragOffset(0);
+        }}
+        onClick={handleRowClick}
+        onKeyDown={(keyEvent) => {
+          if (keyEvent.key === "Enter" || keyEvent.key === " ") {
+            keyEvent.preventDefault();
+            if (hasOpenDelete) {
+              onCloseDelete();
+            } else {
+              onOpenEvent(event.id);
+            }
+          }
+        }}
+        role="button"
+        tabIndex={0}
+        style={{ transform: `translateX(${visibleOffset}px)`, touchAction: "pan-y" }}
+        className={cn(
+          "relative grid min-h-20 w-full cursor-pointer grid-cols-[3px_1fr_auto] items-center gap-4 rounded-xl bg-white/70 px-4 py-4 text-left hover:bg-white lg:gap-5 lg:px-5",
+          !isDragging && "transition-transform duration-200 ease-out",
+        )}
+      >
+        <span className="h-full min-h-14 rounded-full bg-[#bb2720]" />
+        <span className="min-w-0">
+          <span className="block text-base font-semibold leading-snug text-stone-950">{event.clientName}</span>
+          <span className="block truncate text-base text-stone-500">{event.eventName}</span>
+        </span>
+        <button
+          type="button"
+          data-swipe-action
+          onClick={(clickEvent) => {
+            clickEvent.stopPropagation();
+            onCloseDelete();
+            onEdit(event);
+          }}
+          className="absolute right-3 top-2 rounded-full border border-stone-200 bg-white px-3 py-1 text-base font-semibold text-stone-500 transition hover:border-stone-300 hover:text-stone-800"
+        >
+          Modifier
+        </button>
+        {timeRange && <span className="pl-2 pt-6 text-right text-base font-medium text-stone-500 sm:pt-5">{timeRange}</span>}
+      </div>
+    </div>
   );
 }
 
@@ -4200,7 +4370,6 @@ function DeleteEventDialog({
 }) {
   const [deleting, setDeleting] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [debugStatus, setDebugStatus] = useState<string | null>(null);
 
   async function handleConfirm() {
     console.log("Delete event confirmation clicked", {
@@ -4210,14 +4379,11 @@ function DeleteEventDialog({
     });
     setDeleting(true);
     setError(null);
-    setDebugStatus(`Suppression demandée pour ${event.id}`);
 
     try {
       await onConfirm(event);
-      setDebugStatus("Événement supprimé.");
     } catch (deleteError) {
       setError(deleteError instanceof Error ? deleteError.message : "Impossible de supprimer l'événement.");
-      setDebugStatus("La suppression a échoué.");
       setDeleting(false);
     }
   }
@@ -4233,7 +4399,6 @@ function DeleteEventDialog({
         </div>
 
         {error && <div className="mb-4 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-base font-medium text-rose-700">{error}</div>}
-        {debugStatus && <div className="mb-4 rounded-2xl border border-stone-200 bg-stone-50 px-4 py-3 text-base font-medium text-stone-600">{debugStatus}</div>}
 
         <div className="flex justify-end gap-2">
           <button
