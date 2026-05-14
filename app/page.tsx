@@ -2427,7 +2427,7 @@ function CalendarDashboard({
           </div>
         </div>
       </div>
-      <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain pb-2">
+      <div className="no-scrollbar min-h-0 flex-1 overflow-y-auto overscroll-contain pb-2">
         <SelectedDayEvents markers={selectedMarkers} events={selectedEvents} onOpen={onOpen} onDeleteRequest={onDeleteRequest} />
       </div>
     </section>
@@ -2905,7 +2905,7 @@ function ProductionDetail({
         <ProductionTimeline event={event} onUpdateTime={onUpdateEventTime} />
       </Card>
 
-      <div ref={detailScrollContainerRef} className="min-h-0 flex-1 space-y-5 overflow-y-auto overscroll-contain pb-2">
+      <div ref={detailScrollContainerRef} className="no-scrollbar min-h-0 flex-1 space-y-5 overflow-y-auto overscroll-contain pb-2">
         <Card className="premium-surface overflow-hidden p-3 sm:p-5">
         <div className="grid grid-cols-[repeat(3,minmax(0,1fr))] gap-1.5 sm:gap-4 lg:items-start">
           <div className="min-w-0">
