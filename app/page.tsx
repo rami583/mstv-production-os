@@ -2941,18 +2941,20 @@ function ProductionDetail({
                   <div
                     key={option.id}
                     className={cn(
-                      "group relative flex min-h-16 items-center gap-1.5 rounded-xl border-2 transition sm:gap-2",
+                      "group relative flex min-h-[4.75rem] items-center gap-1.5 rounded-xl border-2 transition sm:min-h-20 sm:gap-2",
                       optionTone.surface,
                       optionTone.border,
                       optionTone.hover,
                       isSelectedOption && "border-emerald-700 ring-2 ring-emerald-700/20",
                     )}
                   >
-                    <button onClick={() => selectOption(option)} className="flex min-h-16 min-w-0 flex-1 items-center gap-1.5 px-2 py-3 text-left sm:gap-2 sm:px-3">
-                      <Icon className={cn("h-4 w-4 shrink-0 sm:h-5 sm:w-5", optionTone.icon)} />
-                      <span className={cn("min-w-0 flex-1 truncate pr-1 text-base font-semibold", optionTone.text)}>{option.label}</span>
+                    <button onClick={() => selectOption(option)} className="flex min-h-[4.75rem] min-w-0 flex-1 flex-col items-start justify-center gap-1.5 px-2 py-3 text-left sm:min-h-20 sm:px-3">
+                      <span className="flex w-full min-w-0 items-center gap-1.5 pr-5 sm:gap-2">
+                        <Icon className={cn("h-4 w-4 shrink-0 sm:h-5 sm:w-5", optionTone.icon)} />
+                        <span className={cn("min-w-0 flex-1 truncate text-base font-semibold", optionTone.text)}>{option.label}</span>
+                      </span>
                       {option.status === "incomplete" && optionAssigneeInitials && (
-                        <span className="ml-auto mr-6 shrink-0 rounded-full border border-emerald-300 bg-white/75 px-2 py-0.5 text-base font-bold leading-tight text-emerald-800">
+                        <span className="ml-5 inline-flex shrink-0 rounded-full border border-emerald-300 bg-white/75 px-2 py-0.5 text-base font-bold leading-tight text-emerald-800 sm:ml-7">
                           {optionAssigneeInitials}
                         </span>
                       )}
@@ -3014,14 +3016,14 @@ function ProductionDetail({
                   <div
                     key={link.id}
                     className={cn(
-                      "group relative flex min-h-16 items-center gap-1.5 rounded-xl border-2 transition sm:gap-2",
+                      "group relative flex min-h-[4.75rem] items-center gap-1.5 rounded-xl border-2 transition sm:min-h-20 sm:gap-2",
                       linkTone.surface,
                       linkTone.border,
                       linkTone.hover,
                       isSelectedLink && "border-sky-700 ring-2 ring-sky-700/20",
                     )}
                   >
-                    <button onClick={() => selectLink(link)} className="flex min-h-16 min-w-0 flex-1 items-center gap-1.5 px-2 py-3 text-left sm:gap-2 sm:px-3">
+                    <button onClick={() => selectLink(link)} className="flex min-h-[4.75rem] min-w-0 flex-1 items-center gap-1.5 px-2 py-3 text-left sm:min-h-20 sm:gap-2 sm:px-3">
                       <Icon className={cn("h-4 w-4 shrink-0 sm:h-5 sm:w-5", linkTone.icon)} />
                       <span className={cn("min-w-0 flex-1 truncate pr-5 text-base font-semibold", linkTone.text)}>{link.label}</span>
                     </button>
@@ -3083,7 +3085,7 @@ function ProductionDetail({
                   <div
                     key={group.id}
                     className={cn(
-                      "group relative flex min-h-16 items-center gap-1.5 rounded-xl border-2 transition sm:gap-2",
+                      "group relative flex min-h-[4.75rem] items-center gap-1.5 rounded-xl border-2 transition sm:min-h-20 sm:gap-2",
                       documentTone.surface,
                       documentTone.border,
                       documentTone.hover,
@@ -3092,7 +3094,7 @@ function ProductionDetail({
                   >
                     <button
                       onClick={() => selectDocumentGroup(group)}
-                      className="flex min-h-16 min-w-0 flex-1 items-center gap-1.5 px-2 py-3 text-left sm:gap-2 sm:px-3"
+                      className="flex min-h-[4.75rem] min-w-0 flex-1 items-center gap-1.5 px-2 py-3 text-left sm:min-h-20 sm:gap-2 sm:px-3"
                     >
                       <Icon className={cn("h-4 w-4 shrink-0 sm:h-5 sm:w-5", documentTone.icon)} />
                       <span className={cn("min-w-0 flex-1 truncate pr-5 text-base font-semibold", documentTone.text)}>{group.label}</span>
