@@ -2295,26 +2295,14 @@ function CalendarDashboard({
   changeMonth: (delta: number) => void;
 }) {
   const weekdays = ["L", "M", "M", "J", "V", "S", "D"];
-  const year = visibleMonth.getFullYear();
-  const month = visibleMonth.getMonth();
-  const monthTitle = monthNames[month];
-  const daysInMonth = new Date(year, month + 1, 0).getDate();
-  const leadingEmptyDays = (new Date(year, month, 1).getDay() + 6) % 7;
-  const totalCells = Math.ceil((leadingEmptyDays + daysInMonth) / 7) * 7;
-  const trailingEmptyDays = totalCells - leadingEmptyDays - daysInMonth;
   const todayKey = formatDateKey(new Date());
-  const calendarDays = Array.from({ length: daysInMonth }, (_, index) => {
-    const day = index + 1;
-    const dateKey = `${year}-${String(month + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
-
-    return {
-      day,
-      events: events.filter((event) => event.date === dateKey),
-      markers: getCalendarMarkers(dateKey),
-      dateKey,
-    };
-  });
-  const selectedDay = calendarDays.find((day) => day.dateKey === selectedDateKey);
+  const currentMonthData = useMemo(() => getCalendarMonthData(visibleMonth, events), [events, visibleMonth]);
+  const [monthTransition, setMonthTransition] = useState<{ direction: -1 | 1; stage: "idle" | "animating" }>({ direction: 1, stage: "idle" });
+  const transitionMonthData = useMemo(
+    () => getCalendarMonthData(new Date(visibleMonth.getFullYear(), visibleMonth.getMonth() + monthTransition.direction, 1), events),
+    [events, monthTransition.direction, visibleMonth],
+  );
+  const selectedDay = currentMonthData.calendarDays.find((day) => day.dateKey === selectedDateKey);
   const selectedEvents = [...(selectedDay?.events ?? [])].sort((a, b) => eventSortValue(a) - eventSortValue(b));
   const selectedMarkers = selectedDay?.markers ?? [];
   const [monthSwipeOffset, setMonthSwipeOffset] = useState(0);
@@ -2324,13 +2312,24 @@ function CalendarDashboard({
 
   useEffect(() => {
     const [selectedYear, selectedMonth] = selectedDateKey.split("-").map(Number);
-    if (selectedYear === year && selectedMonth === month + 1) {
+    if (selectedYear === currentMonthData.year && selectedMonth === currentMonthData.month + 1) {
       return;
     }
 
-    const firstEventInMonth = calendarDays.find((day) => day.events.length > 0);
-    setSelectedDateKey(firstEventInMonth?.dateKey ?? `${year}-${String(month + 1).padStart(2, "0")}-01`);
-  }, [calendarDays, month, selectedDateKey, setSelectedDateKey, year]);
+    const firstEventInMonth = currentMonthData.calendarDays.find((day) => day.events.length > 0);
+    setSelectedDateKey(firstEventInMonth?.dateKey ?? `${currentMonthData.year}-${String(currentMonthData.month + 1).padStart(2, "0")}-01`);
+  }, [currentMonthData, selectedDateKey, setSelectedDateKey]);
+
+  function animateMonthChange(direction: -1 | 1) {
+    if (monthTransition.stage === "animating") return;
+
+    setMonthSwipeOffset(0);
+    setMonthTransition({ direction, stage: "animating" });
+    window.setTimeout(() => {
+      changeMonth(direction);
+      setMonthTransition((current) => ({ direction: current.direction, stage: "idle" }));
+    }, 260);
+  }
 
   function handleMonthSwipePointerDown(pointerEvent: ReactPointerEvent<HTMLDivElement>) {
     monthSwipeStartRef.current = {
@@ -2384,7 +2383,7 @@ function CalendarDashboard({
       return;
     }
 
-    changeMonth(deltaX < 0 ? 1 : -1);
+    animateMonthChange(deltaX < 0 ? 1 : -1);
   }
 
   function resetMonthSwipe() {
@@ -2398,12 +2397,12 @@ function CalendarDashboard({
     <section className="flex min-h-0 flex-1 flex-col gap-4 overflow-hidden">
       <div className="shrink-0">
         <div className="flex items-end justify-between px-1 pt-1">
-          <h1 className="text-4xl font-semibold leading-none text-stone-950 sm:text-6xl">{monthTitle}</h1>
+          <h1 className="text-4xl font-semibold leading-none text-stone-950 sm:text-6xl">{currentMonthData.monthTitle}</h1>
           <div className="flex items-center gap-2">
-            <button onClick={() => changeMonth(-1)} className={calendarArrowClassName} aria-label="Mois précédent">
+            <button onClick={() => animateMonthChange(-1)} className={calendarArrowClassName} aria-label="Mois précédent">
               ←
             </button>
-            <button onClick={() => changeMonth(1)} className={calendarArrowClassName} aria-label="Mois suivant">
+            <button onClick={() => animateMonthChange(1)} className={calendarArrowClassName} aria-label="Mois suivant">
               →
             </button>
           </div>
@@ -2432,80 +2431,29 @@ function CalendarDashboard({
               </div>
             ))}
           </div>
-          <div className="grid grid-cols-7">
-            {Array.from({ length: leadingEmptyDays }).map((_, index) => (
-              <div key={`empty-${index}`} className="h-[70px] border-b border-stone-200/45 bg-white/25 sm:h-[88px] lg:h-[clamp(72px,9svh,112px)]" />
-            ))}
-            {calendarDays.map(({ day, events: dayEvents, markers, dateKey }, index) => {
-              const position = leadingEmptyDays + index;
-              const isLastRow = position >= totalCells - 7;
-              const isWeekend = position % 7 >= 5;
-              const isCurrentDay = dateKey === todayKey;
-              const isSelected = dateKey === selectedDateKey;
-              const publicHolidayMarker = markers.find((marker) => marker.type === "publicHoliday");
-              const schoolHolidayMarker = markers.find((marker) => marker.type === "schoolHoliday");
-              const markerLabel = markers.map((marker) => marker.label).join(" • ");
-              const dayDots = [
-                publicHolidayMarker ? { key: "public-holiday", className: "bg-sky-400/80" } : null,
-                schoolHolidayMarker ? { key: "school-holiday", className: "bg-amber-400/80" } : null,
-                ...dayEvents.slice(0, 4).map((event) => ({ key: event.id, className: "bg-[#bb2720]" })),
-              ].filter(Boolean).slice(0, 4) as { key: string; className: string }[];
-
-              return (
-                <button
-                  key={dateKey}
-                  onClick={() => setSelectedDateKey(dateKey)}
-                  title={markerLabel || undefined}
-                  className={cn(
-                    "group flex h-[70px] flex-col items-center justify-start gap-1 bg-white/35 px-1 py-2.5 transition hover:bg-white/80 sm:h-[88px] sm:py-3 lg:h-[clamp(72px,9svh,112px)] lg:px-2 lg:py-4",
-                    schoolHolidayMarker && "bg-amber-50/60 hover:bg-amber-50/85",
-                    publicHolidayMarker && "bg-sky-50/70 hover:bg-sky-50/90",
-                    !isLastRow && "border-b border-stone-200/45",
-                  )}
-                >
-                  <span className="flex w-full items-start justify-center gap-1">
-                    <span
-                      className={cn(
-                        "flex h-8 w-8 items-center justify-center rounded-full text-lg font-semibold text-stone-800 lg:h-10 lg:w-10 lg:text-xl",
-                        isWeekend && !isSelected && "text-stone-500",
-                        isSelected && "bg-[#bb2720] text-white",
-                        !isSelected && isCurrentDay && "text-[#bb2720]",
-                      )}
-                    >
-                      {day}
-                    </span>
-                    {markers.length > 0 && (
-                      <span className="mt-1 hidden min-w-0 flex-wrap justify-end gap-1 lg:flex">
-                        {publicHolidayMarker && <span className="h-1.5 w-1.5 rounded-full bg-sky-400/80" />}
-                        {schoolHolidayMarker && <span className="h-1.5 w-1.5 rounded-full bg-amber-400/80" />}
-                      </span>
-                    )}
-                  </span>
-                  {dayDots.length > 0 && (
-                    <span className="flex min-h-3 w-full items-center justify-center gap-0.5 px-0.5 lg:hidden">
-                      {dayDots.map((dot) => (
-                        <span key={dot.key} className={cn("h-1.5 w-1.5 shrink-0 rounded-full", dot.className)} />
-                      ))}
-                    </span>
-                  )}
-                  {markers.length > 0 && (
-                    <span className="hidden max-w-full truncate text-base font-semibold leading-tight text-stone-500 opacity-0 transition group-hover:opacity-100 lg:block">
-                      {markers[0].label}
-                    </span>
-                  )}
-                  {dayEvents.length > 0 && (
-                    <span className="hidden max-w-full gap-0.5 lg:mt-2 lg:flex lg:gap-1">
-                      {dayEvents.slice(0, 3).map((event) => (
-                        <span key={event.id} className="h-2 w-2 shrink-0 rounded-full bg-[#bb2720] lg:h-2.5 lg:w-2.5" />
-                      ))}
-                    </span>
-                  )}
-                </button>
-              );
-            })}
-            {Array.from({ length: trailingEmptyDays }).map((_, index) => (
-              <div key={`trailing-${index}`} className="h-[70px] bg-white/25 sm:h-[88px] lg:h-[clamp(72px,9svh,112px)]" />
-            ))}
+          <div className="relative overflow-hidden">
+            <CalendarMonthGrid
+              monthData={currentMonthData}
+              selectedDateKey={selectedDateKey}
+              todayKey={todayKey}
+              onSelectDate={setSelectedDateKey}
+              className={cn(
+                monthTransition.stage === "animating" && "transition-transform duration-[260ms] ease-out",
+                monthTransition.stage === "animating" && (monthTransition.direction === 1 ? "-translate-x-full" : "translate-x-full"),
+              )}
+              interactive={monthTransition.stage !== "animating"}
+            />
+            {monthTransition.stage === "animating" && (
+              <CalendarMonthGrid
+                monthData={transitionMonthData}
+                selectedDateKey={selectedDateKey}
+                todayKey={todayKey}
+                onSelectDate={setSelectedDateKey}
+                className="pointer-events-none absolute inset-0"
+                initialSide={monthTransition.direction === 1 ? "right" : "left"}
+                interactive={false}
+              />
+            )}
           </div>
         </div>
       </div>
@@ -2513,6 +2461,143 @@ function CalendarDashboard({
         <SelectedDayEvents markers={selectedMarkers} events={selectedEvents} onOpen={onOpen} onDeleteRequest={onDeleteRequest} />
       </div>
     </section>
+  );
+}
+
+function getCalendarMonthData(monthDate: Date, events: ProductionEvent[]) {
+  const year = monthDate.getFullYear();
+  const month = monthDate.getMonth();
+  const daysInMonth = new Date(year, month + 1, 0).getDate();
+  const leadingEmptyDays = (new Date(year, month, 1).getDay() + 6) % 7;
+  const totalCells = Math.ceil((leadingEmptyDays + daysInMonth) / 7) * 7;
+  const trailingEmptyDays = totalCells - leadingEmptyDays - daysInMonth;
+  const calendarDays = Array.from({ length: daysInMonth }, (_, index) => {
+    const day = index + 1;
+    const dateKey = `${year}-${String(month + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+
+    return {
+      day,
+      events: events.filter((event) => event.date === dateKey),
+      markers: getCalendarMarkers(dateKey),
+      dateKey,
+    };
+  });
+
+  return {
+    year,
+    month,
+    monthTitle: monthNames[month],
+    leadingEmptyDays,
+    totalCells,
+    trailingEmptyDays,
+    calendarDays,
+  };
+}
+
+function CalendarMonthGrid({
+  monthData,
+  selectedDateKey,
+  todayKey,
+  onSelectDate,
+  className,
+  initialSide,
+  interactive = true,
+}: {
+  monthData: ReturnType<typeof getCalendarMonthData>;
+  selectedDateKey: string;
+  todayKey: string;
+  onSelectDate: (dateKey: string) => void;
+  className?: string;
+  initialSide?: "left" | "right";
+  interactive?: boolean;
+}) {
+  return (
+    <div
+      className={cn(
+        "grid grid-cols-7 transition-transform duration-[260ms] ease-out",
+        initialSide === "right" && "calendar-month-slide-in-right",
+        initialSide === "left" && "calendar-month-slide-in-left",
+        className,
+      )}
+    >
+      {Array.from({ length: monthData.leadingEmptyDays }).map((_, index) => (
+        <div key={`empty-${index}`} className="h-[70px] border-b border-stone-200/45 bg-white/25 sm:h-[88px] lg:h-[clamp(72px,9svh,112px)]" />
+      ))}
+      {monthData.calendarDays.map(({ day, events: dayEvents, markers, dateKey }, index) => {
+        const position = monthData.leadingEmptyDays + index;
+        const isLastRow = position >= monthData.totalCells - 7;
+        const isWeekend = position % 7 >= 5;
+        const isCurrentDay = dateKey === todayKey;
+        const isSelected = dateKey === selectedDateKey;
+        const publicHolidayMarker = markers.find((marker) => marker.type === "publicHoliday");
+        const schoolHolidayMarker = markers.find((marker) => marker.type === "schoolHoliday");
+        const markerLabel = markers.map((marker) => marker.label).join(" • ");
+        const dayDots = [
+          publicHolidayMarker ? { key: "public-holiday", className: "bg-sky-400/80" } : null,
+          schoolHolidayMarker ? { key: "school-holiday", className: "bg-amber-400/80" } : null,
+          ...dayEvents.slice(0, 4).map((event) => ({ key: event.id, className: "bg-[#bb2720]" })),
+        ].filter(Boolean).slice(0, 4) as { key: string; className: string }[];
+
+        return (
+          <button
+            key={dateKey}
+            onClick={() => {
+              if (interactive) onSelectDate(dateKey);
+            }}
+            title={markerLabel || undefined}
+            tabIndex={interactive ? 0 : -1}
+            className={cn(
+              "group flex h-[70px] flex-col items-center justify-start gap-1 bg-white/35 px-1 py-2.5 transition hover:bg-white/80 sm:h-[88px] sm:py-3 lg:h-[clamp(72px,9svh,112px)] lg:px-2 lg:py-4",
+              schoolHolidayMarker && "bg-amber-50/60 hover:bg-amber-50/85",
+              publicHolidayMarker && "bg-sky-50/70 hover:bg-sky-50/90",
+              !isLastRow && "border-b border-stone-200/45",
+              !interactive && "pointer-events-none",
+            )}
+          >
+            <span className="flex w-full items-start justify-center gap-1">
+              <span
+                className={cn(
+                  "flex h-8 w-8 items-center justify-center rounded-full text-lg font-semibold text-stone-800 lg:h-10 lg:w-10 lg:text-xl",
+                  isWeekend && !isSelected && "text-stone-500",
+                  isSelected && "bg-[#bb2720] text-white",
+                  !isSelected && isCurrentDay && "text-[#bb2720]",
+                )}
+              >
+                {day}
+              </span>
+              {markers.length > 0 && (
+                <span className="mt-1 hidden min-w-0 flex-wrap justify-end gap-1 lg:flex">
+                  {publicHolidayMarker && <span className="h-1.5 w-1.5 rounded-full bg-sky-400/80" />}
+                  {schoolHolidayMarker && <span className="h-1.5 w-1.5 rounded-full bg-amber-400/80" />}
+                </span>
+              )}
+            </span>
+            {dayDots.length > 0 && (
+              <span className="flex min-h-3 w-full items-center justify-center gap-0.5 px-0.5 lg:hidden">
+                {dayDots.map((dot) => (
+                  <span key={dot.key} className={cn("h-1.5 w-1.5 shrink-0 rounded-full", dot.className)} />
+                ))}
+              </span>
+            )}
+            {markers.length > 0 && (
+              <span className="hidden max-w-full truncate text-base font-semibold leading-tight text-stone-500 opacity-0 transition group-hover:opacity-100 lg:block">
+                {markers[0].label}
+              </span>
+            )}
+            {dayEvents.length > 0 && (
+              <span className="hidden max-w-full gap-0.5 lg:mt-2 lg:flex lg:gap-1">
+                {dayEvents.slice(0, 3).map((event) => (
+                  <span key={event.id} className="h-2 w-2 shrink-0 rounded-full bg-[#bb2720] lg:h-2.5 lg:w-2.5" />
+                ))}
+              </span>
+            )}
+          </button>
+        );
+      })}
+      {Array.from({ length: monthData.trailingEmptyDays }).map((_, index) => (
+        <div key={`trailing-${index}`} className="h-[70px] bg-white/25 sm:h-[88px] lg:h-[clamp(72px,9svh,112px)]" />
+      ))}
+    </div>
   );
 }
 

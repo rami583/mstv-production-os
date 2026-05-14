@@ -61,3 +61,29 @@ a {
 .no-scrollbar::-webkit-scrollbar {
   display: none;
 }
+
+@keyframes calendar-month-slide-in-right {
+  from {
+    transform: translateX(100%);
+  }
+  to {
+    transform: translateX(0);
+  }
+}
+
+@keyframes calendar-month-slide-in-left {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(0);
+  }
+}
+
+.calendar-month-slide-in-right {
+  animation: calendar-month-slide-in-right 260ms ease-out both;
+}
+
+.calendar-month-slide-in-left {
+  animation: calendar-month-slide-in-left 260ms ease-out both;
+}
