@@ -2517,6 +2517,7 @@ function SelectedDayEvents({
 }
 
 const calendarEventDeleteActionWidth = 104;
+const calendarEventFullSwipeRatio = 0.65;
 
 function SwipeableCalendarEventRow({
   event,
@@ -2537,6 +2538,7 @@ function SwipeableCalendarEventRow({
 }) {
   const [dragOffset, setDragOffset] = useState(0);
   const [isDragging, setIsDragging] = useState(false);
+  const rowRef = useRef<HTMLDivElement | null>(null);
   const pointerStartRef = useRef<{ pointerId: number; x: number; y: number } | null>(null);
   const suppressClickRef = useRef(false);
   const baseOffset = isDeleteOpen ? -calendarEventDeleteActionWidth : 0;
@@ -2569,7 +2571,8 @@ function SwipeableCalendarEventRow({
       return;
     }
 
-    const nextOffset = Math.max(-calendarEventDeleteActionWidth, Math.min(0, baseOffset + deltaX));
+    const rowWidth = rowRef.current?.offsetWidth ?? calendarEventDeleteActionWidth;
+    const nextOffset = Math.max(-rowWidth, Math.min(0, baseOffset + deltaX));
     if (Math.abs(deltaX) > 6) {
       suppressClickRef.current = true;
       pointerEvent.preventDefault();
@@ -2582,14 +2585,21 @@ function SwipeableCalendarEventRow({
     if (!pointerStart) return;
 
     const deltaX = pointerEvent.clientX - pointerStart.x;
-    const shouldOpen = dragOffset < -calendarEventDeleteActionWidth / 2;
+    const rowWidth = rowRef.current?.offsetWidth ?? calendarEventDeleteActionWidth;
+    const finalOffset = Math.max(-rowWidth, Math.min(0, baseOffset + deltaX));
+    const fullSwipeThreshold = rowWidth * calendarEventFullSwipeRatio;
+    const shouldRequestDelete = Math.abs(finalOffset) >= fullSwipeThreshold;
+    const shouldOpen = finalOffset < -calendarEventDeleteActionWidth / 2;
     const shouldClose = isDeleteOpen && deltaX > calendarEventDeleteActionWidth / 3;
 
     pointerStartRef.current = null;
     setIsDragging(false);
     setDragOffset(0);
 
-    if (shouldClose || !shouldOpen) {
+    if (shouldRequestDelete) {
+      onCloseDelete();
+      onDeleteRequest(event);
+    } else if (shouldClose || !shouldOpen) {
       onCloseDelete();
     } else {
       onOpenDelete();
@@ -2620,13 +2630,14 @@ function SwipeableCalendarEventRow({
           onDeleteRequest(event);
         }}
         className={cn(
-          "absolute inset-y-0 right-0 z-0 flex w-[104px] items-center justify-center rounded-r-xl bg-[#bb2720] text-base font-semibold text-white transition hover:bg-[#a9231d]",
+          "absolute inset-y-0 right-0 z-0 flex w-full items-center justify-end rounded-r-xl bg-[#bb2720] pr-5 text-base font-semibold text-white transition hover:bg-[#a9231d]",
           deleteActionVisible ? "opacity-100" : "pointer-events-none opacity-0",
         )}
       >
         Supprimer
       </button>
       <div
+        ref={rowRef}
         onPointerDown={handlePointerDown}
         onPointerMove={handlePointerMove}
         onPointerUp={handlePointerUp}
@@ -2651,6 +2662,7 @@ function SwipeableCalendarEventRow({
         style={{ transform: `translateX(${visibleOffset}px)`, touchAction: "pan-y" }}
         className={cn(
           "relative z-10 grid min-h-20 w-full cursor-pointer grid-cols-[3px_1fr_auto] items-center gap-4 rounded-xl bg-white/70 px-4 py-4 text-left hover:bg-white lg:gap-5 lg:px-5",
+          deleteActionVisible && "bg-white",
           !isDragging && "transition-transform duration-200 ease-out",
         )}
       >
