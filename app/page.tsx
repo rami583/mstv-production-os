@@ -2547,6 +2547,7 @@ function SwipeableCalendarEventRow({
   const suppressClickRef = useRef(false);
   const baseOffset = isDeleteOpen ? -calendarEventDeleteActionWidth : 0;
   const visibleOffset = isDragging ? dragOffset : baseOffset;
+  const deleteActionVisible = visibleOffset < -1;
   const timeRange = formatTimeRange(event.startTime, event.endTime);
 
   function handlePointerDown(pointerEvent: ReactPointerEvent<HTMLDivElement>) {
@@ -2624,7 +2625,10 @@ function SwipeableCalendarEventRow({
           clickEvent.stopPropagation();
           onDeleteRequest(event);
         }}
-        className="absolute inset-y-0 right-0 flex w-[104px] items-center justify-center rounded-r-xl bg-[#bb2720] text-base font-semibold text-white transition hover:bg-[#a9231d]"
+        className={cn(
+          "absolute inset-y-0 right-0 z-0 flex w-[104px] items-center justify-center rounded-r-xl bg-[#bb2720] text-base font-semibold text-white transition hover:bg-[#a9231d]",
+          deleteActionVisible ? "opacity-100" : "pointer-events-none opacity-0",
+        )}
       >
         Supprimer
       </button>
@@ -2652,7 +2656,7 @@ function SwipeableCalendarEventRow({
         tabIndex={0}
         style={{ transform: `translateX(${visibleOffset}px)`, touchAction: "pan-y" }}
         className={cn(
-          "relative grid min-h-20 w-full cursor-pointer grid-cols-[3px_1fr_auto] items-center gap-4 rounded-xl bg-white/70 px-4 py-4 text-left hover:bg-white lg:gap-5 lg:px-5",
+          "relative z-10 grid min-h-20 w-full cursor-pointer grid-cols-[3px_1fr_auto] items-center gap-4 rounded-xl bg-white/70 px-4 py-4 text-left hover:bg-white lg:gap-5 lg:px-5",
           !isDragging && "transition-transform duration-200 ease-out",
         )}
       >
