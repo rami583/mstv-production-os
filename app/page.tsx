@@ -2961,9 +2961,9 @@ function ProductionDetail({
                           <span className="inline-flex shrink-0 rounded-full border border-emerald-300 bg-white/75 px-2 py-0.5 text-base font-bold leading-tight text-emerald-800">
                             {optionAssigneeInitials}
                           </span>
-                          <span className="flex w-full min-w-0 items-end justify-between gap-1.5 pr-5 sm:gap-2">
-                            <span className={cn("min-w-0 flex-1 truncate text-base font-semibold", optionTone.text)}>{option.label}</span>
+                          <span className="flex w-full min-w-0 items-center gap-1.5 pr-5 sm:gap-2">
                             <Icon className={cn("h-4 w-4 shrink-0 sm:h-5 sm:w-5", optionTone.icon)} />
+                            <span className={cn("min-w-0 flex-1 truncate text-base font-semibold", optionTone.text)}>{option.label}</span>
                           </span>
                         </>
                       ) : (
