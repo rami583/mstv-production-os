@@ -2935,6 +2935,7 @@ function ProductionDetail({
                 const optionTone = getOptionTone(option.status);
                 const optionAssignee = getOptionAssignee(option);
                 const optionAssigneeInitials = optionAssignee ? getOptionCollaboratorProfile(optionAssignee)?.initials : null;
+                const showOptionAssigneeInitials = option.status === "incomplete" && Boolean(optionAssigneeInitials);
                 const isSelectedOption = contextSelection?.type === "option" && contextSelection.optionId === option.id;
                 const isConfirmingDelete = confirmDelete?.type === "option" && confirmDelete.optionId === option.id;
                 return (
@@ -2948,15 +2949,28 @@ function ProductionDetail({
                       isSelectedOption && "border-emerald-700 ring-2 ring-emerald-700/20",
                     )}
                   >
-                    <button onClick={() => selectOption(option)} className="flex min-h-[4.75rem] min-w-0 flex-1 flex-col items-start justify-center gap-1.5 px-2 py-3 text-left sm:min-h-20 sm:px-3">
-                      <span className="flex w-full min-w-0 items-center gap-1.5 pr-5 sm:gap-2">
-                        <Icon className={cn("h-4 w-4 shrink-0 sm:h-5 sm:w-5", optionTone.icon)} />
-                        <span className={cn("min-w-0 flex-1 truncate text-base font-semibold", optionTone.text)}>{option.label}</span>
-                      </span>
-                      {option.status === "incomplete" && optionAssigneeInitials && (
-                        <span className="ml-5 inline-flex shrink-0 rounded-full border border-emerald-300 bg-white/75 px-2 py-0.5 text-base font-bold leading-tight text-emerald-800 sm:ml-7">
-                          {optionAssigneeInitials}
-                        </span>
+                    <button
+                      onClick={() => selectOption(option)}
+                      className={cn(
+                        "flex min-h-[4.75rem] min-w-0 flex-1 px-2 py-3 text-left sm:min-h-20 sm:px-3",
+                        showOptionAssigneeInitials ? "flex-col items-start justify-between gap-2" : "items-center gap-1.5 sm:gap-2",
+                      )}
+                    >
+                      {showOptionAssigneeInitials ? (
+                        <>
+                          <span className="inline-flex shrink-0 rounded-full border border-emerald-300 bg-white/75 px-2 py-0.5 text-base font-bold leading-tight text-emerald-800">
+                            {optionAssigneeInitials}
+                          </span>
+                          <span className="flex w-full min-w-0 items-end justify-between gap-1.5 pr-5 sm:gap-2">
+                            <span className={cn("min-w-0 flex-1 truncate text-base font-semibold", optionTone.text)}>{option.label}</span>
+                            <Icon className={cn("h-4 w-4 shrink-0 sm:h-5 sm:w-5", optionTone.icon)} />
+                          </span>
+                        </>
+                      ) : (
+                        <>
+                          <Icon className={cn("h-4 w-4 shrink-0 sm:h-5 sm:w-5", optionTone.icon)} />
+                          <span className={cn("min-w-0 flex-1 truncate pr-5 text-base font-semibold", optionTone.text)}>{option.label}</span>
+                        </>
                       )}
                     </button>
                     <button
