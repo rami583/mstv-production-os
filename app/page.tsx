@@ -2317,6 +2317,10 @@ function CalendarDashboard({
   const selectedDay = calendarDays.find((day) => day.dateKey === selectedDateKey);
   const selectedEvents = [...(selectedDay?.events ?? [])].sort((a, b) => eventSortValue(a) - eventSortValue(b));
   const selectedMarkers = selectedDay?.markers ?? [];
+  const [monthSwipeOffset, setMonthSwipeOffset] = useState(0);
+  const [isMonthSwiping, setIsMonthSwiping] = useState(false);
+  const monthSwipeStartRef = useRef<{ pointerId: number; x: number; y: number; axis: "horizontal" | "vertical" | null } | null>(null);
+  const suppressMonthClickRef = useRef(false);
 
   useEffect(() => {
     const [selectedYear, selectedMonth] = selectedDateKey.split("-").map(Number);
@@ -2327,6 +2331,68 @@ function CalendarDashboard({
     const firstEventInMonth = calendarDays.find((day) => day.events.length > 0);
     setSelectedDateKey(firstEventInMonth?.dateKey ?? `${year}-${String(month + 1).padStart(2, "0")}-01`);
   }, [calendarDays, month, selectedDateKey, setSelectedDateKey, year]);
+
+  function handleMonthSwipePointerDown(pointerEvent: ReactPointerEvent<HTMLDivElement>) {
+    monthSwipeStartRef.current = {
+      pointerId: pointerEvent.pointerId,
+      x: pointerEvent.clientX,
+      y: pointerEvent.clientY,
+      axis: null,
+    };
+    setIsMonthSwiping(true);
+    setMonthSwipeOffset(0);
+    pointerEvent.currentTarget.setPointerCapture(pointerEvent.pointerId);
+  }
+
+  function handleMonthSwipePointerMove(pointerEvent: ReactPointerEvent<HTMLDivElement>) {
+    const swipeStart = monthSwipeStartRef.current;
+    if (!swipeStart) return;
+
+    const deltaX = pointerEvent.clientX - swipeStart.x;
+    const deltaY = pointerEvent.clientY - swipeStart.y;
+
+    if (!swipeStart.axis && Math.max(Math.abs(deltaX), Math.abs(deltaY)) > 8) {
+      swipeStart.axis = Math.abs(deltaX) > Math.abs(deltaY) ? "horizontal" : "vertical";
+    }
+
+    if (swipeStart.axis !== "horizontal") {
+      return;
+    }
+
+    suppressMonthClickRef.current = true;
+    pointerEvent.preventDefault();
+    setMonthSwipeOffset(Math.max(-28, Math.min(28, deltaX * 0.24)));
+  }
+
+  function handleMonthSwipePointerUp(pointerEvent: ReactPointerEvent<HTMLDivElement>) {
+    const swipeStart = monthSwipeStartRef.current;
+    if (!swipeStart) return;
+
+    const deltaX = pointerEvent.clientX - swipeStart.x;
+    const deltaY = pointerEvent.clientY - swipeStart.y;
+    const swipeThreshold = Math.min(90, Math.max(52, pointerEvent.currentTarget.clientWidth * 0.18));
+    const isHorizontalSwipe = swipeStart.axis === "horizontal" && Math.abs(deltaX) > Math.abs(deltaY) * 1.2;
+
+    monthSwipeStartRef.current = null;
+    setIsMonthSwiping(false);
+    setMonthSwipeOffset(0);
+    window.setTimeout(() => {
+      suppressMonthClickRef.current = false;
+    }, 0);
+
+    if (!isHorizontalSwipe || Math.abs(deltaX) < swipeThreshold) {
+      return;
+    }
+
+    changeMonth(deltaX < 0 ? 1 : -1);
+  }
+
+  function resetMonthSwipe() {
+    monthSwipeStartRef.current = null;
+    setIsMonthSwiping(false);
+    setMonthSwipeOffset(0);
+    suppressMonthClickRef.current = false;
+  }
 
   return (
     <section className="flex min-h-0 flex-1 flex-col gap-4 overflow-hidden">
@@ -2342,7 +2408,23 @@ function CalendarDashboard({
             </button>
           </div>
         </div>
-        <div className="mt-4 overflow-hidden rounded-[1.75rem] bg-white/70 p-0">
+        <div
+          onPointerDown={handleMonthSwipePointerDown}
+          onPointerMove={handleMonthSwipePointerMove}
+          onPointerUp={handleMonthSwipePointerUp}
+          onPointerCancel={resetMonthSwipe}
+          onClickCapture={(clickEvent) => {
+            if (!suppressMonthClickRef.current) return;
+            suppressMonthClickRef.current = false;
+            clickEvent.preventDefault();
+            clickEvent.stopPropagation();
+          }}
+          style={{ transform: `translateX(${monthSwipeOffset}px)`, touchAction: "pan-y" }}
+          className={cn(
+            "mt-4 overflow-hidden rounded-[1.75rem] bg-white/70 p-0",
+            !isMonthSwiping && "transition-transform duration-200 ease-out",
+          )}
+        >
           <div className="grid grid-cols-7">
             {weekdays.map((weekday, index) => (
               <div key={`${weekday}-${index}`} className="flex min-w-0 items-center justify-center px-1 py-2.5 text-base font-semibold uppercase tracking-normal text-stone-500">
