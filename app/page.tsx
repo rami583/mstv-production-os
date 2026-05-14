@@ -2727,6 +2727,18 @@ function ProductionDetail({
   const [submittingAdd, setSubmittingAdd] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState<DeleteSelection | null>(null);
   const [deletingItem, setDeletingItem] = useState(false);
+  const detailScrollContainerRef = useRef<HTMLDivElement | null>(null);
+  const detailBlockRef = useRef<HTMLDivElement | null>(null);
+  const previousContextSelectionKeyRef = useRef<string | null>(null);
+
+  const contextSelectionKey =
+    contextSelection?.type === "option"
+      ? `option-${contextSelection.optionId}`
+      : contextSelection?.type === "link"
+        ? `link-${contextSelection.linkId}`
+        : contextSelection?.type === "document"
+          ? `document-${contextSelection.groupId}`
+          : null;
 
   useEffect(() => {
     setContextSelection((current) => {
@@ -2737,6 +2749,36 @@ function ProductionDetail({
       return null;
     });
   }, [event.documentGroups, event.id, event.links, event.options]);
+
+  useEffect(() => {
+    const previousSelectionKey = previousContextSelectionKeyRef.current;
+    previousContextSelectionKeyRef.current = contextSelectionKey;
+
+    if (!contextSelectionKey || contextSelectionKey === previousSelectionKey) return;
+
+    window.requestAnimationFrame(() => {
+      const scrollContainer = detailScrollContainerRef.current;
+      const detailBlock = detailBlockRef.current;
+      if (!scrollContainer || !detailBlock) return;
+
+      const containerBounds = scrollContainer.getBoundingClientRect();
+      const detailBounds = detailBlock.getBoundingClientRect();
+      const detailTop = detailBounds.top - containerBounds.top + scrollContainer.scrollTop;
+      const detailBottom = detailTop + detailBounds.height;
+      const scrollMargin = 16;
+      const visibleTop = scrollContainer.scrollTop;
+      const visibleBottom = visibleTop + scrollContainer.clientHeight;
+
+      if (detailTop >= visibleTop + scrollMargin && detailBottom <= visibleBottom - scrollMargin) {
+        return;
+      }
+
+      scrollContainer.scrollTo({
+        top: Math.max(0, detailTop - scrollMargin),
+        behavior: "smooth",
+      });
+    });
+  }, [contextSelectionKey]);
 
   function selectOption(option: EventOption) {
     setContextSelection((current) =>
@@ -2863,8 +2905,8 @@ function ProductionDetail({
         <ProductionTimeline event={event} onUpdateTime={onUpdateEventTime} />
       </Card>
 
-      <div className="min-h-0 flex-1 space-y-5 overflow-y-auto overscroll-contain pb-2">
-      <Card className="premium-surface overflow-hidden p-3 sm:p-5">
+      <div ref={detailScrollContainerRef} className="min-h-0 flex-1 space-y-5 overflow-y-auto overscroll-contain pb-2">
+        <Card className="premium-surface overflow-hidden p-3 sm:p-5">
         <div className="grid grid-cols-[repeat(3,minmax(0,1fr))] gap-1.5 sm:gap-4 lg:items-start">
           <div className="min-w-0">
             <SectionHeader
@@ -3084,23 +3126,25 @@ function ProductionDetail({
         {manageError && <div className="mt-3 text-base font-medium text-rose-700">{manageError}</div>}
       </Card>
 
-        <ContextDetailBlock
-          event={event}
-          selection={contextSelection}
-          onToggleOption={onToggleOption}
-          onRenameOption={onRenameOption}
-          onCreateOptionItem={onCreateOptionItem}
-          onDeleteOptionItem={onDeleteOptionItem}
-          onToggleOptionAssignee={onToggleOptionAssignee}
-          teamMembers={teamMembers}
-          onRenameLink={onRenameLink}
-          onSaveLinkEntries={onSaveLinkEntries}
-          onRenameDocumentGroup={onRenameDocumentGroup}
-          onUploadDocument={onUploadDocument}
-          onDeleteDocumentFile={onDeleteDocumentFile}
-          onOpenDocument={onOpenDocument}
-          onDownloadDocument={onDownloadDocument}
-        />
+        <div ref={detailBlockRef} className="scroll-mt-4">
+          <ContextDetailBlock
+            event={event}
+            selection={contextSelection}
+            onToggleOption={onToggleOption}
+            onRenameOption={onRenameOption}
+            onCreateOptionItem={onCreateOptionItem}
+            onDeleteOptionItem={onDeleteOptionItem}
+            onToggleOptionAssignee={onToggleOptionAssignee}
+            teamMembers={teamMembers}
+            onRenameLink={onRenameLink}
+            onSaveLinkEntries={onSaveLinkEntries}
+            onRenameDocumentGroup={onRenameDocumentGroup}
+            onUploadDocument={onUploadDocument}
+            onDeleteDocumentFile={onDeleteDocumentFile}
+            onOpenDocument={onOpenDocument}
+            onDownloadDocument={onDownloadDocument}
+          />
+        </div>
       </div>
     </section>
   );
