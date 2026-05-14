@@ -34,6 +34,11 @@ import {
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Card } from "@/components/ui/card";
+import {
+  publicHolidays,
+  schoolHolidaysZoneC,
+  type CalendarMarker,
+} from "@/lib/calendar-markers";
 import { cn } from "@/lib/utils";
 import {
   supabase,
@@ -254,6 +259,16 @@ const monthNames = [
 
 function formatDateKey(date: Date) {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+}
+
+function isDateKeyInMarker(dateKey: string, marker: CalendarMarker) {
+  if (marker.date) return marker.date === dateKey;
+  if (!marker.start || !marker.end) return false;
+  return dateKey >= marker.start && dateKey <= marker.end;
+}
+
+function getCalendarMarkers(dateKey: string) {
+  return [...publicHolidays, ...schoolHolidaysZoneC].filter((marker) => isDateKeyInMarker(dateKey, marker));
 }
 
 function formatTime(time: string | null) {
@@ -1873,19 +1888,61 @@ export default function Home() {
     downloadLink.remove();
   }
 
-  async function deleteCurrentEvent() {
+  async function deleteCurrentEvent(eventToDelete: ProductionEvent) {
     if (!supabase) {
       throw new Error("Configuration Supabase manquante.");
     }
 
-    if (!selectedEvent) {
+    if (!eventToDelete) {
       throw new Error("Aucun événement sélectionné.");
     }
 
-    const eventId = selectedEvent.id;
-    const { error: deleteError } = await supabase.from("events").delete().eq("id", eventId);
+    const eventId = eventToDelete.id;
+    console.log("Deleting current event", {
+      eventId,
+      selectedEventId: selectedEvent?.id ?? null,
+      clientName: eventToDelete.clientName,
+      eventName: eventToDelete.eventName,
+    });
+
+    const documentObjectPaths = eventToDelete.documentGroups
+      .flatMap((group) => group.files)
+      .map((file) => file.filePath.replace(`${eventDocumentsBucket}/`, ""));
+
+    if (documentObjectPaths.length > 0) {
+      const { data: storageData, error: storageError } = await supabase.storage.from(eventDocumentsBucket).remove(documentObjectPaths);
+      console.log("Event document storage delete response", {
+        eventId,
+        objectPaths: documentObjectPaths,
+        data: storageData,
+        errorMessage: storageError?.message,
+      });
+
+      if (storageError) {
+        console.warn("Event document storage cleanup failed; continuing event deletion", {
+          eventId,
+          errorMessage: storageError.message,
+        });
+      }
+    }
+
+    const { data: deleteData, error: deleteError, status, statusText } = await supabase.from("events").delete().eq("id", eventId).select("id");
+
+    console.log("Supabase event delete response", {
+      eventId,
+      data: deleteData,
+      status,
+      statusText,
+      errorMessage: deleteError?.message,
+      errorCode: deleteError?.code,
+      errorDetails: deleteError?.details,
+      errorHint: deleteError?.hint,
+    });
 
     if (deleteError) throw deleteError;
+    if (!deleteData || deleteData.length === 0) {
+      throw new Error(`Aucun événement supprimé pour l'id ${eventId}.`);
+    }
 
     setEvents((current) => current.filter((event) => event.id !== eventId));
     setSelectedId(null);
@@ -1952,6 +2009,11 @@ export default function Home() {
           }}
           canDeleteEvent={screen === "detail" && Boolean(selectedEvent)}
           onDeleteEvent={() => {
+            console.log("Delete event menu action clicked", {
+              eventId: selectedEvent?.id ?? null,
+              clientName: selectedEvent?.clientName ?? null,
+              eventName: selectedEvent?.eventName ?? null,
+            });
             setDeleteDialogOpen(true);
             setCreateMenuOpen(false);
           }}
@@ -2098,6 +2160,22 @@ function AppHeader({
   canDeleteEvent: boolean;
   onDeleteEvent: () => void;
 }) {
+  const menuWrapperRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (!createMenuOpen) return;
+
+    function handlePointerDown(event: PointerEvent) {
+      const target = event.target;
+      if (!(target instanceof Node)) return;
+      if (menuWrapperRef.current?.contains(target)) return;
+      setCreateMenuOpen(false);
+    }
+
+    document.addEventListener("pointerdown", handlePointerDown);
+    return () => document.removeEventListener("pointerdown", handlePointerDown);
+  }, [createMenuOpen, setCreateMenuOpen]);
+
   return (
     <header className="relative mb-5 flex items-center justify-between gap-2 px-1 py-1">
       <div className="flex min-w-0 items-center gap-2 sm:gap-3">
@@ -2126,24 +2204,26 @@ function AppHeader({
           </button>
         )}
         <HeaderIcon label="Rechercher" icon={Search} />
-        <button
-          onClick={() => setCreateMenuOpen((current) => !current)}
-          className="flex h-10 w-10 items-center justify-center rounded-full bg-[#bb2720] text-base font-semibold leading-none text-white transition hover:bg-[#a7211b]"
-          aria-label="Créer"
-        >
-          +
-        </button>
+        <div ref={menuWrapperRef} className="relative">
+          <button
+            onClick={() => setCreateMenuOpen((current) => !current)}
+            className="flex h-10 w-10 items-center justify-center rounded-full bg-[#bb2720] text-base font-semibold leading-none text-white transition hover:bg-[#a7211b]"
+            aria-label="Créer"
+          >
+            +
+          </button>
+          {createMenuOpen && (
+            <CreateMenu
+              onImportQuote={onImportQuote}
+              onCreateEvent={onCreateEvent}
+              canEditEvent={canEditEvent}
+              onEditEvent={onEditEvent}
+              canDeleteEvent={canDeleteEvent}
+              onDeleteEvent={onDeleteEvent}
+            />
+          )}
+        </div>
       </div>
-      {createMenuOpen && (
-        <CreateMenu
-          onImportQuote={onImportQuote}
-          onCreateEvent={onCreateEvent}
-          canEditEvent={canEditEvent}
-          onEditEvent={onEditEvent}
-          canDeleteEvent={canDeleteEvent}
-          onDeleteEvent={onDeleteEvent}
-        />
-      )}
     </header>
   );
 }
@@ -2214,7 +2294,7 @@ function CalendarDashboard({
   setSelectedDateKey: (dateKey: string) => void;
   changeMonth: (delta: number) => void;
 }) {
-  const weekdays = ["Lun", "Mar", "Mer", "Jeu", "Ven", "Sam", "Dim"];
+  const weekdays = ["L", "M", "M", "J", "V", "S", "D"];
   const year = visibleMonth.getFullYear();
   const month = visibleMonth.getMonth();
   const monthTitle = monthNames[month];
@@ -2230,11 +2310,13 @@ function CalendarDashboard({
     return {
       day,
       events: events.filter((event) => event.date === dateKey),
+      markers: getCalendarMarkers(dateKey),
       dateKey,
     };
   });
   const selectedDay = calendarDays.find((day) => day.dateKey === selectedDateKey);
   const selectedEvents = [...(selectedDay?.events ?? [])].sort((a, b) => eventSortValue(a) - eventSortValue(b));
+  const selectedMarkers = selectedDay?.markers ?? [];
 
   useEffect(() => {
     const [selectedYear, selectedMonth] = selectedDateKey.split("-").map(Number);
@@ -2259,49 +2341,79 @@ function CalendarDashboard({
           </button>
         </div>
       </div>
-      <Card className="premium-surface overflow-hidden p-0">
-        <div className="grid grid-cols-7 border-b border-stone-200 bg-white/50">
-          {weekdays.map((weekday) => (
-            <div key={weekday} className="px-1 py-3 text-center text-base font-medium uppercase tracking-[0.12em] text-stone-400">
-              <span className="lg:hidden">{weekday.slice(0, 1)}</span>
-              <span className="hidden lg:inline">{weekday}</span>
+      <div className="overflow-hidden rounded-[1.75rem] bg-white/70 p-0">
+        <div className="grid grid-cols-7">
+          {weekdays.map((weekday, index) => (
+            <div key={`${weekday}-${index}`} className="flex min-w-0 items-center justify-center px-1 py-2.5 text-base font-semibold uppercase tracking-normal text-stone-500">
+              <span className="block w-full text-center leading-none">{weekday}</span>
             </div>
           ))}
         </div>
         <div className="grid grid-cols-7">
           {Array.from({ length: leadingEmptyDays }).map((_, index) => (
-            <div key={`empty-${index}`} className="h-[56px] border-b border-r border-stone-200/70 bg-white/20 lg:h-[112px]" />
+            <div key={`empty-${index}`} className="h-[70px] border-b border-stone-200/45 bg-white/25 sm:h-[88px] lg:h-[128px]" />
           ))}
-          {calendarDays.map(({ day, events: dayEvents, dateKey }, index) => {
+          {calendarDays.map(({ day, events: dayEvents, markers, dateKey }, index) => {
             const position = leadingEmptyDays + index;
-            const isLastColumn = position % 7 === 6;
             const isLastRow = position >= totalCells - 7;
+            const isWeekend = position % 7 >= 5;
             const isCurrentDay = dateKey === todayKey;
             const isSelected = dateKey === selectedDateKey;
+            const publicHolidayMarker = markers.find((marker) => marker.type === "publicHoliday");
+            const schoolHolidayMarker = markers.find((marker) => marker.type === "schoolHoliday");
+            const markerLabel = markers.map((marker) => marker.label).join(" • ");
+            const dayDots = [
+              publicHolidayMarker ? { key: "public-holiday", className: "bg-sky-400/80" } : null,
+              schoolHolidayMarker ? { key: "school-holiday", className: "bg-amber-400/80" } : null,
+              ...dayEvents.slice(0, 4).map((event) => ({ key: event.id, className: "bg-[#bb2720]" })),
+            ].filter(Boolean).slice(0, 4) as { key: string; className: string }[];
 
             return (
               <button
                 key={dateKey}
                 onClick={() => setSelectedDateKey(dateKey)}
+                title={markerLabel || undefined}
                 className={cn(
-                  "flex h-[56px] flex-col items-center justify-start gap-1 bg-white/55 px-1 py-2 transition hover:bg-white lg:h-[112px] lg:items-start lg:p-4",
-                  !isLastColumn && "border-r border-stone-200/70",
-                  !isLastRow && "border-b border-stone-200/70",
+                  "group flex h-[70px] flex-col items-center justify-start gap-1 bg-white/35 px-1 py-2.5 transition hover:bg-white/80 sm:h-[88px] sm:py-3 lg:h-[128px] lg:px-2 lg:py-4",
+                  schoolHolidayMarker && "bg-amber-50/60 hover:bg-amber-50/85",
+                  publicHolidayMarker && "bg-sky-50/70 hover:bg-sky-50/90",
+                  !isLastRow && "border-b border-stone-200/45",
                 )}
               >
-                <span
-                  className={cn(
-                    "flex h-7 w-7 items-center justify-center rounded-full text-base font-medium text-stone-500 lg:h-9 lg:w-9",
-                    isSelected && "bg-[#bb2720] text-white",
-                    !isSelected && isCurrentDay && "text-[#bb2720]",
+                <span className="flex w-full items-start justify-center gap-1">
+                  <span
+                    className={cn(
+                      "flex h-8 w-8 items-center justify-center rounded-full text-lg font-semibold text-stone-800 lg:h-10 lg:w-10 lg:text-xl",
+                      isWeekend && !isSelected && "text-stone-500",
+                      isSelected && "bg-[#bb2720] text-white",
+                      !isSelected && isCurrentDay && "text-[#bb2720]",
+                    )}
+                  >
+                    {day}
+                  </span>
+                  {markers.length > 0 && (
+                    <span className="mt-1 hidden min-w-0 flex-wrap justify-end gap-1 lg:flex">
+                      {publicHolidayMarker && <span className="h-1.5 w-1.5 rounded-full bg-sky-400/80" />}
+                      {schoolHolidayMarker && <span className="h-1.5 w-1.5 rounded-full bg-amber-400/80" />}
+                    </span>
                   )}
-                >
-                  {day}
                 </span>
+                {dayDots.length > 0 && (
+                  <span className="flex min-h-3 w-full items-center justify-center gap-0.5 px-0.5 lg:hidden">
+                    {dayDots.map((dot) => (
+                      <span key={dot.key} className={cn("h-1.5 w-1.5 shrink-0 rounded-full", dot.className)} />
+                    ))}
+                  </span>
+                )}
+                {markers.length > 0 && (
+                  <span className="hidden max-w-full truncate text-base font-semibold leading-tight text-stone-500 opacity-0 transition group-hover:opacity-100 lg:block">
+                    {markers[0].label}
+                  </span>
+                )}
                 {dayEvents.length > 0 && (
-                  <span className="flex max-w-full gap-0.5 overflow-hidden lg:mt-2 lg:gap-1">
+                  <span className="hidden max-w-full gap-0.5 lg:mt-2 lg:flex lg:gap-1">
                     {dayEvents.slice(0, 3).map((event) => (
-                      <span key={event.id} className="h-1.5 w-1.5 shrink-0 rounded-full bg-[#bb2720] lg:h-2 lg:w-2" />
+                      <span key={event.id} className="h-2 w-2 shrink-0 rounded-full bg-[#bb2720] lg:h-2.5 lg:w-2.5" />
                     ))}
                   </span>
                 )}
@@ -2309,25 +2421,31 @@ function CalendarDashboard({
             );
           })}
           {Array.from({ length: trailingEmptyDays }).map((_, index) => (
-            <div key={`trailing-${index}`} className="h-[56px] border-l border-stone-200/70 bg-white/20 lg:h-[112px]" />
+            <div key={`trailing-${index}`} className="h-[70px] bg-white/25 sm:h-[88px] lg:h-[128px]" />
           ))}
         </div>
-      </Card>
-      <SelectedDayEvents events={selectedEvents} onOpen={onOpen} onEdit={onEdit} />
+      </div>
+      <SelectedDayEvents markers={selectedMarkers} events={selectedEvents} onOpen={onOpen} onEdit={onEdit} />
     </section>
   );
 }
 
 function SelectedDayEvents({
+  markers,
   events,
   onOpen,
   onEdit,
 }: {
+  markers: CalendarMarker[];
   events: ProductionEvent[];
   onOpen: (id: string) => void;
   onEdit: (event: ProductionEvent) => void;
 }) {
-  if (events.length === 0) return null;
+  if (markers.length === 0 && events.length === 0) return null;
+  const orderedMarkers = [...markers].sort((a, b) => {
+    if (a.type === b.type) return 0;
+    return a.type === "publicHoliday" ? -1 : 1;
+  });
 
   return (
     <section className="space-y-1.5 lg:space-y-2">
@@ -2367,6 +2485,26 @@ function SelectedDayEvents({
           )}
         </div>
       ))}
+      {orderedMarkers.map((marker) => {
+        const isPublicHoliday = marker.type === "publicHoliday";
+        return (
+          <div
+            key={`${marker.type}-${marker.label}-${marker.date ?? marker.start}`}
+            className={cn(
+              "relative grid min-h-20 w-full grid-cols-[3px_1fr] items-center gap-4 rounded-xl bg-white/70 px-4 py-4 text-left lg:gap-5 lg:px-5",
+              isPublicHoliday ? "bg-sky-50/80" : "bg-amber-50/80",
+            )}
+          >
+            <span className={cn("h-full min-h-14 rounded-full", isPublicHoliday ? "bg-sky-400" : "bg-amber-400")} />
+            <span className="min-w-0">
+              <span className={cn("block text-base font-semibold leading-snug", isPublicHoliday ? "text-sky-950" : "text-amber-950")}>{marker.label}</span>
+              <span className={cn("block truncate text-base font-medium", isPublicHoliday ? "text-sky-600" : "text-amber-700")}>
+                {isPublicHoliday ? "Jour férié" : "Vacances scolaires Zone C"}
+              </span>
+            </span>
+          </div>
+        );
+      })}
     </section>
   );
 }
@@ -4058,19 +4196,28 @@ function DeleteEventDialog({
 }: {
   event: ProductionEvent;
   onClose: () => void;
-  onConfirm: () => Promise<void>;
+  onConfirm: (event: ProductionEvent) => Promise<void>;
 }) {
   const [deleting, setDeleting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [debugStatus, setDebugStatus] = useState<string | null>(null);
 
   async function handleConfirm() {
+    console.log("Delete event confirmation clicked", {
+      eventId: event.id,
+      clientName: event.clientName,
+      eventName: event.eventName,
+    });
     setDeleting(true);
     setError(null);
+    setDebugStatus(`Suppression demandée pour ${event.id}`);
 
     try {
-      await onConfirm();
+      await onConfirm(event);
+      setDebugStatus("Événement supprimé.");
     } catch (deleteError) {
       setError(deleteError instanceof Error ? deleteError.message : "Impossible de supprimer l'événement.");
+      setDebugStatus("La suppression a échoué.");
       setDeleting(false);
     }
   }
@@ -4086,6 +4233,7 @@ function DeleteEventDialog({
         </div>
 
         {error && <div className="mb-4 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-base font-medium text-rose-700">{error}</div>}
+        {debugStatus && <div className="mb-4 rounded-2xl border border-stone-200 bg-stone-50 px-4 py-3 text-base font-medium text-stone-600">{debugStatus}</div>}
 
         <div className="flex justify-end gap-2">
           <button

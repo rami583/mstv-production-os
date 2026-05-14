@@ -1,0 +1,25 @@
+{
+  "name": "MSTV Production OS",
+  "short_name": "MSTV",
+  "description": "Production planning OS for Mon Studio TV.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#f7f9fb",
+  "theme_color": "#bb2720",
+  "orientation": "portrait",
+  "icons": [
+    {
+      "src": "/icons/mstv-icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/icons/mstv-icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}
