@@ -992,7 +992,11 @@ export default function Home() {
   }
 
   function changeMonth(delta: number) {
-    setVisibleMonth((current) => new Date(current.getFullYear(), current.getMonth() + delta, 1));
+    setVisibleMonth((current) => {
+      const nextMonth = new Date(current.getFullYear(), current.getMonth() + delta, 1);
+      setSelectedDateKey(getPreferredDateKeyForMonth(nextMonth, events));
+      return nextMonth;
+    });
   }
 
   function goToday() {
@@ -2297,49 +2301,53 @@ function CalendarDashboard({
   const weekdays = ["L", "M", "M", "J", "V", "S", "D"];
   const todayKey = formatDateKey(new Date());
   const currentMonthData = useMemo(() => getCalendarMonthData(visibleMonth, events), [events, visibleMonth]);
-  const [monthTransition, setMonthTransition] = useState<{ direction: -1 | 1; stage: "idle" | "animating" }>({ direction: 1, stage: "idle" });
-  const transitionMonthData = useMemo(
-    () => getCalendarMonthData(new Date(visibleMonth.getFullYear(), visibleMonth.getMonth() + monthTransition.direction, 1), events),
-    [events, monthTransition.direction, visibleMonth],
-  );
-  const selectedDay = currentMonthData.calendarDays.find((day) => day.dateKey === selectedDateKey);
-  const selectedEvents = [...(selectedDay?.events ?? [])].sort((a, b) => eventSortValue(a) - eventSortValue(b));
-  const selectedMarkers = selectedDay?.markers ?? [];
-  const [monthSwipeOffset, setMonthSwipeOffset] = useState(0);
-  const [isMonthSwiping, setIsMonthSwiping] = useState(false);
+  const previousMonthData = useMemo(() => getCalendarMonthData(new Date(visibleMonth.getFullYear(), visibleMonth.getMonth() - 1, 1), events), [events, visibleMonth]);
+  const nextMonthData = useMemo(() => getCalendarMonthData(new Date(visibleMonth.getFullYear(), visibleMonth.getMonth() + 1, 1), events), [events, visibleMonth]);
+  const currentSelectedDateKey = isDateKeyInMonth(selectedDateKey, currentMonthData)
+    ? selectedDateKey
+    : getPreferredDateKeyForMonth(visibleMonth, events);
+  const previousSelectedDateKey = getPreferredDateKeyForMonth(new Date(visibleMonth.getFullYear(), visibleMonth.getMonth() - 1, 1), events);
+  const nextSelectedDateKey = getPreferredDateKeyForMonth(new Date(visibleMonth.getFullYear(), visibleMonth.getMonth() + 1, 1), events);
+  const [pagerOffset, setPagerOffset] = useState(0);
+  const [isPagerDragging, setIsPagerDragging] = useState(false);
+  const [pagerAnimatingDirection, setPagerAnimatingDirection] = useState<-1 | 1 | null>(null);
+  const pagerViewportRef = useRef<HTMLDivElement | null>(null);
   const monthSwipeStartRef = useRef<{ pointerId: number; x: number; y: number; axis: "horizontal" | "vertical" | null } | null>(null);
   const suppressMonthClickRef = useRef(false);
 
   useEffect(() => {
-    const [selectedYear, selectedMonth] = selectedDateKey.split("-").map(Number);
-    if (selectedYear === currentMonthData.year && selectedMonth === currentMonthData.month + 1) {
-      return;
+    if (!isDateKeyInMonth(selectedDateKey, currentMonthData)) {
+      setSelectedDateKey(getPreferredDateKeyForMonth(visibleMonth, events));
     }
-
-    const firstEventInMonth = currentMonthData.calendarDays.find((day) => day.events.length > 0);
-    setSelectedDateKey(firstEventInMonth?.dateKey ?? `${currentMonthData.year}-${String(currentMonthData.month + 1).padStart(2, "0")}-01`);
-  }, [currentMonthData, selectedDateKey, setSelectedDateKey]);
+  }, [currentMonthData, events, selectedDateKey, setSelectedDateKey, visibleMonth]);
 
   function animateMonthChange(direction: -1 | 1) {
-    if (monthTransition.stage === "animating") return;
+    if (pagerAnimatingDirection) return;
 
-    setMonthSwipeOffset(0);
-    setMonthTransition({ direction, stage: "animating" });
+    const viewportWidth = pagerViewportRef.current?.clientWidth ?? 0;
+    setIsPagerDragging(false);
+    setPagerAnimatingDirection(direction);
+    setPagerOffset(direction === 1 ? -viewportWidth : viewportWidth);
     window.setTimeout(() => {
+      setIsPagerDragging(true);
       changeMonth(direction);
-      setMonthTransition((current) => ({ direction: current.direction, stage: "idle" }));
-    }, 260);
+      setPagerAnimatingDirection(null);
+      setPagerOffset(0);
+      window.requestAnimationFrame(() => setIsPagerDragging(false));
+    }, 300);
   }
 
   function handleMonthSwipePointerDown(pointerEvent: ReactPointerEvent<HTMLDivElement>) {
+    if (pagerAnimatingDirection) return;
+
     monthSwipeStartRef.current = {
       pointerId: pointerEvent.pointerId,
       x: pointerEvent.clientX,
       y: pointerEvent.clientY,
       axis: null,
     };
-    setIsMonthSwiping(true);
-    setMonthSwipeOffset(0);
+    setIsPagerDragging(true);
+    setPagerOffset(0);
     pointerEvent.currentTarget.setPointerCapture(pointerEvent.pointerId);
   }
 
@@ -2360,7 +2368,8 @@ function CalendarDashboard({
 
     suppressMonthClickRef.current = true;
     pointerEvent.preventDefault();
-    setMonthSwipeOffset(Math.max(-28, Math.min(28, deltaX * 0.24)));
+    const viewportWidth = pagerViewportRef.current?.clientWidth ?? pointerEvent.currentTarget.clientWidth;
+    setPagerOffset(Math.max(-viewportWidth, Math.min(viewportWidth, deltaX)));
   }
 
   function handleMonthSwipePointerUp(pointerEvent: ReactPointerEvent<HTMLDivElement>) {
@@ -2369,17 +2378,18 @@ function CalendarDashboard({
 
     const deltaX = pointerEvent.clientX - swipeStart.x;
     const deltaY = pointerEvent.clientY - swipeStart.y;
-    const swipeThreshold = Math.min(90, Math.max(52, pointerEvent.currentTarget.clientWidth * 0.18));
+    const viewportWidth = pagerViewportRef.current?.clientWidth ?? pointerEvent.currentTarget.clientWidth;
+    const swipeThreshold = Math.min(120, Math.max(56, viewportWidth * 0.18));
     const isHorizontalSwipe = swipeStart.axis === "horizontal" && Math.abs(deltaX) > Math.abs(deltaY) * 1.2;
 
     monthSwipeStartRef.current = null;
-    setIsMonthSwiping(false);
-    setMonthSwipeOffset(0);
     window.setTimeout(() => {
       suppressMonthClickRef.current = false;
     }, 0);
 
     if (!isHorizontalSwipe || Math.abs(deltaX) < swipeThreshold) {
+      setIsPagerDragging(false);
+      setPagerOffset(0);
       return;
     }
 
@@ -2388,41 +2398,130 @@ function CalendarDashboard({
 
   function resetMonthSwipe() {
     monthSwipeStartRef.current = null;
-    setIsMonthSwiping(false);
-    setMonthSwipeOffset(0);
+    setIsPagerDragging(false);
+    setPagerOffset(0);
     suppressMonthClickRef.current = false;
   }
 
   return (
-    <section className="flex min-h-0 flex-1 flex-col gap-4 overflow-hidden">
-      <div className="shrink-0">
-        <div className="flex items-end justify-between px-1 pt-1">
-          <h1 className="text-4xl font-semibold leading-none text-stone-950 sm:text-6xl">{currentMonthData.monthTitle}</h1>
-          <div className="flex items-center gap-2">
-            <button onClick={() => animateMonthChange(-1)} className={calendarArrowClassName} aria-label="Mois précédent">
-              ←
-            </button>
-            <button onClick={() => animateMonthChange(1)} className={calendarArrowClassName} aria-label="Mois suivant">
-              →
-            </button>
-          </div>
-        </div>
-        <div
-          onPointerDown={handleMonthSwipePointerDown}
-          onPointerMove={handleMonthSwipePointerMove}
-          onPointerUp={handleMonthSwipePointerUp}
-          onPointerCancel={resetMonthSwipe}
-          onClickCapture={(clickEvent) => {
+    <section ref={pagerViewportRef} className="min-h-0 flex-1 overflow-hidden">
+      <div
+        className={cn(
+          "flex h-full w-full",
+          !isPagerDragging && "transition-transform duration-300 ease-out",
+        )}
+        style={{ transform: `translate3d(calc(-100% + ${pagerOffset}px), 0, 0)` }}
+      >
+        <CalendarMonthPage
+          monthData={previousMonthData}
+          selectedDateKey={previousSelectedDateKey}
+          todayKey={todayKey}
+          weekdays={weekdays}
+          onSelectDate={setSelectedDateKey}
+          onOpen={onOpen}
+          onDeleteRequest={onDeleteRequest}
+          onPreviousMonth={() => animateMonthChange(-1)}
+          onNextMonth={() => animateMonthChange(1)}
+          interactive={false}
+        />
+        <CalendarMonthPage
+          monthData={currentMonthData}
+          selectedDateKey={currentSelectedDateKey}
+          todayKey={todayKey}
+          weekdays={weekdays}
+          onSelectDate={setSelectedDateKey}
+          onOpen={onOpen}
+          onDeleteRequest={onDeleteRequest}
+          onPreviousMonth={() => animateMonthChange(-1)}
+          onNextMonth={() => animateMonthChange(1)}
+          onCalendarPointerDown={handleMonthSwipePointerDown}
+          onCalendarPointerMove={handleMonthSwipePointerMove}
+          onCalendarPointerUp={handleMonthSwipePointerUp}
+          onCalendarPointerCancel={resetMonthSwipe}
+          onCalendarClickCapture={(clickEvent) => {
             if (!suppressMonthClickRef.current) return;
             suppressMonthClickRef.current = false;
             clickEvent.preventDefault();
             clickEvent.stopPropagation();
           }}
-          style={{ transform: `translateX(${monthSwipeOffset}px)`, touchAction: "pan-y" }}
-          className={cn(
-            "mt-4 overflow-hidden rounded-[1.75rem] bg-white/70 p-0",
-            !isMonthSwiping && "transition-transform duration-200 ease-out",
-          )}
+          interactive={!pagerAnimatingDirection}
+        />
+        <CalendarMonthPage
+          monthData={nextMonthData}
+          selectedDateKey={nextSelectedDateKey}
+          todayKey={todayKey}
+          weekdays={weekdays}
+          onSelectDate={setSelectedDateKey}
+          onOpen={onOpen}
+          onDeleteRequest={onDeleteRequest}
+          onPreviousMonth={() => animateMonthChange(-1)}
+          onNextMonth={() => animateMonthChange(1)}
+          interactive={false}
+        />
+      </div>
+    </section>
+  );
+}
+
+function CalendarMonthPage({
+  monthData,
+  selectedDateKey,
+  todayKey,
+  weekdays,
+  onSelectDate,
+  onOpen,
+  onDeleteRequest,
+  onPreviousMonth,
+  onNextMonth,
+  onCalendarPointerDown,
+  onCalendarPointerMove,
+  onCalendarPointerUp,
+  onCalendarPointerCancel,
+  onCalendarClickCapture,
+  interactive,
+}: {
+  monthData: ReturnType<typeof getCalendarMonthData>;
+  selectedDateKey: string;
+  todayKey: string;
+  weekdays: string[];
+  onSelectDate: (dateKey: string) => void;
+  onOpen: (id: string) => void;
+  onDeleteRequest: (event: ProductionEvent) => void;
+  onPreviousMonth: () => void;
+  onNextMonth: () => void;
+  onCalendarPointerDown?: (event: ReactPointerEvent<HTMLDivElement>) => void;
+  onCalendarPointerMove?: (event: ReactPointerEvent<HTMLDivElement>) => void;
+  onCalendarPointerUp?: (event: ReactPointerEvent<HTMLDivElement>) => void;
+  onCalendarPointerCancel?: () => void;
+  onCalendarClickCapture?: (event: React.MouseEvent<HTMLDivElement>) => void;
+  interactive: boolean;
+}) {
+  const selectedDay = monthData.calendarDays.find((day) => day.dateKey === selectedDateKey);
+  const selectedEvents = [...(selectedDay?.events ?? [])].sort((a, b) => eventSortValue(a) - eventSortValue(b));
+  const selectedMarkers = selectedDay?.markers ?? [];
+
+  return (
+    <div className={cn("flex h-full w-full shrink-0 flex-col gap-4 overflow-hidden", !interactive && "pointer-events-none")}>
+      <div className="shrink-0">
+        <div className="flex items-end justify-between px-1 pt-1">
+          <h1 className="text-4xl font-semibold leading-none text-stone-950 sm:text-6xl">{monthData.monthTitle}</h1>
+          <div className="flex items-center gap-2">
+            <button onClick={onPreviousMonth} className={calendarArrowClassName} aria-label="Mois précédent" tabIndex={interactive ? 0 : -1}>
+              ←
+            </button>
+            <button onClick={onNextMonth} className={calendarArrowClassName} aria-label="Mois suivant" tabIndex={interactive ? 0 : -1}>
+              →
+            </button>
+          </div>
+        </div>
+        <div
+          onPointerDown={onCalendarPointerDown}
+          onPointerMove={onCalendarPointerMove}
+          onPointerUp={onCalendarPointerUp}
+          onPointerCancel={onCalendarPointerCancel}
+          onClickCapture={onCalendarClickCapture}
+          style={{ touchAction: "pan-y" }}
+          className="mt-4 overflow-hidden rounded-[1.75rem] bg-white/70 p-0"
         >
           <div className="grid grid-cols-7">
             {weekdays.map((weekday, index) => (
@@ -2431,36 +2530,19 @@ function CalendarDashboard({
               </div>
             ))}
           </div>
-          <div className="relative overflow-hidden">
-            <CalendarMonthGrid
-              monthData={currentMonthData}
-              selectedDateKey={selectedDateKey}
-              todayKey={todayKey}
-              onSelectDate={setSelectedDateKey}
-              className={cn(
-                monthTransition.stage === "animating" && "transition-transform duration-[260ms] ease-out",
-                monthTransition.stage === "animating" && (monthTransition.direction === 1 ? "-translate-x-full" : "translate-x-full"),
-              )}
-              interactive={monthTransition.stage !== "animating"}
-            />
-            {monthTransition.stage === "animating" && (
-              <CalendarMonthGrid
-                monthData={transitionMonthData}
-                selectedDateKey={selectedDateKey}
-                todayKey={todayKey}
-                onSelectDate={setSelectedDateKey}
-                className="pointer-events-none absolute inset-0"
-                initialSide={monthTransition.direction === 1 ? "right" : "left"}
-                interactive={false}
-              />
-            )}
-          </div>
+          <CalendarMonthGrid
+            monthData={monthData}
+            selectedDateKey={selectedDateKey}
+            todayKey={todayKey}
+            onSelectDate={onSelectDate}
+            interactive={interactive}
+          />
         </div>
       </div>
       <div className="no-scrollbar min-h-0 flex-1 overflow-y-auto overscroll-contain pb-2">
         <SelectedDayEvents markers={selectedMarkers} events={selectedEvents} onOpen={onOpen} onDeleteRequest={onDeleteRequest} />
       </div>
-    </section>
+    </div>
   );
 }
 
@@ -2494,13 +2576,29 @@ function getCalendarMonthData(monthDate: Date, events: ProductionEvent[]) {
   };
 }
 
+function isDateKeyInMonth(dateKey: string, monthData: ReturnType<typeof getCalendarMonthData>) {
+  const [dateYear, dateMonth] = dateKey.split("-").map(Number);
+  return dateYear === monthData.year && dateMonth === monthData.month + 1;
+}
+
+function getPreferredDateKeyForMonth(monthDate: Date, events: ProductionEvent[]) {
+  const todayDateKey = formatDateKey(new Date());
+  const monthData = getCalendarMonthData(monthDate, events);
+
+  if (isDateKeyInMonth(todayDateKey, monthData)) {
+    return todayDateKey;
+  }
+
+  const firstEventInMonth = monthData.calendarDays.find((day) => day.events.length > 0);
+  return firstEventInMonth?.dateKey ?? `${monthData.year}-${String(monthData.month + 1).padStart(2, "0")}-01`;
+}
+
 function CalendarMonthGrid({
   monthData,
   selectedDateKey,
   todayKey,
   onSelectDate,
   className,
-  initialSide,
   interactive = true,
 }: {
   monthData: ReturnType<typeof getCalendarMonthData>;
@@ -2508,15 +2606,12 @@ function CalendarMonthGrid({
   todayKey: string;
   onSelectDate: (dateKey: string) => void;
   className?: string;
-  initialSide?: "left" | "right";
   interactive?: boolean;
 }) {
   return (
     <div
       className={cn(
         "grid grid-cols-7 transition-transform duration-[260ms] ease-out",
-        initialSide === "right" && "calendar-month-slide-in-right",
-        initialSide === "left" && "calendar-month-slide-in-left",
         className,
       )}
     >
