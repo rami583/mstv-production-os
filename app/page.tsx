@@ -1984,7 +1984,7 @@ export default function Home() {
           setGlobalQuoteDragActive(false);
           openQuoteImport(pdfFile);
         }}
-        className="relative mx-auto flex h-full min-h-0 w-full max-w-7xl flex-col px-4 pb-[calc(1rem+env(safe-area-inset-bottom))] pt-[calc(1rem+env(safe-area-inset-top))] sm:px-6 lg:px-8"
+        className="relative mx-auto flex h-full min-h-0 w-full max-w-7xl flex-col px-4 pb-[calc(1.25rem+env(safe-area-inset-bottom))] pt-[calc(1.25rem+env(safe-area-inset-top))] sm:px-6 sm:pb-[calc(1.5rem+env(safe-area-inset-bottom))] sm:pt-[calc(1.5rem+env(safe-area-inset-top))] lg:px-8"
       >
         <AppHeader
           screen={screen}
@@ -2539,7 +2539,7 @@ function CalendarMonthPage({
           />
         </div>
       </div>
-      <div className="no-scrollbar min-h-0 flex-1 overflow-y-auto overscroll-contain pb-2">
+      <div className="no-scrollbar min-h-0 flex-1 overflow-y-auto overscroll-contain pb-5">
         <SelectedDayEvents markers={selectedMarkers} events={selectedEvents} onOpen={onOpen} onDeleteRequest={onDeleteRequest} />
       </div>
     </div>
@@ -3039,7 +3039,7 @@ function ProductionDetail({
       const detailBounds = detailBlock.getBoundingClientRect();
       const detailTop = detailBounds.top - containerBounds.top + scrollContainer.scrollTop;
       const detailBottom = detailTop + detailBounds.height;
-      const scrollMargin = 16;
+      const scrollMargin = 22;
       const visibleTop = scrollContainer.scrollTop;
       const visibleBottom = visibleTop + scrollContainer.clientHeight;
 
@@ -3179,7 +3179,7 @@ function ProductionDetail({
         <ProductionTimeline event={event} onUpdateTime={onUpdateEventTime} />
       </Card>
 
-      <div ref={detailScrollContainerRef} className="no-scrollbar min-h-0 flex-1 space-y-5 overflow-y-auto overscroll-contain pb-2">
+      <div ref={detailScrollContainerRef} className="no-scrollbar min-h-0 flex-1 space-y-5 overflow-y-auto overscroll-contain pb-6">
         <Card className="premium-surface overflow-hidden p-3 sm:p-5">
         <div className="grid grid-cols-[repeat(3,minmax(0,1fr))] gap-1.5 sm:gap-4 lg:items-start">
           <div className="min-w-0">
