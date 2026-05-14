@@ -16,6 +16,7 @@ import {
   FileStack,
   FileText,
   FileSpreadsheet,
+  Import,
   KeyRound,
   Link,
   MonitorPlay,
@@ -172,7 +173,6 @@ type CreateEventInput = {
 };
 
 type QuoteExtractionResult = {
-  quoteReference: string;
   clientName: string;
   eventName: string;
   date: string;
@@ -365,6 +365,20 @@ function parseFrenchDateToKey(value: string) {
   return `${year}-${monthByName[monthName]}-${day.padStart(2, "0")}`;
 }
 
+function parseFrenchTimeMatch(hours: string, minutes?: string) {
+  return normalizeCompactTimeInput(`${hours}${minutes ?? ""}`);
+}
+
+function parseFrenchTimeRange(value: string) {
+  const match = value.match(/\b(\d{1,2})\s*(?:h|H|:)\s*(\d{2})?\s*(?:-|–|—|à|a|jusqu(?:'|’)?a)\s*(\d{1,2})\s*(?:h|H|:)\s*(\d{2})?\b/i);
+  if (!match) return { startTime: "", endTime: "" };
+
+  return {
+    startTime: parseFrenchTimeMatch(match[1], match[2]),
+    endTime: parseFrenchTimeMatch(match[3], match[4]),
+  };
+}
+
 function findLineValue(lines: string[], patterns: RegExp[]) {
   for (const line of lines) {
     for (const pattern of patterns) {
@@ -373,6 +387,54 @@ function findLineValue(lines: string[], patterns: RegExp[]) {
     }
   }
   return "";
+}
+
+function extractMstvClientName(lines: string[]) {
+  const stopPattern = /\b(code client|devis|date|validit[eé]|total|adresse|t[eé]l|email|siret|tva)\b/i;
+  const rejectedPattern = /^(?:cl\d+|code client|client|date|devis|n[°o]|#)/i;
+
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index];
+    const addressedMatch = line.match(/adress[eé]\s*[àa]\s*:?\s*(.*)$/i);
+    if (!addressedMatch) continue;
+
+    const candidates = [addressedMatch[1], ...lines.slice(index + 1, index + 8)]
+      .map((candidate) => candidate.replace(/\s+/g, " ").trim())
+      .filter(Boolean);
+
+    for (const candidate of candidates) {
+      if (stopPattern.test(candidate) && !addressedMatch[1]) break;
+      if (rejectedPattern.test(candidate)) continue;
+      if (/\b\d{4,5}\b/.test(candidate)) continue;
+      if (/\d+\s+(?:rue|avenue|boulevard|bd|place|impasse|chemin|route|quai)\b/i.test(candidate)) continue;
+      if (candidate.length < 2 || candidate.length > 80) continue;
+      return formatTitleCase(candidate);
+    }
+  }
+
+  return "";
+}
+
+function findMstvProductionLine(lines: string[]) {
+  const withDateAndRange = lines.find((line) => parseFrenchDateToKey(line) && parseFrenchTimeRange(line).startTime);
+  if (withDateAndRange) return withDateAndRange;
+
+  const compactText = lines.join(" ");
+  const match = compactText.match(/([^.:\n]*(?:le\s+)?\d{1,2}\s+[A-Za-zéûîôàèùç]+\s+\d{4}\s+(?:de\s+)?\d{1,2}\s*(?:h|H|:)\s*\d{0,2}\s*(?:-|–|—|à|a)\s*\d{1,2}\s*(?:h|H|:)\s*\d{0,2}[^.:\n]*)/i);
+  return match?.[1]?.trim() ?? "";
+}
+
+function extractMstvEventName(productionLine: string) {
+  if (!productionLine) return "";
+  const title = productionLine
+    .replace(/\s+(?:le\s+)?\d{1,2}\s+[A-Za-zéûîôàèùç]+\s+\d{4}.*$/i, "")
+    .replace(/\s+tout\s+[ée]quip[ée](?:\s|$).*$/i, "")
+    .replace(/\s+de\s+\d{1,2}\s*(?:h|H|:).*$/i, "")
+    .trim();
+  if (!title) return "";
+
+  const sentenceTitle = title.toLocaleLowerCase("fr-FR");
+  return `${sentenceTitle.charAt(0).toLocaleUpperCase("fr-FR")}${sentenceTitle.slice(1)}`;
 }
 
 function extractQuoteServices(text: string) {
@@ -403,19 +465,19 @@ function extractQuoteFields(text: string, fallbackDate: string, fileName: string
     .map((line) => line.replace(/\s+/g, " ").trim())
     .filter(Boolean);
   const compactText = lines.join(" ");
-  const quoteReference =
-    findLineValue(lines, [
-      /\b(?:devis|référence|reference|ref\.?)\s*(?:n[°o]\s*)?[:#-]?\s*([A-Z0-9][A-Z0-9._/-]{2,})/i,
-      /\bn[°o]\s*devis\s*[:#-]?\s*([A-Z0-9][A-Z0-9._/-]{2,})/i,
-    ]) || "";
-  const clientName = formatTitleCase(
-    findLineValue(lines, [
-      /\bclient\s*[:#-]\s*(.+)$/i,
-      /\bsoci[eé]t[eé]\s*[:#-]\s*(.+)$/i,
-      /\bentreprise\s*[:#-]\s*(.+)$/i,
-    ]),
-  );
+  const productionLine = findMstvProductionLine(lines);
+  const productionTimeRange = parseFrenchTimeRange(productionLine);
+  const clientName =
+    extractMstvClientName(lines) ||
+    formatTitleCase(
+      findLineValue(lines, [
+        /\bclient\s*[:#-]\s*(.+)$/i,
+        /\bsoci[eé]t[eé]\s*[:#-]\s*(.+)$/i,
+        /\bentreprise\s*[:#-]\s*(.+)$/i,
+      ]),
+    );
   const eventName =
+    extractMstvEventName(productionLine) ||
     formatTitleCase(
       findLineValue(lines, [
         /\b(?:événement|evenement|event|projet|prestation)\s*[:#-]\s*(.+)$/i,
@@ -423,23 +485,23 @@ function extractQuoteFields(text: string, fallbackDate: string, fileName: string
       ]),
     ) || formatTitleCase(fileName.replace(/\.[^.]+$/, "").replace(/[-_]+/g, " "));
   const date =
+    parseFrenchDateToKey(productionLine) ||
     parseFrenchDateToKey(
       findLineValue(lines, [
-        /\b(?:date|jour)\s*[:#-]\s*(.+)$/i,
+        /\b(?:date\s+(?:de\s+)?(?:l['’])?(?:événement|evenement)|jour\s+(?:de\s+)?(?:l['’])?(?:événement|evenement))\s*[:#-]\s*(.+)$/i,
         /\b(?:le)\s+(\d{1,2}\s+[A-Za-zéûîôàèùç]+\s+\d{4})\b/i,
-      ]) || compactText,
-    ) || fallbackDate;
-  const timeRangeMatch = compactText.match(/\b(\d{1,2})\s*[:hH]\s*(\d{2})\s*(?:-|–|—|à|a|jusqu(?:'|’)?a)\s*(\d{1,2})\s*[:hH]\s*(\d{2})\b/);
+      ]) || "",
+    ) ||
+    fallbackDate;
   const arrivalMatch = compactText.match(/\barriv[eé]e(?:\s+client)?\D{0,24}(\d{1,2})(?:\s*[:hH]\s*(\d{2}))?\b/i);
 
   return {
-    quoteReference,
     clientName,
     eventName,
     date,
     clientArrivalTime: arrivalMatch ? normalizeCompactTimeInput(`${arrivalMatch[1]}${arrivalMatch[2] ?? ""}`) : "",
-    startTime: timeRangeMatch ? normalizeCompactTimeInput(`${timeRangeMatch[1]}${timeRangeMatch[2]}`) : "",
-    endTime: timeRangeMatch ? normalizeCompactTimeInput(`${timeRangeMatch[3]}${timeRangeMatch[4]}`) : "",
+    startTime: productionTimeRange.startTime,
+    endTime: productionTimeRange.endTime,
     endOfDayTime: "",
     services: extractQuoteServices(text),
   };
@@ -870,6 +932,8 @@ export default function Home() {
   const [createMenuOpen, setCreateMenuOpen] = useState(false);
   const [createModalOpen, setCreateModalOpen] = useState(false);
   const [quoteImportOpen, setQuoteImportOpen] = useState(false);
+  const [quoteImportFile, setQuoteImportFile] = useState<File | null>(null);
+  const [globalQuoteDragActive, setGlobalQuoteDragActive] = useState(false);
   const [editingEvent, setEditingEvent] = useState<ProductionEvent | null>(null);
   const [editingReturnScreen, setEditingReturnScreen] = useState<Screen>("calendar");
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
@@ -927,6 +991,27 @@ export default function Home() {
     const nextEvent = chronologicalEvents[selectedEventIndex + delta];
     if (!nextEvent) return;
     setSelectedId(nextEvent.id);
+  }
+
+  function isPdfFile(file: File | null | undefined) {
+    return Boolean(file && (file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf")));
+  }
+
+  function getPdfFileFromTransfer(dataTransfer: DataTransfer) {
+    return Array.from(dataTransfer.files).find(isPdfFile) ?? null;
+  }
+
+  function hasPdfDragItem(dataTransfer: DataTransfer) {
+    return Array.from(dataTransfer.items).some((item) => {
+      if (item.kind !== "file") return false;
+      return item.type === "application/pdf";
+    });
+  }
+
+  function openQuoteImport(file: File | null = null) {
+    setQuoteImportFile(file);
+    setQuoteImportOpen(true);
+    setCreateMenuOpen(false);
   }
 
   async function createEvent(input: CreateEventInput) {
@@ -1812,7 +1897,34 @@ export default function Home() {
 
   return (
     <main className="relative min-h-screen overflow-hidden bg-[#f7f9fb] text-stone-950">
-      <div className="relative mx-auto flex min-h-screen w-full max-w-7xl flex-col px-4 py-4 sm:px-6 lg:px-8">
+      <div
+        onDragEnter={(event) => {
+          if (!hasPdfDragItem(event.dataTransfer)) return;
+          event.preventDefault();
+          setGlobalQuoteDragActive(true);
+        }}
+        onDragOver={(event) => {
+          if (!hasPdfDragItem(event.dataTransfer)) return;
+          event.preventDefault();
+          event.dataTransfer.dropEffect = "copy";
+          setGlobalQuoteDragActive(true);
+        }}
+        onDragLeave={(event) => {
+          if (event.currentTarget.contains(event.relatedTarget as Node | null)) return;
+          setGlobalQuoteDragActive(false);
+        }}
+        onDrop={(event) => {
+          const pdfFile = getPdfFileFromTransfer(event.dataTransfer);
+          if (!pdfFile) {
+            setGlobalQuoteDragActive(false);
+            return;
+          }
+          event.preventDefault();
+          setGlobalQuoteDragActive(false);
+          openQuoteImport(pdfFile);
+        }}
+        className="relative mx-auto flex min-h-screen w-full max-w-7xl flex-col px-4 py-4 sm:px-6 lg:px-8"
+      >
         <AppHeader
           screen={screen}
           setScreen={setScreen}
@@ -1822,8 +1934,7 @@ export default function Home() {
           createMenuOpen={createMenuOpen}
           setCreateMenuOpen={setCreateMenuOpen}
           onImportQuote={() => {
-            setQuoteImportOpen(true);
-            setCreateMenuOpen(false);
+            openQuoteImport();
           }}
           onCreateEvent={() => {
             setEditingEvent(null);
@@ -1900,6 +2011,15 @@ export default function Home() {
         )}
       </div>
 
+      {globalQuoteDragActive && (
+        <div className="pointer-events-none fixed inset-0 z-50 flex items-center justify-center bg-stone-950/10 p-4">
+          <div className="flex items-center gap-3 rounded-full border border-stone-200 bg-white/95 px-5 py-3 text-base font-semibold text-stone-800 backdrop-blur-xl">
+            <Import className="h-5 w-5 text-[#bb2720]" />
+            Déposer le devis pour l'importer
+          </div>
+        </div>
+      )}
+
       {createModalOpen && (
         <CreateEventModal
           selectedDateKey={selectedDateKey}
@@ -1924,11 +2044,16 @@ export default function Home() {
 
       {quoteImportOpen && (
         <QuoteImportModal
+          initialFile={quoteImportFile}
           selectedDateKey={selectedDateKey}
-          onClose={() => setQuoteImportOpen(false)}
+          onClose={() => {
+            setQuoteImportOpen(false);
+            setQuoteImportFile(null);
+          }}
           onConfirm={async (input) => {
             await createEvent(input);
             setQuoteImportOpen(false);
+            setQuoteImportFile(null);
           }}
         />
       )}
@@ -3740,17 +3865,18 @@ function CreateEventModal({
 }
 
 function QuoteImportModal({
+  initialFile,
   selectedDateKey,
   onClose,
   onConfirm,
 }: {
+  initialFile?: File | null;
   selectedDateKey: string;
   onClose: () => void;
   onConfirm: (input: CreateEventInput) => Promise<void>;
 }) {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [fileName, setFileName] = useState("");
-  const [quoteReference, setQuoteReference] = useState("");
   const [form, setForm] = useState<CreateEventInput>({
     clientName: "",
     eventName: "",
@@ -3766,6 +3892,7 @@ function QuoteImportModal({
   const [extracting, setExtracting] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const initialFileProcessedRef = useRef<File | null>(null);
 
   function updateField<Key extends keyof CreateEventInput>(key: Key, value: CreateEventInput[Key]) {
     setForm((current) => ({ ...current, [key]: value }));
@@ -3785,7 +3912,6 @@ function QuoteImportModal({
     try {
       const text = await extractPdfText(file);
       const extracted = extractQuoteFields(text, selectedDateKey, file.name);
-      setQuoteReference(extracted.quoteReference);
       setForm({
         clientName: extracted.clientName,
         eventName: extracted.eventName,
@@ -3805,6 +3931,12 @@ function QuoteImportModal({
       setExtracting(false);
     }
   }
+
+  useEffect(() => {
+    if (!initialFile || initialFileProcessedRef.current === initialFile) return;
+    initialFileProcessedRef.current = initialFile;
+    void handleFile(initialFile);
+  }, [initialFile]);
 
   async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -3861,9 +3993,6 @@ function QuoteImportModal({
         ) : (
           <>
             <div className="grid gap-3 sm:grid-cols-2">
-              <Field label="Référence devis">
-                <input value={quoteReference} onChange={(event) => setQuoteReference(event.target.value)} className={formInputClassName} />
-              </Field>
               <Field label="Client">
                 <input required value={form.clientName} onChange={(event) => updateField("clientName", event.target.value)} className={formInputClassName} />
               </Field>
