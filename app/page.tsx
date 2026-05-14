@@ -2030,11 +2030,6 @@ export default function Home() {
             onOpen={openEvent}
             visibleMonth={visibleMonth}
             selectedDateKey={selectedDateKey}
-            onEdit={(event) => {
-              setEditingEvent(event);
-              setEditingReturnScreen("calendar");
-              setCreateModalOpen(true);
-            }}
             onDeleteRequest={setDeleteDialogEvent}
             setSelectedDateKey={setSelectedDateKey}
             changeMonth={changeMonth}
@@ -2283,7 +2278,6 @@ function CreateMenu({
 function CalendarDashboard({
   events,
   onOpen,
-  onEdit,
   onDeleteRequest,
   visibleMonth,
   selectedDateKey,
@@ -2292,7 +2286,6 @@ function CalendarDashboard({
 }: {
   events: ProductionEvent[];
   onOpen: (id: string) => void;
-  onEdit: (event: ProductionEvent) => void;
   onDeleteRequest: (event: ProductionEvent) => void;
   visibleMonth: Date;
   selectedDateKey: string;
@@ -2430,7 +2423,7 @@ function CalendarDashboard({
           ))}
         </div>
       </div>
-      <SelectedDayEvents markers={selectedMarkers} events={selectedEvents} onOpen={onOpen} onEdit={onEdit} onDeleteRequest={onDeleteRequest} />
+      <SelectedDayEvents markers={selectedMarkers} events={selectedEvents} onOpen={onOpen} onDeleteRequest={onDeleteRequest} />
     </section>
   );
 }
@@ -2439,13 +2432,11 @@ function SelectedDayEvents({
   markers,
   events,
   onOpen,
-  onEdit,
   onDeleteRequest,
 }: {
   markers: CalendarMarker[];
   events: ProductionEvent[];
   onOpen: (id: string) => void;
-  onEdit: (event: ProductionEvent) => void;
   onDeleteRequest: (event: ProductionEvent) => void;
 }) {
   const [openDeleteEventId, setOpenDeleteEventId] = useState<string | null>(null);
@@ -2489,7 +2480,6 @@ function SelectedDayEvents({
           onOpenDelete={() => setOpenDeleteEventId(event.id)}
           onCloseDelete={() => setOpenDeleteEventId(null)}
           onOpenEvent={onOpen}
-          onEdit={onEdit}
           onDeleteRequest={(eventToDelete) => {
             setOpenDeleteEventId(null);
             onDeleteRequest(eventToDelete);
@@ -2529,7 +2519,6 @@ function SwipeableCalendarEventRow({
   onOpenDelete,
   onCloseDelete,
   onOpenEvent,
-  onEdit,
   onDeleteRequest,
 }: {
   event: ProductionEvent;
@@ -2538,7 +2527,6 @@ function SwipeableCalendarEventRow({
   onOpenDelete: () => void;
   onCloseDelete: () => void;
   onOpenEvent: (id: string) => void;
-  onEdit: (event: ProductionEvent) => void;
   onDeleteRequest: (event: ProductionEvent) => void;
 }) {
   const [dragOffset, setDragOffset] = useState(0);
@@ -2665,19 +2653,7 @@ function SwipeableCalendarEventRow({
           <span className="block text-base font-semibold leading-snug text-stone-950">{event.clientName}</span>
           <span className="block truncate text-base text-stone-500">{event.eventName}</span>
         </span>
-        <button
-          type="button"
-          data-swipe-action
-          onClick={(clickEvent) => {
-            clickEvent.stopPropagation();
-            onCloseDelete();
-            onEdit(event);
-          }}
-          className="absolute right-3 top-2 rounded-full border border-stone-200 bg-white px-3 py-1 text-base font-semibold text-stone-500 transition hover:border-stone-300 hover:text-stone-800"
-        >
-          Modifier
-        </button>
-        {timeRange && <span className="pl-2 pt-6 text-right text-base font-medium text-stone-500 sm:pt-5">{timeRange}</span>}
+        {timeRange && <span className="pl-2 text-right text-base font-medium text-stone-500">{timeRange}</span>}
       </div>
     </div>
   );
