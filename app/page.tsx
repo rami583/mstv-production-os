@@ -2881,8 +2881,8 @@ function ProductionDetail({
         <ProductionTimeline event={event} onUpdateTime={onUpdateEventTime} />
       </Card>
 
-      <Card className="premium-surface p-3 sm:p-5">
-        <div className="grid grid-cols-3 gap-2 sm:gap-4 lg:items-start">
+      <Card className="premium-surface overflow-hidden p-3 sm:p-5">
+        <div className="grid grid-cols-[repeat(3,minmax(0,1fr))] gap-1.5 sm:gap-4 lg:items-start">
           <div className="min-w-0">
             <SectionHeader
               label="Options"
@@ -2924,7 +2924,7 @@ function ProductionDetail({
                     )}
                   >
                     <button onClick={() => selectOption(option)} className="flex min-h-16 min-w-0 flex-1 items-center gap-1.5 px-2 py-3 text-left sm:gap-2 sm:px-3">
-                      <Icon className={cn("h-5 w-5 shrink-0", optionTone.icon)} />
+                      <Icon className={cn("h-4 w-4 shrink-0 sm:h-5 sm:w-5", optionTone.icon)} />
                       <span className={cn("min-w-0 flex-1 truncate pr-1 text-base font-semibold", optionTone.text)}>{option.label}</span>
                       {option.status === "incomplete" && optionAssigneeInitials && (
                         <span className="ml-auto mr-6 shrink-0 rounded-full border border-emerald-300 bg-white/75 px-2 py-0.5 text-base font-bold leading-tight text-emerald-800">
@@ -2997,8 +2997,8 @@ function ProductionDetail({
                     )}
                   >
                     <button onClick={() => selectLink(link)} className="flex min-h-16 min-w-0 flex-1 items-center gap-1.5 px-2 py-3 text-left sm:gap-2 sm:px-3">
-                      <Icon className={cn("h-5 w-5 shrink-0", linkTone.icon)} />
-                      <span className={cn("truncate pr-5 text-base font-semibold", linkTone.text)}>{link.label}</span>
+                      <Icon className={cn("h-4 w-4 shrink-0 sm:h-5 sm:w-5", linkTone.icon)} />
+                      <span className={cn("min-w-0 flex-1 truncate pr-5 text-base font-semibold", linkTone.text)}>{link.label}</span>
                     </button>
                     <ExternalLink className="mr-8 hidden h-4 w-4 shrink-0 text-sky-400 sm:block" />
                     <button
@@ -3069,8 +3069,8 @@ function ProductionDetail({
                       onClick={() => selectDocumentGroup(group)}
                       className="flex min-h-16 min-w-0 flex-1 items-center gap-1.5 px-2 py-3 text-left sm:gap-2 sm:px-3"
                     >
-                      <Icon className={cn("h-5 w-5 shrink-0", documentTone.icon)} />
-                      <span className={cn("truncate pr-5 text-base font-semibold", documentTone.text)}>{group.label}</span>
+                      <Icon className={cn("h-4 w-4 shrink-0 sm:h-5 sm:w-5", documentTone.icon)} />
+                      <span className={cn("min-w-0 flex-1 truncate pr-5 text-base font-semibold", documentTone.text)}>{group.label}</span>
                     </button>
                     <button
                       onClick={(buttonEvent) => {
@@ -4517,11 +4517,18 @@ function SectionHeader({
         : "border-amber-200 bg-amber-50 text-amber-700 hover:border-amber-300 hover:bg-amber-100";
 
   return (
-    <div className={cn("mb-3 flex items-center gap-2", align === "right" ? "justify-end" : "justify-start")}>
-      <h2 className={cn("text-base font-semibold uppercase tracking-[0.16em] text-stone-500", align === "right" && "text-right")}>{label}</h2>
+    <div className={cn("mb-2 flex min-w-0 items-center gap-1 sm:mb-3 sm:gap-2", align === "right" ? "justify-end" : "justify-start")}>
+      <h2
+        className={cn(
+          "min-w-0 flex-1 truncate text-[0.7rem] font-semibold uppercase tracking-[0.08em] text-stone-500 sm:text-base sm:tracking-[0.16em]",
+          align === "right" && "text-right",
+        )}
+      >
+        {label}
+      </h2>
       <button
         onClick={onAdd}
-        className={cn("flex h-6 w-6 items-center justify-center rounded-full border text-base font-semibold leading-none transition", addTone)}
+        className={cn("flex h-5 w-5 shrink-0 items-center justify-center rounded-full border text-base font-semibold leading-none transition sm:h-6 sm:w-6", addTone)}
         aria-label={addLabel}
         title={addLabel}
       >
