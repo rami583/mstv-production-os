@@ -33,7 +33,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { Keyboard } from "@capacitor/keyboard";
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type TouchEvent as ReactTouchEvent } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { Card } from "@/components/ui/card";
 import {
   publicHolidays,
@@ -201,9 +201,6 @@ const PAGE_TRANSITION_EASING = "cubic-bezier(0.22, 1, 0.36, 1)";
 const PAGE_SWIPE_THRESHOLD_RATIO = 0.18;
 const PAGE_SWIPE_THRESHOLD_MIN = 58;
 const PAGE_SWIPE_THRESHOLD_MAX = 124;
-const EDGE_SWIPE_WIDTH = 32;
-
-type EdgeSwipeSide = "left" | "right";
 
 function getSwipePageStep(viewportWidth: number) {
   return viewportWidth + PAGE_GAP;
@@ -211,21 +208,6 @@ function getSwipePageStep(viewportWidth: number) {
 
 function getSwipeThreshold(viewportWidth: number) {
   return Math.min(PAGE_SWIPE_THRESHOLD_MAX, Math.max(PAGE_SWIPE_THRESHOLD_MIN, viewportWidth * PAGE_SWIPE_THRESHOLD_RATIO));
-}
-
-function getEdgeSwipeSide(clientX: number): EdgeSwipeSide | null {
-  if (typeof window === "undefined") return null;
-  if (clientX <= EDGE_SWIPE_WIDTH) return "left";
-  if (clientX >= window.innerWidth - EDGE_SWIPE_WIDTH) return "right";
-  return null;
-}
-
-function getDirectionForEdgeSwipe(edge: EdgeSwipeSide) {
-  return edge === "right" ? 1 : -1;
-}
-
-function isEdgeSwipeMovingInward(edge: EdgeSwipeSide, deltaX: number) {
-  return edge === "left" ? deltaX > 0 : deltaX < 0;
 }
 
 const statusStyles: Record<EventStatus, string> = {
@@ -2483,7 +2465,7 @@ function CalendarDashboard({
   const [pagerTransitionEnabled, setPagerTransitionEnabled] = useState(false);
   const [pagerAnimatingDirection, setPagerAnimatingDirection] = useState<-1 | 1 | null>(null);
   const pagerViewportRef = useRef<HTMLDivElement | null>(null);
-  const monthSwipeStartRef = useRef<{ pointerId: number; x: number; y: number; axis: "horizontal" | "vertical" | null; edge: EdgeSwipeSide } | null>(null);
+  const monthSwipeStartRef = useRef<{ pointerId: number; x: number; y: number; axis: "horizontal" | "vertical" | null } | null>(null);
   const monthTransitioningRef = useRef(false);
   const monthTransitionIdRef = useRef(0);
   const monthTransitionTimeoutRef = useRef<number | null>(null);
@@ -2540,15 +2522,12 @@ function CalendarDashboard({
 
   function handleMonthSwipePointerDown(pointerEvent: ReactPointerEvent<HTMLDivElement>) {
     if (monthTransitioningRef.current) return;
-    const edge = getEdgeSwipeSide(pointerEvent.clientX);
-    if (!edge || (pointerEvent.target instanceof HTMLElement && pointerEvent.target.closest("input, textarea, select, button, a, label, [contenteditable='true'], [role='button'], [data-no-event-swipe]"))) return;
 
     monthSwipeStartRef.current = {
       pointerId: pointerEvent.pointerId,
       x: pointerEvent.clientX,
       y: pointerEvent.clientY,
       axis: null,
-      edge,
     };
     setPagerTransitionEnabled(false);
     setPagerOffset(0);
@@ -2574,10 +2553,6 @@ function CalendarDashboard({
 
     suppressMonthClickRef.current = true;
     pointerEvent.preventDefault();
-    if (!isEdgeSwipeMovingInward(swipeStart.edge, deltaX)) {
-      setPagerOffset(0);
-      return;
-    }
 
     const viewportWidth = pagerViewportRef.current?.clientWidth ?? pointerEvent.currentTarget.clientWidth;
     const pageStep = getSwipePageStep(viewportWidth);
@@ -2595,14 +2570,13 @@ function CalendarDashboard({
     const viewportWidth = pagerViewportRef.current?.clientWidth ?? pointerEvent.currentTarget.clientWidth;
     const swipeThreshold = getSwipeThreshold(viewportWidth);
     const isHorizontalSwipe = swipeStart.axis === "horizontal" && Math.abs(deltaX) > Math.abs(deltaY) * 1.2;
-    const isInwardEdgeSwipe = isEdgeSwipeMovingInward(swipeStart.edge, deltaX);
 
     monthSwipeStartRef.current = null;
     window.setTimeout(() => {
       suppressMonthClickRef.current = false;
     }, 0);
 
-    if (!isHorizontalSwipe || !isInwardEdgeSwipe || Math.abs(deltaX) < swipeThreshold) {
+    if (!isHorizontalSwipe || Math.abs(deltaX) < swipeThreshold) {
       setPagerTransitionEnabled(true);
       setPagerOffset(0);
       window.setTimeout(() => {
@@ -2613,7 +2587,7 @@ function CalendarDashboard({
       return;
     }
 
-    animateMonthChange(getDirectionForEdgeSwipe(swipeStart.edge));
+    animateMonthChange(deltaX < 0 ? 1 : -1);
   }
 
   function resetMonthSwipe() {
@@ -3236,7 +3210,7 @@ function ProductionDetail({
   const detailBlockRef = useRef<HTMLDivElement | null>(null);
   const previousContextSelectionKeyRef = useRef<string | null>(null);
   const eventSwipeViewportRef = useRef<HTMLDivElement | null>(null);
-  const eventSwipeStartRef = useRef<{ pointerId: number | "touch"; x: number; y: number; axis: "horizontal" | "vertical" | null; edge: EdgeSwipeSide } | null>(null);
+  const eventSwipeStartRef = useRef<{ pointerId: number; x: number; y: number; axis: "horizontal" | "vertical" | null } | null>(null);
   const eventSwipeResetAfterEventChangeRef = useRef(false);
   const suppressEventSwipeClickRef = useRef(false);
   const [eventSwipeOffset, setEventSwipeOffset] = useState(0);
@@ -3414,15 +3388,8 @@ function ProductionDetail({
     }
   }
 
-  function shouldIgnoreEventSwipe(target: EventTarget | null) {
-    return (
-      !(target instanceof HTMLElement) ||
-      Boolean(
-        target.closest(
-          "input, textarea, select, button, a, label, [contenteditable='true'], [role='button'], [data-no-event-swipe]",
-        ),
-      )
-    );
+  function isTouchEventSwipeTarget(target: EventTarget | null) {
+    return target instanceof HTMLElement && !target.closest("input, textarea, select, button, a, [contenteditable='true']");
   }
 
   function resetEventSwipe() {
@@ -3460,19 +3427,18 @@ function ProductionDetail({
     }, PAGE_TRANSITION_MS);
   }
 
-  function beginEventSwipe(pointerId: number | "touch", clientX: number, clientY: number, edge: EdgeSwipeSide) {
+  function beginEventSwipe(pointerId: number, clientX: number, clientY: number) {
     eventSwipeStartRef.current = {
       pointerId,
       x: clientX,
       y: clientY,
       axis: null,
-      edge,
     };
     suppressEventSwipeClickRef.current = false;
     setIsEventSwipeDragging(true);
   }
 
-  function updateEventSwipe(pointerId: number | "touch", clientX: number, clientY: number, currentTargetWidth: number, preventDefault: () => void) {
+  function updateEventSwipe(pointerId: number, clientX: number, clientY: number, currentTargetWidth: number, preventDefault: () => void) {
     const swipeStart = eventSwipeStartRef.current;
     if (!swipeStart || swipeStart.pointerId !== pointerId || eventSwipeAnimating) return;
 
@@ -3492,21 +3458,15 @@ function ProductionDetail({
 
     preventDefault();
     suppressEventSwipeClickRef.current = true;
-    if (!isEdgeSwipeMovingInward(swipeStart.edge, deltaX)) {
-      setEventSwipeOffset(0);
-      setEventSwipeIncomingOffset(0);
-      setEventSwipeIncomingEvent(null);
-      return;
-    }
 
-    const direction = getDirectionForEdgeSwipe(swipeStart.edge);
-    const canNavigate = direction === 1 ? hasNext : hasPrevious;
+    const canNavigate = deltaX < 0 ? hasNext : hasPrevious;
     const viewportWidth = eventSwipeViewportRef.current?.clientWidth ?? currentTargetWidth;
     const pageStep = getSwipePageStep(viewportWidth);
     const resistedOffset = canNavigate ? deltaX : deltaX * 0.22;
     const boundedOffset = Math.max(-pageStep, Math.min(pageStep, resistedOffset));
     setEventSwipeOffset(boundedOffset);
 
+    const direction = deltaX < 0 ? 1 : -1;
     const incomingEvent = direction === 1 ? nextEvent : previousEvent;
     if (canNavigate && incomingEvent) {
       const incomingStartOffset = direction === 1 ? pageStep : -pageStep;
@@ -3518,19 +3478,18 @@ function ProductionDetail({
     }
   }
 
-  function finishEventSwipe(pointerId: number | "touch", clientX: number, currentTargetWidth: number) {
+  function finishEventSwipe(pointerId: number, clientX: number, currentTargetWidth: number) {
     const swipeStart = eventSwipeStartRef.current;
     if (!swipeStart || swipeStart.pointerId !== pointerId) return;
 
     const deltaX = clientX - swipeStart.x;
     const viewportWidth = eventSwipeViewportRef.current?.clientWidth ?? currentTargetWidth;
     const swipeThreshold = getSwipeThreshold(viewportWidth);
-    const direction = getDirectionForEdgeSwipe(swipeStart.edge);
     eventSwipeStartRef.current = null;
     setIsEventSwipeDragging(false);
 
-    if (swipeStart.axis === "horizontal" && isEdgeSwipeMovingInward(swipeStart.edge, deltaX) && Math.abs(deltaX) >= swipeThreshold) {
-      animateEventNavigation(direction);
+    if (swipeStart.axis === "horizontal" && Math.abs(deltaX) >= swipeThreshold) {
+      animateEventNavigation(deltaX < 0 ? 1 : -1);
       return;
     }
 
@@ -3540,12 +3499,10 @@ function ProductionDetail({
   }
 
   function handleEventSwipePointerDown(pointerEvent: ReactPointerEvent<HTMLDivElement>) {
-    if (eventSwipeStartRef.current || eventSwipeAnimating || pointerEvent.pointerType === "mouse" || shouldIgnoreEventSwipe(pointerEvent.target)) return;
+    if (eventSwipeStartRef.current || eventSwipeAnimating || pointerEvent.pointerType === "mouse" || !isTouchEventSwipeTarget(pointerEvent.target)) return;
     if (typeof window !== "undefined" && !window.matchMedia("(hover: none), (pointer: coarse)").matches) return;
-    const edge = getEdgeSwipeSide(pointerEvent.clientX);
-    if (!edge) return;
 
-    beginEventSwipe(pointerEvent.pointerId, pointerEvent.clientX, pointerEvent.clientY, edge);
+    beginEventSwipe(pointerEvent.pointerId, pointerEvent.clientX, pointerEvent.clientY);
     pointerEvent.currentTarget.setPointerCapture(pointerEvent.pointerId);
   }
 
@@ -3557,49 +3514,10 @@ function ProductionDetail({
     finishEventSwipe(pointerEvent.pointerId, pointerEvent.clientX, pointerEvent.currentTarget.clientWidth);
   }
 
-  function handleEventSwipeTouchStart(touchEvent: ReactTouchEvent<HTMLDivElement>) {
-    const touch = touchEvent.changedTouches.item(0);
-    if (!touch || eventSwipeStartRef.current || eventSwipeAnimating || shouldIgnoreEventSwipe(touchEvent.target)) return;
-    if (typeof window !== "undefined" && !window.matchMedia("(hover: none), (pointer: coarse)").matches) return;
-    const edge = getEdgeSwipeSide(touch.clientX);
-    if (!edge) return;
-
-    beginEventSwipe("touch", touch.clientX, touch.clientY, edge);
-  }
-
-  function handleEventSwipeTouchMove(touchEvent: ReactTouchEvent<HTMLDivElement>) {
-    const touch = touchEvent.changedTouches.item(0);
-    if (!touch) return;
-
-    updateEventSwipe("touch", touch.clientX, touch.clientY, touchEvent.currentTarget.clientWidth, () => touchEvent.preventDefault());
-  }
-
-  function handleEventSwipeTouchEnd(touchEvent: ReactTouchEvent<HTMLDivElement>) {
-    const touch = touchEvent.changedTouches.item(0);
-    if (!touch) return;
-
-    finishEventSwipe("touch", touch.clientX, touchEvent.currentTarget.clientWidth);
-  }
-
   return (
     <div
       ref={eventSwipeViewportRef}
       className="relative flex min-h-0 flex-1 overflow-hidden"
-      onPointerDown={handleEventSwipePointerDown}
-      onPointerMove={handleEventSwipePointerMove}
-      onPointerUp={handleEventSwipePointerUp}
-      onPointerCancel={resetEventSwipe}
-      onTouchStartCapture={handleEventSwipeTouchStart}
-      onTouchMoveCapture={handleEventSwipeTouchMove}
-      onTouchEndCapture={handleEventSwipeTouchEnd}
-      onTouchCancelCapture={resetEventSwipe}
-      onClickCapture={(clickEvent) => {
-        if (!suppressEventSwipeClickRef.current) return;
-        clickEvent.preventDefault();
-        clickEvent.stopPropagation();
-        suppressEventSwipeClickRef.current = false;
-      }}
-      style={{ touchAction: "pan-y" }}
     >
       {eventSwipeIncomingEvent && (
         <EventSwipePreview
@@ -3618,7 +3536,17 @@ function ProductionDetail({
         }}
       >
       <Card
-        className="premium-surface shrink-0 p-5 sm:p-8"
+        className="premium-surface shrink-0 touch-pan-y p-5 sm:p-8"
+        onPointerDown={handleEventSwipePointerDown}
+        onPointerMove={handleEventSwipePointerMove}
+        onPointerUp={handleEventSwipePointerUp}
+        onPointerCancel={resetEventSwipe}
+        onClickCapture={(clickEvent) => {
+          if (!suppressEventSwipeClickRef.current) return;
+          clickEvent.preventDefault();
+          clickEvent.stopPropagation();
+          suppressEventSwipeClickRef.current = false;
+        }}
       >
         <div className="flex items-start justify-between gap-4">
           <div className="min-w-0 flex-1">
