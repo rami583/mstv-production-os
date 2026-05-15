@@ -2505,7 +2505,7 @@ function CalendarMonthPage({
       <div className="shrink-0">
         <div className="flex items-end justify-between px-1 pt-1">
           <h1 className="text-4xl font-semibold leading-none text-stone-950 sm:text-6xl">{monthData.monthTitle}</h1>
-          <div className="flex items-center gap-2">
+          <div className="hidden items-center gap-2 sm:flex">
             <button onClick={onPreviousMonth} className={calendarArrowClassName} aria-label="Mois précédent" tabIndex={interactive ? 0 : -1}>
               ←
             </button>
