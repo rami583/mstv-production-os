@@ -5965,8 +5965,25 @@ function SharedDatePicker({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const pickerSwipeStartRef = useRef<{ pointerId: number; x: number; y: number; axis: "horizontal" | "vertical" | null } | null>(null);
+  const pickerPagerRef = useRef<HTMLDivElement | null>(null);
+  const pickerTransitioningRef = useRef(false);
+  const pickerTransitionTimeoutRef = useRef<number | null>(null);
+  const suppressPickerClickRef = useRef(false);
+  const [pickerPagerOffset, setPickerPagerOffset] = useState(0);
+  const [pickerTransitionEnabled, setPickerTransitionEnabled] = useState(false);
+  const [pickerAnimatingDirection, setPickerAnimatingDirection] = useState<-1 | 1 | null>(null);
   const weekdays = ["L", "M", "M", "J", "V", "S", "D"];
   const monthData = useMemo(() => getCalendarMonthData(pickerMonth, []), [pickerMonth]);
+  const previousMonthData = useMemo(() => getCalendarMonthData(new Date(pickerMonth.getFullYear(), pickerMonth.getMonth() - 1, 1), []), [pickerMonth]);
+  const nextMonthData = useMemo(() => getCalendarMonthData(new Date(pickerMonth.getFullYear(), pickerMonth.getMonth() + 1, 1), []), [pickerMonth]);
+
+  useEffect(() => {
+    return () => {
+      if (pickerTransitionTimeoutRef.current) {
+        window.clearTimeout(pickerTransitionTimeoutRef.current);
+      }
+    };
+  }, []);
 
   function selectDate(dateKey: string) {
     if (dateKey === selectedDate) {
@@ -6001,12 +6018,37 @@ function SharedDatePicker({
   }
 
   function changePickerMonth(delta: -1 | 1) {
-    if (saving) return;
-    setPickerMonth((current) => new Date(current.getFullYear(), current.getMonth() + delta, 1));
+    if (saving || pickerTransitioningRef.current) return;
+
+    const viewportWidth = pickerPagerRef.current?.clientWidth ?? 0;
+    const pageStep = getSwipePageStep(viewportWidth);
+    pickerTransitioningRef.current = true;
+    pickerSwipeStartRef.current = null;
+    setPickerTransitionEnabled(true);
+    setPickerAnimatingDirection(delta);
+    setPickerPagerOffset(delta === 1 ? -pageStep : pageStep);
+
+    if (pickerTransitionTimeoutRef.current) {
+      window.clearTimeout(pickerTransitionTimeoutRef.current);
+    }
+
+    pickerTransitionTimeoutRef.current = window.setTimeout(() => {
+      setPickerTransitionEnabled(false);
+      setPickerMonth((current) => new Date(current.getFullYear(), current.getMonth() + delta, 1));
+      setPickerAnimatingDirection(null);
+      setPickerPagerOffset(0);
+
+      window.requestAnimationFrame(() => {
+        window.requestAnimationFrame(() => {
+          pickerTransitioningRef.current = false;
+          pickerTransitionTimeoutRef.current = null;
+        });
+      });
+    }, PAGE_TRANSITION_MS);
   }
 
   function handlePickerSwipePointerDown(pointerEvent: ReactPointerEvent<HTMLDivElement>) {
-    if (saving || pendingDate || pointerEvent.pointerType === "mouse") return;
+    if (saving || pendingDate || pointerEvent.pointerType === "mouse" || pickerTransitioningRef.current) return;
 
     pickerSwipeStartRef.current = {
       pointerId: pointerEvent.pointerId,
@@ -6014,10 +6056,14 @@ function SharedDatePicker({
       y: pointerEvent.clientY,
       axis: null,
     };
+    setPickerTransitionEnabled(false);
+    setPickerPagerOffset(0);
     pointerEvent.currentTarget.setPointerCapture(pointerEvent.pointerId);
   }
 
   function handlePickerSwipePointerMove(pointerEvent: ReactPointerEvent<HTMLDivElement>) {
+    if (pickerTransitioningRef.current) return;
+
     const swipeStart = pickerSwipeStartRef.current;
     if (!swipeStart || swipeStart.pointerId !== pointerEvent.pointerId) return;
 
@@ -6029,86 +6075,106 @@ function SharedDatePicker({
     }
 
     if (swipeStart.axis === "horizontal") {
+      suppressPickerClickRef.current = true;
       pointerEvent.preventDefault();
+      const viewportWidth = pickerPagerRef.current?.clientWidth ?? pointerEvent.currentTarget.clientWidth;
+      const pageStep = getSwipePageStep(viewportWidth);
+      setPickerPagerOffset(Math.max(-pageStep, Math.min(pageStep, deltaX)));
     }
   }
 
   function handlePickerSwipePointerUp(pointerEvent: ReactPointerEvent<HTMLDivElement>) {
+    if (pickerTransitioningRef.current) return;
+
     const swipeStart = pickerSwipeStartRef.current;
     if (!swipeStart || swipeStart.pointerId !== pointerEvent.pointerId) return;
 
     const deltaX = pointerEvent.clientX - swipeStart.x;
     const deltaY = pointerEvent.clientY - swipeStart.y;
+    const viewportWidth = pickerPagerRef.current?.clientWidth ?? pointerEvent.currentTarget.clientWidth;
+    const swipeThreshold = getSwipeThreshold(viewportWidth);
     pickerSwipeStartRef.current = null;
+    window.setTimeout(() => {
+      suppressPickerClickRef.current = false;
+    }, 0);
 
-    if (swipeStart.axis !== "horizontal" || Math.abs(deltaX) < 48 || Math.abs(deltaX) < Math.abs(deltaY) * 1.2) return;
+    if (swipeStart.axis !== "horizontal" || Math.abs(deltaX) < swipeThreshold || Math.abs(deltaX) < Math.abs(deltaY) * 1.2) {
+      setPickerTransitionEnabled(true);
+      setPickerPagerOffset(0);
+      window.setTimeout(() => {
+        if (!pickerTransitioningRef.current) {
+          setPickerTransitionEnabled(false);
+        }
+      }, PAGE_TRANSITION_MS);
+      return;
+    }
+
     changePickerMonth(deltaX < 0 ? 1 : -1);
   }
 
   function resetPickerSwipe() {
+    if (pickerTransitioningRef.current) return;
+
     pickerSwipeStartRef.current = null;
+    suppressPickerClickRef.current = false;
+    setPickerTransitionEnabled(false);
+    setPickerPagerOffset(0);
   }
 
   return (
     <div className="fixed inset-0 z-50 flex items-end justify-center bg-stone-950/10 p-3 sm:items-center sm:p-6">
       <div className="w-full max-w-sm rounded-3xl border border-stone-200 bg-white p-3 sm:p-4">
-        <div className="mb-2 flex items-center justify-between gap-2 px-1">
-          <button
-            type="button"
-            onClick={() => changePickerMonth(-1)}
-            disabled={saving}
-            className={cn(calendarArrowClassName, "hidden sm:flex")}
-            aria-label="Mois précédent"
-          >
-            ←
-          </button>
-          <p className="text-base font-semibold text-stone-950">
-            {monthNames[monthData.month]} {monthData.year}
-          </p>
-          <button
-            type="button"
-            onClick={() => changePickerMonth(1)}
-            disabled={saving}
-            className={cn(calendarArrowClassName, "hidden sm:flex")}
-            aria-label="Mois suivant"
-          >
-            →
-          </button>
-        </div>
-
         <div
-          className="grid grid-cols-7 px-1"
+          ref={pickerPagerRef}
+          className="overflow-hidden"
           style={{ touchAction: "pan-y" }}
           onPointerDown={handlePickerSwipePointerDown}
           onPointerMove={handlePickerSwipePointerMove}
           onPointerUp={handlePickerSwipePointerUp}
           onPointerCancel={resetPickerSwipe}
         >
-          {weekdays.map((weekday, index) => (
-            <span key={`${weekday}-${index}`} className="py-2 text-center text-xs font-semibold text-stone-400">
-              {weekday}
-            </span>
-          ))}
-          {Array.from({ length: monthData.leadingEmptyDays }).map((_, index) => (
-            <span key={`empty-start-${index}`} className="aspect-square" />
-          ))}
-          {monthData.calendarDays.map((day) => {
-            const isSelected = day.dateKey === selectedDate;
-            return (
-              <button
-                key={day.dateKey}
-                type="button"
-                onClick={() => selectDate(day.dateKey)}
-                disabled={saving}
-                className="flex aspect-square items-center justify-center rounded-full text-base font-semibold text-stone-800 transition hover:bg-stone-100 disabled:text-stone-300"
-              >
-                <span className={cn("flex h-9 w-9 items-center justify-center rounded-full", isSelected && "bg-[#bb2720] text-white")}>{day.day}</span>
-              </button>
-            );
-          })}
-          {Array.from({ length: monthData.trailingEmptyDays }).map((_, index) => (
-            <span key={`empty-end-${index}`} className="aspect-square" />
-          ))}
+          <div
+            className="flex w-full"
+            style={{
+              gap: PAGE_GAP,
+              transform: `translate3d(calc(-100% - ${PAGE_GAP}px + ${pickerPagerOffset}px), 0, 0)`,
+              transition: pickerTransitionEnabled ? `transform ${PAGE_TRANSITION_MS}ms ${PAGE_TRANSITION_EASING}` : undefined,
+            }}
+          >
+            <DatePickerMonthPage
+              monthData={previousMonthData}
+              selectedDate={selectedDate}
+              weekdays={weekdays}
+              saving={saving}
+              interactive={false}
+              onPreviousMonth={() => changePickerMonth(-1)}
+              onNextMonth={() => changePickerMonth(1)}
+              onSelectDate={selectDate}
+            />
+            <DatePickerMonthPage
+              monthData={monthData}
+              selectedDate={selectedDate}
+              weekdays={weekdays}
+              saving={saving}
+              interactive={!pickerAnimatingDirection}
+              onPreviousMonth={() => changePickerMonth(-1)}
+              onNextMonth={() => changePickerMonth(1)}
+              onSelectDate={(dateKey) => {
+                if (suppressPickerClickRef.current) return;
+                selectDate(dateKey);
+              }}
+            />
+            <DatePickerMonthPage
+              monthData={nextMonthData}
+              selectedDate={selectedDate}
+              weekdays={weekdays}
+              saving={saving}
+              interactive={false}
+              onPreviousMonth={() => changePickerMonth(-1)}
+              onNextMonth={() => changePickerMonth(1)}
+              onSelectDate={selectDate}
+            />
+          </div>
         </div>
 
         {error && <div className="mt-3 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-base font-medium text-rose-700">{error}</div>}
@@ -6153,6 +6219,85 @@ function SharedDatePicker({
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+function DatePickerMonthPage({
+  monthData,
+  selectedDate,
+  weekdays,
+  saving,
+  interactive,
+  onPreviousMonth,
+  onNextMonth,
+  onSelectDate,
+}: {
+  monthData: ReturnType<typeof getCalendarMonthData>;
+  selectedDate: string;
+  weekdays: string[];
+  saving: boolean;
+  interactive: boolean;
+  onPreviousMonth: () => void;
+  onNextMonth: () => void;
+  onSelectDate: (dateKey: string) => void;
+}) {
+  return (
+    <div className={cn("w-full shrink-0 px-1", !interactive && "pointer-events-none")}>
+      <div className="mb-2 flex items-center justify-between gap-2">
+        <button
+          type="button"
+          onClick={onPreviousMonth}
+          disabled={saving}
+          className={cn(calendarArrowClassName, "hidden sm:flex")}
+          aria-label="Mois précédent"
+          tabIndex={interactive ? 0 : -1}
+        >
+          ←
+        </button>
+        <p className="text-base font-semibold text-stone-950">
+          {monthData.monthTitle} {monthData.year}
+        </p>
+        <button
+          type="button"
+          onClick={onNextMonth}
+          disabled={saving}
+          className={cn(calendarArrowClassName, "hidden sm:flex")}
+          aria-label="Mois suivant"
+          tabIndex={interactive ? 0 : -1}
+        >
+          →
+        </button>
+      </div>
+
+      <div className="grid grid-cols-7">
+        {weekdays.map((weekday, index) => (
+          <span key={`${weekday}-${index}`} className="py-2 text-center text-xs font-semibold text-stone-400">
+            {weekday}
+          </span>
+        ))}
+        {Array.from({ length: monthData.leadingEmptyDays }).map((_, index) => (
+          <span key={`empty-start-${index}`} className="aspect-square" />
+        ))}
+        {monthData.calendarDays.map((day) => {
+          const isSelected = day.dateKey === selectedDate;
+          return (
+            <button
+              key={day.dateKey}
+              type="button"
+              onClick={() => onSelectDate(day.dateKey)}
+              disabled={saving}
+              className="flex aspect-square items-center justify-center rounded-full text-base font-semibold text-stone-800 transition hover:bg-stone-100 disabled:text-stone-300"
+              tabIndex={interactive ? 0 : -1}
+            >
+              <span className={cn("flex h-9 w-9 items-center justify-center rounded-full", isSelected && "bg-[#bb2720] text-white")}>{day.day}</span>
+            </button>
+          );
+        })}
+        {Array.from({ length: monthData.trailingEmptyDays }).map((_, index) => (
+          <span key={`empty-end-${index}`} className="aspect-square" />
+        ))}
+      </div>
     </div>
   );
 }
