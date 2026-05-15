@@ -33,7 +33,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { Keyboard } from "@capacitor/keyboard";
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type WheelEvent as ReactWheelEvent } from "react";
 import { Card } from "@/components/ui/card";
 import {
   publicHolidays,
@@ -981,6 +981,7 @@ export default function Home() {
   const [quoteImportOpen, setQuoteImportOpen] = useState(false);
   const [quoteImportFile, setQuoteImportFile] = useState<File | null>(null);
   const [searchOpen, setSearchOpen] = useState(false);
+  const [yearOverviewOpen, setYearOverviewOpen] = useState(false);
   const [globalQuoteDragActive, setGlobalQuoteDragActive] = useState(false);
   const [editingEvent, setEditingEvent] = useState<ProductionEvent | null>(null);
   const [editingReturnScreen, setEditingReturnScreen] = useState<Screen>("calendar");
@@ -1106,6 +1107,14 @@ export default function Home() {
     const now = new Date();
     setVisibleMonth(new Date(now.getFullYear(), now.getMonth(), 1));
     setSelectedDateKey(formatDateKey(now));
+    setScreen("calendar");
+  }
+
+  function selectYearOverviewMonth(year: number, monthIndex: number) {
+    const nextMonth = new Date(year, monthIndex, 1);
+    setVisibleMonth(nextMonth);
+    setSelectedDateKey(getPreferredDateKeyForMonth(nextMonth, events));
+    setYearOverviewOpen(false);
     setScreen("calendar");
   }
 
@@ -2129,6 +2138,7 @@ export default function Home() {
             openQuoteImport();
           }}
           onSearch={() => setSearchOpen(true)}
+          onOpenYearOverview={() => setYearOverviewOpen(true)}
           onCreateEvent={() => {
             setEditingEvent(null);
             setEditingReturnScreen("calendar");
@@ -2268,6 +2278,17 @@ export default function Home() {
         />
       )}
 
+      {yearOverviewOpen && (
+        <YearOverviewOverlay
+          initialYear={visibleMonth.getFullYear()}
+          events={events}
+          visibleMonth={visibleMonth}
+          todayKey={todayKey}
+          onClose={() => setYearOverviewOpen(false)}
+          onSelectMonth={selectYearOverviewMonth}
+        />
+      )}
+
       {deleteDialogEvent && (
         <DeleteEventDialog
           event={deleteDialogEvent}
@@ -2302,6 +2323,7 @@ function AppHeader({
   setCreateMenuOpen,
   onImportQuote,
   onSearch,
+  onOpenYearOverview,
   onCreateEvent,
   canEditEvent,
   onEditEvent,
@@ -2318,6 +2340,7 @@ function AppHeader({
   setCreateMenuOpen: (open: boolean | ((current: boolean) => boolean)) => void;
   onImportQuote: () => void;
   onSearch: () => void;
+  onOpenYearOverview: () => void;
   onCreateEvent: () => void;
   canEditEvent: boolean;
   onEditEvent: () => void;
@@ -2348,7 +2371,11 @@ function AppHeader({
           <img src="/brand/mon-studio-tv-horizontal.png" alt="Mon Studio TV" className="hidden h-10 w-auto sm:block lg:h-11" />
         </button>
         {screen === "calendar" && (
-          <button className="rounded-full border border-stone-200 bg-white px-2.5 py-1.5 text-base font-semibold text-stone-700 sm:px-3">
+          <button
+            type="button"
+            onClick={onOpenYearOverview}
+            className="rounded-full border border-stone-200 bg-white px-2.5 py-1.5 text-base font-semibold text-stone-700 transition hover:bg-stone-50 sm:px-3"
+          >
             {yearLabel}
           </button>
         )}
@@ -2555,6 +2582,219 @@ function EventSearchOverlay({
         </div>
       </div>
     </div>
+  );
+}
+
+function YearOverviewOverlay({
+  initialYear,
+  events,
+  visibleMonth,
+  todayKey,
+  onClose,
+  onSelectMonth,
+}: {
+  initialYear: number;
+  events: ProductionEvent[];
+  visibleMonth: Date;
+  todayKey: string;
+  onClose: () => void;
+  onSelectMonth: (year: number, monthIndex: number) => void;
+}) {
+  const [displayYear, setDisplayYear] = useState(initialYear);
+  const swipeStartRef = useRef<{ pointerId: number; x: number; y: number } | null>(null);
+  const wheelLockRef = useRef<number | null>(null);
+  const suppressYearClickRef = useRef(false);
+  const shortWeekdays = ["L", "M", "M", "J", "V", "S", "D"];
+
+  useEffect(() => {
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") onClose();
+      if (event.key === "ArrowUp") setDisplayYear((current) => current - 1);
+      if (event.key === "ArrowDown") setDisplayYear((current) => current + 1);
+    }
+
+    document.addEventListener("keydown", handleKeyDown);
+    return () => document.removeEventListener("keydown", handleKeyDown);
+  }, [onClose]);
+
+  useEffect(() => {
+    return () => {
+      if (wheelLockRef.current) {
+        window.clearTimeout(wheelLockRef.current);
+      }
+    };
+  }, []);
+
+  function changeYear(delta: -1 | 1) {
+    setDisplayYear((current) => current + delta);
+  }
+
+  function handlePointerDown(pointerEvent: ReactPointerEvent<HTMLDivElement>) {
+    swipeStartRef.current = {
+      pointerId: pointerEvent.pointerId,
+      x: pointerEvent.clientX,
+      y: pointerEvent.clientY,
+    };
+    pointerEvent.currentTarget.setPointerCapture(pointerEvent.pointerId);
+  }
+
+  function handlePointerUp(pointerEvent: ReactPointerEvent<HTMLDivElement>) {
+    const swipeStart = swipeStartRef.current;
+    if (!swipeStart || swipeStart.pointerId !== pointerEvent.pointerId) return;
+
+    const deltaX = pointerEvent.clientX - swipeStart.x;
+    const deltaY = pointerEvent.clientY - swipeStart.y;
+    swipeStartRef.current = null;
+
+    if (Math.abs(deltaY) < 54 || Math.abs(deltaY) < Math.abs(deltaX) * 1.2) return;
+    suppressYearClickRef.current = true;
+    window.setTimeout(() => {
+      suppressYearClickRef.current = false;
+    }, 0);
+    changeYear(deltaY < 0 ? 1 : -1);
+  }
+
+  function handleWheel(wheelEvent: ReactWheelEvent<HTMLDivElement>) {
+    if (wheelLockRef.current || Math.abs(wheelEvent.deltaY) < 36 || Math.abs(wheelEvent.deltaY) < Math.abs(wheelEvent.deltaX)) return;
+    changeYear(wheelEvent.deltaY > 0 ? 1 : -1);
+    wheelLockRef.current = window.setTimeout(() => {
+      wheelLockRef.current = null;
+    }, 420);
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 bg-[#f7f9fb]/95 px-4 py-[calc(1rem+env(safe-area-inset-top))] backdrop-blur-xl sm:px-6">
+      <div
+        className="mx-auto flex h-full max-w-5xl flex-col"
+        style={{ fontFamily: '"SF Pro Rounded", ui-rounded, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif' }}
+        onPointerDown={handlePointerDown}
+        onPointerUp={handlePointerUp}
+        onPointerCancel={() => {
+          swipeStartRef.current = null;
+        }}
+        onClickCapture={(clickEvent) => {
+          if (!suppressYearClickRef.current) return;
+          clickEvent.preventDefault();
+          clickEvent.stopPropagation();
+        }}
+        onWheel={handleWheel}
+      >
+        <div className="flex shrink-0 items-center justify-between gap-3 px-1 pb-4">
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => changeYear(-1)}
+              className={calendarArrowClassName}
+              aria-label="Année précédente"
+            >
+              ↑
+            </button>
+            <button
+              type="button"
+              onClick={() => changeYear(1)}
+              className={calendarArrowClassName}
+              aria-label="Année suivante"
+            >
+              ↓
+            </button>
+          </div>
+          <h2 className="text-5xl font-semibold leading-none text-stone-950 sm:text-6xl">{displayYear}</h2>
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-full border border-stone-200 bg-white px-3 py-2 text-base font-semibold text-stone-600 transition hover:bg-stone-50"
+          >
+            Fermer
+          </button>
+        </div>
+
+        <div className="no-scrollbar min-h-0 flex-1 overflow-y-auto overscroll-contain pb-[calc(1rem+env(safe-area-inset-bottom))]">
+          <div className="grid grid-cols-3 gap-x-3 gap-y-5 sm:gap-x-8 sm:gap-y-8">
+            {monthNames.map((monthName, monthIndex) => (
+              <YearOverviewMiniMonth
+                key={`${displayYear}-${monthName}`}
+                year={displayYear}
+                monthIndex={monthIndex}
+                monthName={monthName}
+                events={events}
+                todayKey={todayKey}
+                visibleMonth={visibleMonth}
+                weekdays={shortWeekdays}
+                onSelect={() => onSelectMonth(displayYear, monthIndex)}
+              />
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function YearOverviewMiniMonth({
+  year,
+  monthIndex,
+  monthName,
+  events,
+  todayKey,
+  visibleMonth,
+  weekdays,
+  onSelect,
+}: {
+  year: number;
+  monthIndex: number;
+  monthName: string;
+  events: ProductionEvent[];
+  todayKey: string;
+  visibleMonth: Date;
+  weekdays: string[];
+  onSelect: () => void;
+}) {
+  const monthData = useMemo(() => getCalendarMonthData(new Date(year, monthIndex, 1), events), [events, monthIndex, year]);
+  const isVisibleMonth = visibleMonth.getFullYear() === year && visibleMonth.getMonth() === monthIndex;
+
+  return (
+    <button
+      type="button"
+      onClick={onSelect}
+      className={cn(
+        "min-w-0 rounded-[1.25rem] p-2 text-left transition hover:bg-white/70 sm:p-3",
+        isVisibleMonth && "bg-white/90 ring-1 ring-[#bb2720]/20",
+      )}
+    >
+      <span className={cn("mb-2 block truncate text-sm font-semibold leading-none sm:text-base", isVisibleMonth ? "text-[#bb2720]" : "text-stone-950")}>
+        {monthName}
+      </span>
+      <span className="grid grid-cols-7 gap-y-1">
+        {weekdays.map((weekday, index) => (
+          <span key={`${weekday}-${index}`} className="text-center text-[0.55rem] font-semibold leading-none text-stone-300 sm:text-[0.625rem]">
+            {weekday}
+          </span>
+        ))}
+        {Array.from({ length: monthData.leadingEmptyDays }).map((_, index) => (
+          <span key={`empty-start-${index}`} className="aspect-square" />
+        ))}
+        {monthData.calendarDays.map((day) => {
+          const isToday = day.dateKey === todayKey;
+          const hasEvents = day.events.length > 0;
+          return (
+            <span key={day.dateKey} className="relative flex aspect-square min-w-0 items-center justify-center">
+              <span
+                className={cn(
+                  "flex h-5 w-5 items-center justify-center rounded-full text-[0.65rem] font-semibold leading-none sm:h-6 sm:w-6 sm:text-xs",
+                  isToday ? "bg-[#bb2720] text-white" : "text-stone-700",
+                )}
+              >
+                {day.day}
+              </span>
+              {hasEvents && <span className={cn("absolute bottom-0 h-1 w-1 rounded-full", isToday ? "bg-[#bb2720]" : "bg-stone-400")} />}
+            </span>
+          );
+        })}
+        {Array.from({ length: monthData.trailingEmptyDays }).map((_, index) => (
+          <span key={`empty-end-${index}`} className="aspect-square" />
+        ))}
+      </span>
+    </button>
   );
 }
 
