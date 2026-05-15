@@ -2339,7 +2339,7 @@ export default function Home() {
       )}
 
       {dateEditorOpen && selectedEvent && (
-        <EventDateEditor
+        <EventDatePicker
           event={selectedEvent}
           onClose={() => setDateEditorOpen(false)}
           onSubmit={async (nextDate) => {
@@ -5899,7 +5899,7 @@ function DeleteEventDialog({
   );
 }
 
-function EventDateEditor({
+function EventDatePicker({
   event,
   onClose,
   onSubmit,
@@ -5908,67 +5908,97 @@ function EventDateEditor({
   onClose: () => void;
   onSubmit: (date: string) => Promise<void>;
 }) {
-  const [date, setDate] = useState(event.date);
+  const [pickerMonth, setPickerMonth] = useState(() => new Date(`${event.date}T12:00:00`));
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const inputRef = useRef<HTMLInputElement | null>(null);
+  const weekdays = ["L", "M", "M", "J", "V", "S", "D"];
+  const monthData = useMemo(() => getCalendarMonthData(pickerMonth, []), [pickerMonth]);
 
-  useEffect(() => {
-    const focusFrame = window.requestAnimationFrame(() => inputRef.current?.focus());
-    return () => window.cancelAnimationFrame(focusFrame);
-  }, []);
-
-  async function handleSubmit(formEvent: React.FormEvent<HTMLFormElement>) {
-    formEvent.preventDefault();
-    if (!date) {
-      setError("Choisis une date.");
-      return;
-    }
-
+  async function selectDate(dateKey: string) {
     setSaving(true);
     setError(null);
 
     try {
-      await onSubmit(date);
+      await onSubmit(dateKey);
     } catch (saveError) {
       setError(saveError instanceof Error ? saveError.message : "Impossible de modifier la date.");
       setSaving(false);
     }
   }
 
+  function changePickerMonth(delta: -1 | 1) {
+    if (saving) return;
+    setPickerMonth((current) => new Date(current.getFullYear(), current.getMonth() + delta, 1));
+  }
+
   return (
-    <div className="fixed inset-0 z-50 flex items-end bg-stone-950/10 p-3 sm:items-center sm:justify-center sm:p-6">
-      <form onSubmit={handleSubmit} className="w-full rounded-3xl border border-stone-200 bg-white p-5 sm:max-w-md sm:p-6">
-        <div className="mb-5">
-          <h2 className="text-base font-semibold text-stone-950">Modifier la date</h2>
-          <p className="mt-2 truncate text-base font-medium text-stone-500">{event.clientName}</p>
+    <div className="fixed inset-0 z-50 flex items-end justify-center bg-stone-950/10 p-3 sm:items-center sm:p-6">
+      <div className="w-full max-w-sm rounded-3xl border border-stone-200 bg-white p-3 sm:p-4">
+        <div className="mb-2 flex items-center justify-between gap-2 px-1">
+          <button
+            type="button"
+            onClick={() => changePickerMonth(-1)}
+            disabled={saving}
+            className={calendarArrowClassName}
+            aria-label="Mois précédent"
+          >
+            ←
+          </button>
+          <p className="text-base font-semibold text-stone-950">
+            {monthNames[monthData.month]} {monthData.year}
+          </p>
+          <button
+            type="button"
+            onClick={() => changePickerMonth(1)}
+            disabled={saving}
+            className={calendarArrowClassName}
+            aria-label="Mois suivant"
+          >
+            →
+          </button>
         </div>
 
-        <input
-          ref={inputRef}
-          type="date"
-          value={date}
-          onChange={(inputEvent) => setDate(inputEvent.target.value)}
-          disabled={saving}
-          className="h-12 w-full rounded-2xl border border-stone-200 bg-[#f7f9fb] px-4 text-base font-semibold text-stone-950 outline-none transition focus:border-[#bb2720]/40 disabled:text-stone-300"
-        />
+        <div className="grid grid-cols-7 px-1">
+          {weekdays.map((weekday, index) => (
+            <span key={`${weekday}-${index}`} className="py-2 text-center text-xs font-semibold text-stone-400">
+              {weekday}
+            </span>
+          ))}
+          {Array.from({ length: monthData.leadingEmptyDays }).map((_, index) => (
+            <span key={`empty-start-${index}`} className="aspect-square" />
+          ))}
+          {monthData.calendarDays.map((day) => {
+            const isSelected = day.dateKey === event.date;
+            return (
+              <button
+                key={day.dateKey}
+                type="button"
+                onClick={() => void selectDate(day.dateKey)}
+                disabled={saving}
+                className="flex aspect-square items-center justify-center rounded-full text-base font-semibold text-stone-800 transition hover:bg-stone-100 disabled:text-stone-300"
+              >
+                <span className={cn("flex h-9 w-9 items-center justify-center rounded-full", isSelected && "bg-[#bb2720] text-white")}>{day.day}</span>
+              </button>
+            );
+          })}
+          {Array.from({ length: monthData.trailingEmptyDays }).map((_, index) => (
+            <span key={`empty-end-${index}`} className="aspect-square" />
+          ))}
+        </div>
 
-        {error && <div className="mt-4 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-base font-medium text-rose-700">{error}</div>}
+        {error && <div className="mt-3 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-base font-medium text-rose-700">{error}</div>}
 
-        <div className="mt-5 flex justify-end gap-2">
+        <div className="mt-3 flex justify-end px-1">
           <button
             type="button"
             onClick={onClose}
             disabled={saving}
-            className="rounded-full border border-stone-200 bg-white px-4 py-2 text-base font-semibold text-stone-600 disabled:text-stone-300"
+            className="rounded-full border border-stone-200 bg-white px-4 py-2 text-base font-semibold text-stone-600 transition hover:bg-stone-50 disabled:text-stone-300"
           >
             Annuler
           </button>
-          <button type="submit" disabled={saving} className="rounded-full bg-[#bb2720] px-4 py-2 text-base font-semibold text-white disabled:bg-stone-300">
-            {saving ? "Validation..." : "Valider"}
-          </button>
         </div>
-      </form>
+      </div>
     </div>
   );
 }
