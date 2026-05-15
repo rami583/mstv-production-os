@@ -3052,20 +3052,20 @@ function CreateMenu({
     <div className="absolute right-1 top-14 z-40 w-56 rounded-2xl border border-stone-200 bg-white/95 p-1.5 backdrop-blur-xl">
       <button
         onClick={onImportQuote}
-        className="block w-full rounded-xl px-4 py-3 text-left text-base font-medium text-stone-700 transition hover:bg-[#bb2720]/[0.05] hover:text-stone-950"
+        className="block w-full rounded-xl px-4 py-3 text-right text-base font-medium text-stone-700 transition hover:bg-[#bb2720]/[0.05] hover:text-stone-950"
       >
         Importer un devis
       </button>
       <button
         onClick={onCreateEvent}
-        className="block w-full rounded-xl px-4 py-3 text-left text-base font-medium text-stone-700 transition hover:bg-[#bb2720]/[0.05] hover:text-stone-950"
+        className="block w-full rounded-xl px-4 py-3 text-right text-base font-medium text-stone-700 transition hover:bg-[#bb2720]/[0.05] hover:text-stone-950"
       >
         Créer un événement
       </button>
       {canDeleteEvent && (
         <button
           onClick={onDeleteEvent}
-          className="block w-full rounded-xl px-4 py-3 text-left text-base font-medium text-[#bb2720] transition hover:bg-[#bb2720]/[0.05]"
+          className="block w-full rounded-xl px-4 py-3 text-right text-base font-medium text-[#bb2720] transition hover:bg-[#bb2720]/[0.05]"
         >
           Supprimer l'événement
         </button>
@@ -3074,7 +3074,7 @@ function CreateMenu({
         onClick={onOpenTrash}
         aria-label="Corbeille"
         title="Corbeille"
-        className="flex w-full items-center justify-center rounded-xl px-4 py-3 text-stone-500 transition hover:bg-[#bb2720]/[0.05] hover:text-stone-800"
+        className="flex w-full items-center justify-end rounded-xl px-4 py-3 text-stone-500 transition hover:bg-[#bb2720]/[0.05] hover:text-stone-800"
       >
         <Trash2 className="h-4 w-4" aria-hidden="true" />
       </button>
