@@ -139,6 +139,12 @@ type EventDocumentGroup = {
   files: EventDocument[];
 };
 
+type DocumentPreview = {
+  file: EventDocument;
+  url: string;
+  kind: "pdf" | "image";
+};
+
 type ProductionEvent = {
   id: string;
   clientName: string;
@@ -605,6 +611,16 @@ function getDocumentObjectPath(filePath: string) {
   return filePath.startsWith(prefix) ? filePath.slice(prefix.length) : filePath;
 }
 
+function getDocumentPreviewKind(file: EventDocument): DocumentPreview["kind"] | null {
+  const extension = getFileExtension(file.fileName);
+  const fileType = file.fileType?.toLowerCase() ?? "";
+
+  if (fileType.includes("pdf") || extension === "pdf") return "pdf";
+  if (fileType.startsWith("image/") || ["jpg", "jpeg", "png", "gif", "webp", "avif", "svg"].includes(extension)) return "image";
+
+  return null;
+}
+
 function formatFileSize(size: number | null) {
   if (size === null) return "Taille inconnue";
   if (size < 1024) return `${size} o`;
@@ -968,6 +984,7 @@ export default function Home() {
   const [editingEvent, setEditingEvent] = useState<ProductionEvent | null>(null);
   const [editingReturnScreen, setEditingReturnScreen] = useState<Screen>("calendar");
   const [deleteDialogEvent, setDeleteDialogEvent] = useState<ProductionEvent | null>(null);
+  const [documentPreview, setDocumentPreview] = useState<DocumentPreview | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [isTimelineTimeEditing, setIsTimelineTimeEditing] = useState(false);
@@ -1959,15 +1976,26 @@ export default function Home() {
     );
   }
 
-  async function openEventDocument(document: EventDocument) {
+  async function openEventDocument(file: EventDocument) {
     if (!supabase) {
       throw new Error("Configuration Supabase manquante.");
     }
 
-    const objectPath = getDocumentObjectPath(document.filePath);
-    const { data, error: signedUrlError } = await supabase.storage.from(eventDocumentsBucket).createSignedUrl(objectPath, 60);
+    const objectPath = getDocumentObjectPath(file.filePath);
+    const { data, error: signedUrlError } = await supabase.storage.from(eventDocumentsBucket).createSignedUrl(objectPath, 10 * 60);
 
     if (signedUrlError) throw signedUrlError;
+
+    const previewKind = getDocumentPreviewKind(file);
+    if (previewKind) {
+      setDocumentPreview({
+        file,
+        url: data.signedUrl,
+        kind: previewKind,
+      });
+      return;
+    }
+
     window.open(data.signedUrl, "_blank", "noopener,noreferrer");
   }
 
@@ -2234,6 +2262,14 @@ export default function Home() {
           event={deleteDialogEvent}
           onClose={() => setDeleteDialogEvent(null)}
           onConfirm={deleteCurrentEvent}
+        />
+      )}
+
+      {documentPreview && (
+        <DocumentPreviewModal
+          preview={documentPreview}
+          onClose={() => setDocumentPreview(null)}
+          onDownload={downloadEventDocument}
         />
       )}
 
@@ -4761,7 +4797,12 @@ function ContextDetailBlock({
                 return (
                   <div key={file.id} className="flex w-full min-w-0 items-center gap-2">
                     <div className={cn("group inline-flex min-h-9 min-w-0 flex-1 items-center gap-2 rounded-full border px-3 py-1.5", documentTone.surface, documentTone.border)}>
-                      <button onClick={() => void openDocumentFile(file)} className="flex min-w-0 flex-1 items-center gap-2 text-left">
+                      <button
+                        onClick={() => void openDocumentFile(file)}
+                        className="flex min-w-0 flex-1 items-center gap-2 text-left"
+                        aria-label={`Ouvrir ${file.fileName}`}
+                        title="Ouvrir"
+                      >
                         <FileIcon className={cn("h-4 w-4 shrink-0", documentTone.icon)} />
                         <span className={cn("min-w-0 truncate text-base font-semibold", documentTone.text)}>{file.fileName}</span>
                         <span className="shrink-0 text-base font-medium text-amber-700/70">{formatFileSize(file.fileSize)}</span>
@@ -5253,6 +5294,76 @@ function DeleteEventDialog({
           >
             {deleting ? "Suppression..." : "Supprimer"}
           </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function DocumentPreviewModal({
+  preview,
+  onClose,
+  onDownload,
+}: {
+  preview: DocumentPreview;
+  onClose: () => void;
+  onDownload: (file: EventDocument) => Promise<void>;
+}) {
+  const [downloadError, setDownloadError] = useState<string | null>(null);
+  const FileIcon = getDocumentFileIcon(preview.file);
+
+  async function downloadPreviewFile() {
+    setDownloadError(null);
+
+    try {
+      await onDownload(preview.file);
+    } catch (error) {
+      setDownloadError(error instanceof Error ? error.message : "Impossible de télécharger le document.");
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex bg-stone-950/20 p-3 sm:p-6">
+      <div className="flex min-h-0 w-full flex-col overflow-hidden rounded-3xl border border-stone-200 bg-white">
+        <div className="flex min-w-0 shrink-0 items-center justify-between gap-3 border-b border-stone-200 px-4 py-3 sm:px-5">
+          <div className="flex min-w-0 items-center gap-2">
+            <FileIcon className="h-5 w-5 shrink-0 text-amber-700" />
+            <div className="min-w-0">
+              <p className="truncate text-base font-semibold text-stone-950">{preview.file.fileName}</p>
+              <p className="text-base font-medium text-stone-500">{formatFileSize(preview.file.fileSize)}</p>
+            </div>
+          </div>
+          <div className="flex shrink-0 items-center gap-2">
+            <button
+              type="button"
+              onClick={() => void downloadPreviewFile()}
+              className="flex h-10 w-10 items-center justify-center rounded-full border border-amber-200 bg-amber-50 text-amber-800 transition hover:bg-amber-100"
+              aria-label="Télécharger ce document"
+              title="Télécharger"
+            >
+              <Download className="h-4 w-4" />
+            </button>
+            <button
+              type="button"
+              onClick={onClose}
+              className="flex h-10 w-10 items-center justify-center rounded-full border border-stone-200 bg-white text-stone-600 transition hover:bg-stone-50"
+              aria-label="Fermer l'aperçu"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </div>
+        </div>
+
+        {downloadError && <div className="shrink-0 border-b border-rose-100 bg-rose-50 px-4 py-2 text-base font-medium text-rose-700">{downloadError}</div>}
+
+        <div className="min-h-0 flex-1 bg-stone-100">
+          {preview.kind === "image" ? (
+            <div className="flex h-full min-h-0 items-center justify-center overflow-auto p-3 sm:p-5">
+              <img src={preview.url} alt={preview.file.fileName} className="max-h-full max-w-full rounded-2xl object-contain" />
+            </div>
+          ) : (
+            <iframe title={preview.file.fileName} src={preview.url} className="h-full w-full border-0 bg-white" />
+          )}
         </div>
       </div>
     </div>
