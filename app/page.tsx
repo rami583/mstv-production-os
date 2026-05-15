@@ -5922,17 +5922,30 @@ function EventDatePicker({
   onSubmit: (date: string) => Promise<void>;
 }) {
   const [pickerMonth, setPickerMonth] = useState(() => new Date(`${event.date}T12:00:00`));
+  const [pendingDate, setPendingDate] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const weekdays = ["L", "M", "M", "J", "V", "S", "D"];
   const monthData = useMemo(() => getCalendarMonthData(pickerMonth, []), [pickerMonth]);
 
-  async function selectDate(dateKey: string) {
+  function selectDate(dateKey: string) {
+    if (dateKey === event.date) {
+      onClose();
+      return;
+    }
+
+    setPendingDate(dateKey);
+    setError(null);
+  }
+
+  async function confirmDateChange() {
+    if (!pendingDate) return;
+
     setSaving(true);
     setError(null);
 
     try {
-      await onSubmit(dateKey);
+      await onSubmit(pendingDate);
     } catch (saveError) {
       setError(saveError instanceof Error ? saveError.message : "Impossible de modifier la date.");
       setSaving(false);
@@ -5986,7 +5999,7 @@ function EventDatePicker({
               <button
                 key={day.dateKey}
                 type="button"
-                onClick={() => void selectDate(day.dateKey)}
+                onClick={() => selectDate(day.dateKey)}
                 disabled={saving}
                 className="flex aspect-square items-center justify-center rounded-full text-base font-semibold text-stone-800 transition hover:bg-stone-100 disabled:text-stone-300"
               >
@@ -6012,6 +6025,50 @@ function EventDatePicker({
           </button>
         </div>
       </div>
+
+      {pendingDate && (
+        <div className="absolute inset-0 flex items-end justify-center bg-stone-950/10 p-3 sm:items-center sm:p-6">
+          <div className="w-full max-w-sm rounded-3xl border border-stone-200 bg-white p-5 sm:p-6">
+            <div className="mb-5">
+              <h2 className="text-base font-semibold text-stone-950">Modifier la date de cet événement ?</h2>
+              <div className="mt-4 grid grid-cols-2 gap-2">
+                <div className="rounded-2xl bg-stone-50 px-3 py-3">
+                  <p className="text-xs font-semibold uppercase tracking-normal text-stone-400">Ancienne date</p>
+                  <p className="mt-1 text-base font-semibold text-stone-800">{formatFullDate(event.date)}</p>
+                </div>
+                <div className="rounded-2xl bg-[#bb2720]/[0.06] px-3 py-3">
+                  <p className="text-xs font-semibold uppercase tracking-normal text-[#bb2720]/70">Nouvelle date</p>
+                  <p className="mt-1 text-base font-semibold text-[#bb2720]">{formatFullDate(pendingDate)}</p>
+                </div>
+              </div>
+            </div>
+
+            {error && <div className="mb-4 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-base font-medium text-rose-700">{error}</div>}
+
+            <div className="flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setPendingDate(null);
+                  setError(null);
+                }}
+                disabled={saving}
+                className="rounded-full border border-stone-200 bg-white px-4 py-2 text-base font-semibold text-stone-600 transition hover:bg-stone-50 disabled:text-stone-300"
+              >
+                Annuler
+              </button>
+              <button
+                type="button"
+                onClick={() => void confirmDateChange()}
+                disabled={saving}
+                className="rounded-full bg-[#bb2720] px-4 py-2 text-base font-semibold text-white transition hover:bg-[#a7211b] disabled:bg-stone-300"
+              >
+                {saving ? "Modification..." : "Confirmer"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
