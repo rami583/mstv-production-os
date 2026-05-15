@@ -183,6 +183,8 @@ type ProductionEvent = {
   endTime: string | null;
   endOfDayTime: string | null;
   status: EventStatus;
+  deletedAt: string | null;
+  deletedBy: string | null;
   createdAt: string;
   updatedAt: string;
   options: EventOption[];
@@ -853,6 +855,8 @@ function mapEvent(row: EventQueryRow): ProductionEvent {
     endTime: toTimeInputValue(row.end_time) || null,
     endOfDayTime: toTimeInputValue(row.end_of_day_time) || null,
     status: row.status,
+    deletedAt: row.deleted_at ?? null,
+    deletedBy: row.deleted_by ?? null,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     options,
@@ -945,12 +949,12 @@ function withDocumentGroups(events: ProductionEvent[], groups: EventDocumentGrou
   }));
 }
 
-async function fetchEvents() {
+async function fetchEvents(filter: "active" | "deleted" = "active") {
   if (!supabase) {
     throw new Error("Configuration Supabase manquante.");
   }
 
-  const { data, error } = await supabase
+  let query = supabase
     .from("events")
     .select(
       `
@@ -958,9 +962,15 @@ async function fetchEvents() {
         event_options (*),
         event_links (*)
       `,
-    )
-    .order("date", { ascending: true })
-    .order("start_time", { ascending: true });
+    );
+
+  if (filter === "deleted") {
+    query = query.not("deleted_at", "is", null).order("deleted_at", { ascending: false });
+  } else {
+    query = query.is("deleted_at", null).order("date", { ascending: true }).order("start_time", { ascending: true });
+  }
+
+  const { data, error } = await query;
 
   if (error) throw error;
   let events = ((data ?? []) as EventQueryRow[]).map(mapEvent);
@@ -1052,9 +1062,15 @@ export default function Home() {
   const [editingEvent, setEditingEvent] = useState<ProductionEvent | null>(null);
   const [editingReturnScreen, setEditingReturnScreen] = useState<Screen>("calendar");
   const [deleteDialogEvent, setDeleteDialogEvent] = useState<ProductionEvent | null>(null);
+  const [permanentDeleteDialogEvent, setPermanentDeleteDialogEvent] = useState<ProductionEvent | null>(null);
   const [dateEditorOpen, setDateEditorOpen] = useState(false);
   const [documentPreview, setDocumentPreview] = useState<DocumentPreview | null>(null);
   const [historyOpen, setHistoryOpen] = useState(false);
+  const [trashOpen, setTrashOpen] = useState(false);
+  const [deletedEvents, setDeletedEvents] = useState<ProductionEvent[]>([]);
+  const [trashLoading, setTrashLoading] = useState(false);
+  const [trashError, setTrashError] = useState<string | null>(null);
+  const [restoringEventId, setRestoringEventId] = useState<string | null>(null);
   const [activityLog, setActivityLog] = useState<EventActivityLog[]>([]);
   const [activityLoading, setActivityLoading] = useState(false);
   const [activityError, setActivityError] = useState<string | null>(null);
@@ -1083,6 +1099,11 @@ export default function Home() {
     if (!historyOpen || !selectedEvent) return;
     void refreshActivityLog(selectedEvent.id);
   }, [historyOpen, selectedEvent?.id]);
+
+  useEffect(() => {
+    if (!trashOpen) return;
+    void refreshTrash();
+  }, [trashOpen]);
 
   useEffect(() => {
     let cancelled = false;
@@ -1165,6 +1186,24 @@ export default function Home() {
       setError(supabaseError instanceof Error ? supabaseError.message : "Impossible de charger les données.");
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function refreshTrash() {
+    setTrashLoading(true);
+    setTrashError(null);
+
+    try {
+      const [nextDeletedEvents, nextTeamMembers] = await Promise.all([fetchEvents("deleted"), teamMembers.length > 0 ? Promise.resolve(teamMembers) : fetchTeamMembers()]);
+      setDeletedEvents(withOptionAssignees(nextDeletedEvents, nextTeamMembers));
+      if (teamMembers.length === 0) {
+        setTeamMembers(nextTeamMembers);
+      }
+    } catch (trashLoadError) {
+      console.error("Failed to load deleted events. Apply supabase/migrations/012_soft_delete_events.sql if columns are missing.", trashLoadError);
+      setTrashError("Impossible de charger la corbeille. Vérifiez la migration 012_soft_delete_events.sql.");
+    } finally {
+      setTrashLoading(false);
     }
   }
 
@@ -1471,6 +1510,8 @@ export default function Home() {
       endTime: toTimeInputValue(data.end_time) || null,
       endOfDayTime: toTimeInputValue(data.end_of_day_time) || null,
       status: data.status,
+      deletedAt: data.deleted_at ?? null,
+      deletedBy: data.deleted_by ?? null,
       updatedAt: data.updated_at,
     };
 
@@ -2467,71 +2508,128 @@ export default function Home() {
     }
 
     const eventId = eventToDelete.id;
-    console.log("Deleting current event", {
+    console.log("Soft deleting current event", {
       eventId,
       selectedEventId: selectedEvent?.id ?? null,
       clientName: eventToDelete.clientName,
       eventName: eventToDelete.eventName,
     });
 
+    const deletedAt = new Date().toISOString();
+    const { data: deletedEvent, error: softDeleteError } = await supabase
+      .from("events")
+      .update({ deleted_at: deletedAt, deleted_by: "Utilisateur" })
+      .eq("id", eventId)
+      .select()
+      .single();
+
+    console.log("Supabase event soft delete response", {
+      eventId,
+      deletedAt,
+      data: deletedEvent,
+      errorMessage: softDeleteError?.message,
+      errorCode: softDeleteError?.code,
+      errorDetails: softDeleteError?.details,
+      errorHint: softDeleteError?.hint,
+    });
+
+    if (softDeleteError) throw softDeleteError;
+
     await logEventActivity({
       eventId,
       actionType: "event_deleted",
       entityType: "event",
       entityId: eventId,
-      description: "Événement supprimé",
+      description: "Événement placé dans la corbeille",
       previousValue: {
         clientName: eventToDelete.clientName,
         eventName: eventToDelete.eventName,
         date: eventToDelete.date,
       },
+      newValue: { deletedAt },
     });
 
+    setEvents((current) => current.filter((event) => event.id !== eventId));
+    setDeletedEvents((current) => [{ ...eventToDelete, deletedAt, deletedBy: "Utilisateur", updatedAt: deletedEvent.updated_at }, ...current]);
+    setSelectedId(null);
+    setScreen("calendar");
+    setCreateMenuOpen(false);
+    setDeleteDialogEvent(null);
+    await reloadData(null);
+  }
+
+  async function restoreDeletedEvent(eventToRestore: ProductionEvent) {
+    if (!supabase) {
+      throw new Error("Configuration Supabase manquante.");
+    }
+
+    setRestoringEventId(eventToRestore.id);
+    setTrashError(null);
+
+    try {
+      const { data, error: restoreError } = await supabase
+        .from("events")
+        .update({ deleted_at: null, deleted_by: null })
+        .eq("id", eventToRestore.id)
+        .select()
+        .single();
+
+      if (restoreError) throw restoreError;
+
+      await logEventActivity({
+        eventId: eventToRestore.id,
+        actionType: "event_restored",
+        entityType: "event",
+        entityId: eventToRestore.id,
+        description: "Événement restauré",
+        previousValue: { deletedAt: eventToRestore.deletedAt },
+        newValue: { deletedAt: null },
+      });
+
+      setDeletedEvents((current) => current.filter((event) => event.id !== eventToRestore.id));
+      setEvents((current) =>
+        [...current, { ...eventToRestore, deletedAt: data.deleted_at ?? null, deletedBy: data.deleted_by ?? null, updatedAt: data.updated_at }].sort(
+          (a, b) => eventSortValue(a) - eventSortValue(b),
+        ),
+      );
+      setSelectedDateKey(data.date);
+      setVisibleMonth(new Date(`${data.date}T12:00:00`));
+    } catch (restoreError) {
+      setTrashError(restoreError instanceof Error ? restoreError.message : "Impossible de restaurer cet événement.");
+    } finally {
+      setRestoringEventId(null);
+    }
+  }
+
+  async function permanentlyDeleteEvent(eventToDelete: ProductionEvent) {
+    if (!supabase) {
+      throw new Error("Configuration Supabase manquante.");
+    }
+
+    const eventId = eventToDelete.id;
     const documentObjectPaths = eventToDelete.documentGroups
       .flatMap((group) => group.files)
       .map((file) => file.filePath.replace(`${eventDocumentsBucket}/`, ""));
 
     if (documentObjectPaths.length > 0) {
-      const { data: storageData, error: storageError } = await supabase.storage.from(eventDocumentsBucket).remove(documentObjectPaths);
-      console.log("Event document storage delete response", {
-        eventId,
-        objectPaths: documentObjectPaths,
-        data: storageData,
-        errorMessage: storageError?.message,
-      });
-
+      const { error: storageError } = await supabase.storage.from(eventDocumentsBucket).remove(documentObjectPaths);
       if (storageError) {
-        console.warn("Event document storage cleanup failed; continuing event deletion", {
+        console.warn("Permanent delete storage cleanup failed; continuing event deletion", {
           eventId,
           errorMessage: storageError.message,
         });
       }
     }
 
-    const { data: deleteData, error: deleteError, status, statusText } = await supabase.from("events").delete().eq("id", eventId).select("id");
-
-    console.log("Supabase event delete response", {
-      eventId,
-      data: deleteData,
-      status,
-      statusText,
-      errorMessage: deleteError?.message,
-      errorCode: deleteError?.code,
-      errorDetails: deleteError?.details,
-      errorHint: deleteError?.hint,
-    });
+    const { data: deleteData, error: deleteError } = await supabase.from("events").delete().eq("id", eventId).select("id");
 
     if (deleteError) throw deleteError;
     if (!deleteData || deleteData.length === 0) {
-      throw new Error(`Aucun événement supprimé pour l'id ${eventId}.`);
+      throw new Error(`Aucun événement supprimé définitivement pour l'id ${eventId}.`);
     }
 
-    setEvents((current) => current.filter((event) => event.id !== eventId));
-    setSelectedId(null);
-    setScreen("calendar");
-    setCreateMenuOpen(false);
-    setDeleteDialogEvent(null);
-    await reloadData(null);
+    setDeletedEvents((current) => current.filter((event) => event.id !== eventId));
+    setPermanentDeleteDialogEvent(null);
   }
 
   return (
@@ -2580,6 +2678,10 @@ export default function Home() {
           onSearch={() => setSearchOpen(true)}
           canOpenHistory={screen === "detail" && Boolean(selectedEvent)}
           onOpenHistory={openHistory}
+          onOpenTrash={() => {
+            setTrashOpen(true);
+            setCreateMenuOpen(false);
+          }}
           onOpenYearOverview={() => setYearOverviewOpen(true)}
           onCreateEvent={() => {
             setEditingEvent(null);
@@ -2689,6 +2791,10 @@ export default function Home() {
             setCreateModalOpen(true);
             setCreateMenuOpen(false);
           }}
+          onOpenTrash={() => {
+            setTrashOpen(true);
+            setCreateMenuOpen(false);
+          }}
           onSelectMonth={selectYearOverviewMonth}
         />
       )}
@@ -2759,6 +2865,26 @@ export default function Home() {
         />
       )}
 
+      {trashOpen && (
+        <TrashEventsSheet
+          events={deletedEvents}
+          loading={trashLoading}
+          error={trashError}
+          restoringEventId={restoringEventId}
+          onClose={() => setTrashOpen(false)}
+          onRestore={restoreDeletedEvent}
+          onPermanentDeleteRequest={setPermanentDeleteDialogEvent}
+        />
+      )}
+
+      {permanentDeleteDialogEvent && (
+        <PermanentDeleteEventDialog
+          event={permanentDeleteDialogEvent}
+          onClose={() => setPermanentDeleteDialogEvent(null)}
+          onConfirm={permanentlyDeleteEvent}
+        />
+      )}
+
       {documentPreview && (
         <DocumentPreviewModal
           preview={documentPreview}
@@ -2800,6 +2926,7 @@ function AppHeader({
   onSearch,
   canOpenHistory,
   onOpenHistory,
+  onOpenTrash,
   onLogoClick,
   onOpenYearOverview,
   onCreateEvent,
@@ -2819,6 +2946,7 @@ function AppHeader({
   onSearch: () => void;
   canOpenHistory: boolean;
   onOpenHistory: () => void;
+  onOpenTrash: () => void;
   onLogoClick?: () => void;
   onOpenYearOverview: () => void;
   onCreateEvent: () => void;
@@ -2896,6 +3024,7 @@ function AppHeader({
             <CreateMenu
               onImportQuote={onImportQuote}
               onCreateEvent={onCreateEvent}
+              onOpenTrash={onOpenTrash}
               canDeleteEvent={canDeleteEvent}
               onDeleteEvent={onDeleteEvent}
             />
@@ -2909,11 +3038,13 @@ function AppHeader({
 function CreateMenu({
   onImportQuote,
   onCreateEvent,
+  onOpenTrash,
   canDeleteEvent,
   onDeleteEvent,
 }: {
   onImportQuote: () => void;
   onCreateEvent: () => void;
+  onOpenTrash: () => void;
   canDeleteEvent: boolean;
   onDeleteEvent: () => void;
 }) {
@@ -2930,6 +3061,12 @@ function CreateMenu({
         className="block w-full rounded-xl px-4 py-3 text-left text-base font-medium text-stone-700 transition hover:bg-[#bb2720]/[0.05] hover:text-stone-950"
       >
         Créer un événement
+      </button>
+      <button
+        onClick={onOpenTrash}
+        className="block w-full rounded-xl px-4 py-3 text-left text-base font-medium text-stone-700 transition hover:bg-[#bb2720]/[0.05] hover:text-stone-950"
+      >
+        Corbeille
       </button>
       {canDeleteEvent && (
         <button
@@ -3066,6 +3203,7 @@ function YearOverviewOverlay({
   onImportQuote,
   onSearch,
   onCreateEvent,
+  onOpenTrash,
   onSelectMonth,
 }: {
   initialYear: number;
@@ -3079,6 +3217,7 @@ function YearOverviewOverlay({
   onImportQuote: () => void;
   onSearch: () => void;
   onCreateEvent: () => void;
+  onOpenTrash: () => void;
   onSelectMonth: (year: number, monthIndex: number) => void;
 }) {
   const [displayYear, setDisplayYear] = useState(initialYear);
@@ -3265,6 +3404,7 @@ function YearOverviewOverlay({
           onSearch={onSearch}
           canOpenHistory={false}
           onOpenHistory={() => undefined}
+          onOpenTrash={onOpenTrash}
           onLogoClick={onGoToday}
           onOpenYearOverview={() => undefined}
           onCreateEvent={onCreateEvent}
@@ -6445,6 +6585,86 @@ function EventHistorySheet({
   );
 }
 
+function TrashEventsSheet({
+  events,
+  loading,
+  error,
+  restoringEventId,
+  onClose,
+  onRestore,
+  onPermanentDeleteRequest,
+}: {
+  events: ProductionEvent[];
+  loading: boolean;
+  error: string | null;
+  restoringEventId: string | null;
+  onClose: () => void;
+  onRestore: (event: ProductionEvent) => Promise<void>;
+  onPermanentDeleteRequest: (event: ProductionEvent) => void;
+}) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-end bg-stone-950/10 p-3 sm:items-center sm:justify-center sm:p-6">
+      <div className="flex max-h-[82vh] w-full flex-col rounded-3xl border border-stone-200 bg-white p-4 sm:max-w-2xl sm:p-5">
+        <div className="mb-4 flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <h2 className="text-base font-semibold text-stone-950">Corbeille</h2>
+            <p className="mt-1 text-base font-medium text-stone-500">Événements supprimés restaurables.</p>
+          </div>
+          <button type="button" onClick={onClose} className="rounded-full border border-stone-200 bg-white px-3 py-1.5 text-base font-semibold text-stone-600 transition hover:bg-stone-50">
+            Fermer
+          </button>
+        </div>
+
+        {error && <div className="mb-3 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-base font-medium text-rose-700">{error}</div>}
+
+        <div className="no-scrollbar min-h-0 flex-1 overflow-y-auto overscroll-contain">
+          {loading && <div className="rounded-2xl bg-stone-50 px-4 py-3 text-base font-medium text-stone-500">Chargement...</div>}
+          {!loading && events.length === 0 && !error && (
+            <div className="rounded-2xl bg-stone-50 px-4 py-3 text-base font-medium text-stone-500">La corbeille est vide.</div>
+          )}
+          <div className="space-y-2">
+            {events.map((event) => {
+              const isRestoring = restoringEventId === event.id;
+              return (
+                <div key={event.id} className="rounded-2xl border border-stone-200 bg-stone-50/70 px-4 py-3">
+                  <div className="flex min-w-0 items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="truncate text-base font-semibold text-stone-950">{event.clientName}</p>
+                      <p className="truncate text-base font-medium text-stone-500">{event.eventName}</p>
+                      <p className="mt-2 text-sm font-semibold text-stone-500">
+                        {formatFullDate(event.date)}
+                        {event.deletedAt && ` · Supprimé le ${formatHistoryTimestamp(event.deletedAt)}`}
+                      </p>
+                    </div>
+                  </div>
+                  <div className="mt-3 flex flex-wrap justify-end gap-2">
+                    <button
+                      type="button"
+                      onClick={() => void onRestore(event)}
+                      disabled={isRestoring}
+                      className="rounded-full border border-stone-200 bg-white px-3 py-1.5 text-base font-semibold text-stone-600 transition hover:bg-stone-100 disabled:text-stone-300"
+                    >
+                      {isRestoring ? "Restauration..." : "Restaurer"}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => onPermanentDeleteRequest(event)}
+                      disabled={isRestoring}
+                      className="rounded-full border border-[#bb2720]/20 bg-white px-3 py-1.5 text-base font-semibold text-[#bb2720] transition hover:bg-[#bb2720]/[0.05] disabled:text-stone-300"
+                    >
+                      Supprimer définitivement
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function DeleteEventDialog({
   event,
   onClose,
@@ -6478,8 +6698,67 @@ function DeleteEventDialog({
     <div className="fixed inset-0 z-50 flex items-end bg-stone-950/10 p-3 sm:items-center sm:justify-center sm:p-6">
       <div className="w-full rounded-3xl border border-stone-200 bg-white p-5 sm:max-w-md sm:p-6">
         <div className="mb-5">
-          <h2 className="text-base font-semibold text-stone-950">Supprimer cet événement ?</h2>
-          <p className="mt-2 text-base font-medium text-stone-500">Cette action est définitive.</p>
+          <h2 className="text-base font-semibold text-stone-950">Placer cet événement dans la corbeille ?</h2>
+          <p className="mt-2 text-base font-medium text-stone-500">Vous pourrez le restaurer depuis la Corbeille.</p>
+          <p className="mt-4 truncate text-base font-semibold text-stone-950">{event.clientName}</p>
+          <p className="mt-1 truncate text-base text-stone-500">{event.eventName}</p>
+        </div>
+
+        {error && <div className="mb-4 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-base font-medium text-rose-700">{error}</div>}
+
+        <div className="flex justify-end gap-2">
+          <button
+            type="button"
+            onClick={onClose}
+            disabled={deleting}
+            className="rounded-full border border-stone-200 bg-white px-4 py-2 text-base font-semibold text-stone-600 disabled:text-stone-300"
+          >
+            Annuler
+          </button>
+          <button
+            type="button"
+            onClick={() => void handleConfirm()}
+            disabled={deleting}
+            className="rounded-full bg-[#bb2720] px-4 py-2 text-base font-semibold text-white disabled:bg-stone-300"
+          >
+            {deleting ? "Déplacement..." : "Supprimer"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function PermanentDeleteEventDialog({
+  event,
+  onClose,
+  onConfirm,
+}: {
+  event: ProductionEvent;
+  onClose: () => void;
+  onConfirm: (event: ProductionEvent) => Promise<void>;
+}) {
+  const [deleting, setDeleting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function handleConfirm() {
+    setDeleting(true);
+    setError(null);
+
+    try {
+      await onConfirm(event);
+    } catch (deleteError) {
+      setError(deleteError instanceof Error ? deleteError.message : "Impossible de supprimer définitivement l'événement.");
+      setDeleting(false);
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-[60] flex items-end bg-stone-950/15 p-3 sm:items-center sm:justify-center sm:p-6">
+      <div className="w-full rounded-3xl border border-rose-200 bg-white p-5 sm:max-w-md sm:p-6">
+        <div className="mb-5">
+          <h2 className="text-base font-semibold text-stone-950">Supprimer définitivement cet événement ?</h2>
+          <p className="mt-2 text-base font-medium text-rose-700">Cette action est irréversible.</p>
           <p className="mt-4 truncate text-base font-semibold text-stone-950">{event.clientName}</p>
           <p className="mt-1 truncate text-base text-stone-500">{event.eventName}</p>
         </div>

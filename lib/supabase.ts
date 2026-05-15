@@ -18,6 +18,8 @@ export type Database = {
           end_time: string | null;
           end_of_day_time: string | null;
           status: EventStatus;
+          deleted_at: string | null;
+          deleted_by: string | null;
           created_at: string;
           updated_at: string;
         };
@@ -31,6 +33,8 @@ export type Database = {
           end_time?: string | null;
           end_of_day_time?: string | null;
           status?: EventStatus;
+          deleted_at?: string | null;
+          deleted_by?: string | null;
           created_at?: string;
           updated_at?: string;
         };
