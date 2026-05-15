@@ -980,6 +980,7 @@ export default function Home() {
   const [createModalOpen, setCreateModalOpen] = useState(false);
   const [quoteImportOpen, setQuoteImportOpen] = useState(false);
   const [quoteImportFile, setQuoteImportFile] = useState<File | null>(null);
+  const [searchOpen, setSearchOpen] = useState(false);
   const [globalQuoteDragActive, setGlobalQuoteDragActive] = useState(false);
   const [editingEvent, setEditingEvent] = useState<ProductionEvent | null>(null);
   const [editingReturnScreen, setEditingReturnScreen] = useState<Screen>("calendar");
@@ -1092,6 +1093,7 @@ export default function Home() {
   function openEvent(id: string) {
     setSelectedId(id);
     setScreen("detail");
+    setSearchOpen(false);
   }
 
   function changeMonth(delta: number) {
@@ -2126,6 +2128,7 @@ export default function Home() {
           onImportQuote={() => {
             openQuoteImport();
           }}
+          onSearch={() => setSearchOpen(true)}
           onCreateEvent={() => {
             setEditingEvent(null);
             setEditingReturnScreen("calendar");
@@ -2257,6 +2260,14 @@ export default function Home() {
         />
       )}
 
+      {searchOpen && (
+        <EventSearchOverlay
+          events={chronologicalEvents}
+          onClose={() => setSearchOpen(false)}
+          onOpenEvent={openEvent}
+        />
+      )}
+
       {deleteDialogEvent && (
         <DeleteEventDialog
           event={deleteDialogEvent}
@@ -2290,6 +2301,7 @@ function AppHeader({
   createMenuOpen,
   setCreateMenuOpen,
   onImportQuote,
+  onSearch,
   onCreateEvent,
   canEditEvent,
   onEditEvent,
@@ -2305,6 +2317,7 @@ function AppHeader({
   createMenuOpen: boolean;
   setCreateMenuOpen: (open: boolean | ((current: boolean) => boolean)) => void;
   onImportQuote: () => void;
+  onSearch: () => void;
   onCreateEvent: () => void;
   canEditEvent: boolean;
   onEditEvent: () => void;
@@ -2360,7 +2373,7 @@ function AppHeader({
             Aujourd'hui
           </button>
         )}
-        <HeaderIcon label="Rechercher" icon={Search} />
+        <HeaderIcon label="Rechercher" icon={Search} onClick={onSearch} />
         <div ref={menuWrapperRef} className="relative">
           <button
             onClick={() => setCreateMenuOpen((current) => !current)}
@@ -2430,6 +2443,117 @@ function CreateMenu({
           Supprimer l'événement
         </button>
       )}
+    </div>
+  );
+}
+
+function getEventSearchText(event: ProductionEvent) {
+  return normalizeLabel(
+    [
+      event.clientName,
+      event.eventName,
+      event.date,
+      formatFullDate(event.date),
+      formatTimeRange(event.startTime, event.endTime),
+      ...event.options.map((option) => option.label),
+      ...event.links.map((link) => link.label),
+      ...event.documentGroups.map((group) => group.label),
+    ]
+      .filter(Boolean)
+      .join(" "),
+  );
+}
+
+function EventSearchOverlay({
+  events,
+  onClose,
+  onOpenEvent,
+}: {
+  events: ProductionEvent[];
+  onClose: () => void;
+  onOpenEvent: (id: string) => void;
+}) {
+  const [query, setQuery] = useState("");
+  const inputRef = useRef<HTMLInputElement | null>(null);
+  const normalizedQuery = normalizeLabel(query);
+  const results = useMemo(() => {
+    if (!normalizedQuery) return [];
+    return events.filter((event) => getEventSearchText(event).includes(normalizedQuery)).slice(0, 20);
+  }, [events, normalizedQuery]);
+
+  useEffect(() => {
+    const focusFrame = window.requestAnimationFrame(() => inputRef.current?.focus());
+    return () => window.cancelAnimationFrame(focusFrame);
+  }, []);
+
+  useEffect(() => {
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") onClose();
+    }
+
+    document.addEventListener("keydown", handleKeyDown);
+    return () => document.removeEventListener("keydown", handleKeyDown);
+  }, [onClose]);
+
+  return (
+    <div className="fixed inset-0 z-50 bg-stone-950/10 px-4 py-[calc(1rem+env(safe-area-inset-top))] backdrop-blur-sm sm:px-6">
+      <div className="mx-auto flex h-full max-w-2xl flex-col">
+        <div className="rounded-[1.75rem] border border-stone-200 bg-white/95 p-3">
+          <div className="flex items-center gap-2">
+            <div className="flex h-12 min-w-0 flex-1 items-center gap-3 rounded-2xl border border-stone-200 bg-[#f7f9fb] px-4">
+              <Search className="h-4 w-4 shrink-0 text-stone-400" />
+              <input
+                ref={inputRef}
+                value={query}
+                onChange={(event) => setQuery(event.target.value)}
+                placeholder="Rechercher"
+                className="min-w-0 flex-1 bg-transparent text-base font-semibold text-stone-950 outline-none placeholder:text-stone-300"
+              />
+            </div>
+            <button
+              type="button"
+              onClick={onClose}
+              className="h-12 rounded-2xl px-3 text-base font-semibold text-stone-500 transition hover:bg-stone-100 hover:text-stone-800"
+            >
+              Annuler
+            </button>
+          </div>
+        </div>
+
+        <div className="no-scrollbar mt-3 min-h-0 flex-1 overflow-y-auto overscroll-contain rounded-[1.75rem] border border-stone-200 bg-white/95 p-2">
+          {!normalizedQuery && (
+            <div className="px-4 py-8 text-center text-base font-medium text-stone-400">Rechercher un client, un événement ou une date.</div>
+          )}
+          {normalizedQuery && results.length === 0 && (
+            <div className="px-4 py-8 text-center text-base font-medium text-stone-400">Aucun résultat</div>
+          )}
+          {results.length > 0 && (
+            <div className="space-y-1.5">
+              {results.map((event) => {
+                const timeRange = formatTimeRange(event.startTime, event.endTime);
+                return (
+                  <button
+                    key={event.id}
+                    type="button"
+                    onClick={() => onOpenEvent(event.id)}
+                    className="grid w-full grid-cols-[3px_1fr] items-center gap-4 rounded-2xl px-3 py-3 text-left transition hover:bg-stone-50"
+                  >
+                    <span className="h-full min-h-14 rounded-full bg-[#bb2720]" />
+                    <span className="min-w-0">
+                      <span className="block truncate text-base font-semibold leading-snug text-stone-950">{event.clientName}</span>
+                      <span className="block truncate text-base font-medium text-stone-500">{event.eventName}</span>
+                      <span className="mt-1 block truncate text-sm font-semibold text-stone-400">
+                        {formatFullDate(event.date)}
+                        {timeRange ? ` · ${timeRange}` : ""}
+                      </span>
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      </div>
     </div>
   );
 }
@@ -5475,9 +5599,15 @@ function TimelineKeyboardAccessoryBar({
   );
 }
 
-function HeaderIcon({ label, icon: Icon }: { label: string; icon: LucideIcon }) {
+function HeaderIcon({ label, icon: Icon, onClick }: { label: string; icon: LucideIcon; onClick?: () => void }) {
   return (
-    <button className="flex h-10 w-10 items-center justify-center rounded-full border border-stone-200 bg-white text-stone-600" title={label}>
+    <button
+      type="button"
+      onClick={onClick}
+      className="flex h-10 w-10 items-center justify-center rounded-full border border-stone-200 bg-white text-stone-600 transition hover:bg-stone-50"
+      title={label}
+      aria-label={label}
+    >
       <Icon className="h-4 w-4" />
     </button>
   );
