@@ -1105,6 +1105,7 @@ export default function Home() {
     setSelectedId(id);
     setScreen("detail");
     setSearchOpen(false);
+    setYearOverviewOpen(false);
   }
 
   function changeMonth(delta: number) {
@@ -2142,7 +2143,7 @@ export default function Home() {
           detailDateLabel={screen === "detail" && selectedEvent ? formatFullDate(selectedEvent.date) : null}
           goToday={goToday}
           isSelectedDateToday={isSelectedDateToday}
-          createMenuOpen={createMenuOpen}
+          createMenuOpen={createMenuOpen && !yearOverviewOpen}
           setCreateMenuOpen={setCreateMenuOpen}
           onImportQuote={() => {
             openQuoteImport();
@@ -2242,6 +2243,33 @@ export default function Home() {
         </div>
       )}
 
+      {yearOverviewOpen && (
+        <YearOverviewOverlay
+          initialYear={visibleMonth.getFullYear()}
+          events={events}
+          visibleMonth={visibleMonth}
+          todayKey={todayKey}
+          isSelectedDateToday={isSelectedDateToday}
+          createMenuOpen={createMenuOpen}
+          setCreateMenuOpen={setCreateMenuOpen}
+          onGoToday={() => {
+            goToday();
+            setYearOverviewOpen(false);
+          }}
+          onImportQuote={() => {
+            openQuoteImport();
+          }}
+          onSearch={() => setSearchOpen(true)}
+          onCreateEvent={() => {
+            setEditingEvent(null);
+            setEditingReturnScreen("calendar");
+            setCreateModalOpen(true);
+            setCreateMenuOpen(false);
+          }}
+          onSelectMonth={selectYearOverviewMonth}
+        />
+      )}
+
       {createModalOpen && (
         <CreateEventModal
           selectedDateKey={selectedDateKey}
@@ -2285,16 +2313,6 @@ export default function Home() {
           events={chronologicalEvents}
           onClose={() => setSearchOpen(false)}
           onOpenEvent={openEvent}
-        />
-      )}
-
-      {yearOverviewOpen && (
-        <YearOverviewOverlay
-          initialYear={visibleMonth.getFullYear()}
-          events={events}
-          visibleMonth={visibleMonth}
-          todayKey={todayKey}
-          onSelectMonth={selectYearOverviewMonth}
         />
       )}
 
@@ -2599,12 +2617,26 @@ function YearOverviewOverlay({
   events,
   visibleMonth,
   todayKey,
+  isSelectedDateToday,
+  createMenuOpen,
+  setCreateMenuOpen,
+  onGoToday,
+  onImportQuote,
+  onSearch,
+  onCreateEvent,
   onSelectMonth,
 }: {
   initialYear: number;
   events: ProductionEvent[];
   visibleMonth: Date;
   todayKey: string;
+  isSelectedDateToday: boolean;
+  createMenuOpen: boolean;
+  setCreateMenuOpen: (open: boolean | ((current: boolean) => boolean)) => void;
+  onGoToday: () => void;
+  onImportQuote: () => void;
+  onSearch: () => void;
+  onCreateEvent: () => void;
   onSelectMonth: (year: number, monthIndex: number) => void;
 }) {
   const [displayYear, setDisplayYear] = useState(initialYear);
@@ -2775,10 +2807,29 @@ function YearOverviewOverlay({
   }
 
   return (
-    <div className="fixed inset-0 z-50 overflow-hidden bg-[#f7f9fb]/95 px-4 py-[calc(1.15rem+env(safe-area-inset-top))] backdrop-blur-xl sm:px-6 sm:py-[calc(1.5rem+env(safe-area-inset-top))]">
+    <div className="fixed inset-0 z-50 overflow-hidden bg-[#f7f9fb]/95 px-4 pb-[calc(1.15rem+env(safe-area-inset-bottom))] pt-[calc(1.25rem+env(safe-area-inset-top))] backdrop-blur-xl sm:px-6 sm:pb-[calc(1.5rem+env(safe-area-inset-bottom))] sm:pt-[calc(1.5rem+env(safe-area-inset-top))] lg:px-8">
+      <div className="mx-auto flex h-full max-w-7xl flex-col">
+        <AppHeader
+          screen="calendar"
+          setScreen={() => undefined}
+          yearLabel={String(displayYear)}
+          detailDateLabel={null}
+          goToday={onGoToday}
+          isSelectedDateToday={isSelectedDateToday}
+          createMenuOpen={createMenuOpen}
+          setCreateMenuOpen={setCreateMenuOpen}
+          onImportQuote={onImportQuote}
+          onSearch={onSearch}
+          onOpenYearOverview={() => undefined}
+          onCreateEvent={onCreateEvent}
+          canEditEvent={false}
+          onEditEvent={() => undefined}
+          canDeleteEvent={false}
+          onDeleteEvent={() => undefined}
+        />
       <div
         ref={yearPagerRef}
-        className="mx-auto h-full max-w-5xl overflow-hidden"
+        className="mx-auto min-h-0 w-full max-w-5xl flex-1 overflow-hidden"
         style={{
           fontFamily: '"SF Pro Rounded", ui-rounded, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
           touchAction: "none",
@@ -2825,6 +2876,7 @@ function YearOverviewOverlay({
           ))}
         </div>
       </div>
+      </div>
     </div>
   );
 }
@@ -2846,8 +2898,7 @@ function YearOverviewPage({
 }) {
   return (
     <section className="flex h-full w-full shrink-0 flex-col">
-      <h2 className="shrink-0 px-1 pb-3 text-center text-5xl font-semibold leading-none text-stone-950 sm:pb-6 sm:text-6xl">{year}</h2>
-      <div className="grid min-h-0 flex-1 grid-cols-3 gap-x-2 gap-y-2 sm:gap-x-8 sm:gap-y-8">
+      <div className="grid min-h-0 flex-1 grid-cols-3 gap-x-2 gap-y-2 pt-2 sm:gap-x-8 sm:gap-y-8 sm:pt-4">
         {monthNames.map((monthName, monthIndex) => (
           <YearOverviewMiniMonth
             key={`${year}-${monthName}`}
