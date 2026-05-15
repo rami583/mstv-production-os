@@ -5925,6 +5925,7 @@ function EventDatePicker({
   const [pendingDate, setPendingDate] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const pickerSwipeStartRef = useRef<{ pointerId: number; x: number; y: number; axis: "horizontal" | "vertical" | null } | null>(null);
   const weekdays = ["L", "M", "M", "J", "V", "S", "D"];
   const monthData = useMemo(() => getCalendarMonthData(pickerMonth, []), [pickerMonth]);
 
@@ -5957,6 +5958,50 @@ function EventDatePicker({
     setPickerMonth((current) => new Date(current.getFullYear(), current.getMonth() + delta, 1));
   }
 
+  function handlePickerSwipePointerDown(pointerEvent: ReactPointerEvent<HTMLDivElement>) {
+    if (saving || pendingDate || pointerEvent.pointerType === "mouse") return;
+
+    pickerSwipeStartRef.current = {
+      pointerId: pointerEvent.pointerId,
+      x: pointerEvent.clientX,
+      y: pointerEvent.clientY,
+      axis: null,
+    };
+    pointerEvent.currentTarget.setPointerCapture(pointerEvent.pointerId);
+  }
+
+  function handlePickerSwipePointerMove(pointerEvent: ReactPointerEvent<HTMLDivElement>) {
+    const swipeStart = pickerSwipeStartRef.current;
+    if (!swipeStart || swipeStart.pointerId !== pointerEvent.pointerId) return;
+
+    const deltaX = pointerEvent.clientX - swipeStart.x;
+    const deltaY = pointerEvent.clientY - swipeStart.y;
+
+    if (!swipeStart.axis && Math.max(Math.abs(deltaX), Math.abs(deltaY)) > 8) {
+      swipeStart.axis = Math.abs(deltaX) > Math.abs(deltaY) ? "horizontal" : "vertical";
+    }
+
+    if (swipeStart.axis === "horizontal") {
+      pointerEvent.preventDefault();
+    }
+  }
+
+  function handlePickerSwipePointerUp(pointerEvent: ReactPointerEvent<HTMLDivElement>) {
+    const swipeStart = pickerSwipeStartRef.current;
+    if (!swipeStart || swipeStart.pointerId !== pointerEvent.pointerId) return;
+
+    const deltaX = pointerEvent.clientX - swipeStart.x;
+    const deltaY = pointerEvent.clientY - swipeStart.y;
+    pickerSwipeStartRef.current = null;
+
+    if (swipeStart.axis !== "horizontal" || Math.abs(deltaX) < 48 || Math.abs(deltaX) < Math.abs(deltaY) * 1.2) return;
+    changePickerMonth(deltaX < 0 ? 1 : -1);
+  }
+
+  function resetPickerSwipe() {
+    pickerSwipeStartRef.current = null;
+  }
+
   return (
     <div className="fixed inset-0 z-50 flex items-end justify-center bg-stone-950/10 p-3 sm:items-center sm:p-6">
       <div className="w-full max-w-sm rounded-3xl border border-stone-200 bg-white p-3 sm:p-4">
@@ -5965,7 +6010,7 @@ function EventDatePicker({
             type="button"
             onClick={() => changePickerMonth(-1)}
             disabled={saving}
-            className={calendarArrowClassName}
+            className={cn(calendarArrowClassName, "hidden sm:flex")}
             aria-label="Mois précédent"
           >
             ←
@@ -5977,14 +6022,21 @@ function EventDatePicker({
             type="button"
             onClick={() => changePickerMonth(1)}
             disabled={saving}
-            className={calendarArrowClassName}
+            className={cn(calendarArrowClassName, "hidden sm:flex")}
             aria-label="Mois suivant"
           >
             →
           </button>
         </div>
 
-        <div className="grid grid-cols-7 px-1">
+        <div
+          className="grid grid-cols-7 px-1"
+          style={{ touchAction: "pan-y" }}
+          onPointerDown={handlePickerSwipePointerDown}
+          onPointerMove={handlePickerSwipePointerMove}
+          onPointerUp={handlePickerSwipePointerUp}
+          onPointerCancel={resetPickerSwipe}
+        >
           {weekdays.map((weekday, index) => (
             <span key={`${weekday}-${index}`} className="py-2 text-center text-xs font-semibold text-stone-400">
               {weekday}
