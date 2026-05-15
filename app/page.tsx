@@ -6127,44 +6127,29 @@ function SharedDatePicker({
 
       {pendingDate && (
         <div className="absolute inset-0 flex items-end justify-center bg-stone-950/10 p-3 sm:items-center sm:p-6">
-          <div className="w-full max-w-sm rounded-3xl border border-stone-200 bg-white p-5 sm:p-6">
-            <div className="mb-5">
-              <h2 className="text-base font-semibold text-stone-950">{confirmationTitle}</h2>
-              <div className="mt-4 grid grid-cols-2 gap-2">
-                <div className="rounded-2xl bg-stone-50 px-3 py-3">
-                  <p className="text-xs font-semibold uppercase tracking-normal text-stone-400">Ancienne date</p>
-                  <p className="mt-1 text-base font-semibold text-stone-800">{formatFullDate(selectedDate)}</p>
-                </div>
-                <div className="rounded-2xl bg-[#bb2720]/[0.06] px-3 py-3">
-                  <p className="text-xs font-semibold uppercase tracking-normal text-[#bb2720]/70">Nouvelle date</p>
-                  <p className="mt-1 text-base font-semibold text-[#bb2720]">{formatFullDate(pendingDate)}</p>
-                </div>
-              </div>
-            </div>
-
-            {error && <div className="mb-4 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-base font-medium text-rose-700">{error}</div>}
-
-            <div className="flex justify-end gap-2">
+          <div className="w-full max-w-sm rounded-3xl border border-stone-200 bg-white p-4 sm:p-5">
+            <div className="grid grid-cols-2 gap-2">
               <button
                 type="button"
-                onClick={() => {
-                  setPendingDate(null);
-                  setError(null);
-                }}
+                onClick={onClose}
                 disabled={saving}
-                className="rounded-full border border-stone-200 bg-white px-4 py-2 text-base font-semibold text-stone-600 transition hover:bg-stone-50 disabled:text-stone-300"
+                className="rounded-2xl bg-stone-50 px-3 py-3 text-left transition hover:bg-stone-100 disabled:opacity-60"
               >
-                Annuler
+                <p className="text-xs font-semibold uppercase tracking-normal text-stone-400">Ancienne date</p>
+                <p className="mt-1 text-base font-semibold text-stone-800">{formatFullDate(selectedDate)}</p>
               </button>
               <button
                 type="button"
                 onClick={() => void confirmDateChange()}
                 disabled={saving}
-                className="rounded-full bg-[#bb2720] px-4 py-2 text-base font-semibold text-white transition hover:bg-[#a7211b] disabled:bg-stone-300"
+                className="rounded-2xl bg-[#bb2720]/[0.06] px-3 py-3 text-left transition hover:bg-[#bb2720]/10 disabled:opacity-60"
               >
-                {saving ? "Modification..." : "Confirmer"}
+                <p className="text-xs font-semibold uppercase tracking-normal text-[#bb2720]/70">Nouvelle date</p>
+                <p className="mt-1 text-base font-semibold text-[#bb2720]">{formatFullDate(pendingDate)}</p>
               </button>
             </div>
+
+            {error && <div className="mt-4 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-base font-medium text-rose-700">{error}</div>}
           </div>
         </div>
       )}
