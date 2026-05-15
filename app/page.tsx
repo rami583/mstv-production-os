@@ -33,7 +33,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { Keyboard } from "@capacitor/keyboard";
-import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { Card } from "@/components/ui/card";
 import {
   publicHolidays,
@@ -3099,6 +3099,13 @@ function ProductionDetail({
   const detailScrollContainerRef = useRef<HTMLDivElement | null>(null);
   const detailBlockRef = useRef<HTMLDivElement | null>(null);
   const previousContextSelectionKeyRef = useRef<string | null>(null);
+  const eventSwipeViewportRef = useRef<HTMLElement | null>(null);
+  const eventSwipeStartRef = useRef<{ pointerId: number; x: number; y: number; axis: "horizontal" | "vertical" | null } | null>(null);
+  const pendingEventSwipeDirectionRef = useRef<-1 | 1 | null>(null);
+  const suppressEventSwipeClickRef = useRef(false);
+  const [eventSwipeOffset, setEventSwipeOffset] = useState(0);
+  const [isEventSwipeDragging, setIsEventSwipeDragging] = useState(false);
+  const [eventSwipeAnimating, setEventSwipeAnimating] = useState(false);
 
   const contextSelectionKey =
     contextSelection?.type === "option"
@@ -3148,6 +3155,29 @@ function ProductionDetail({
       });
     });
   }, [contextSelectionKey]);
+
+  useLayoutEffect(() => {
+    const direction = pendingEventSwipeDirectionRef.current;
+    if (!direction) return;
+
+    pendingEventSwipeDirectionRef.current = null;
+    const viewportWidth = eventSwipeViewportRef.current?.clientWidth ?? window.innerWidth;
+    const enterOffset = direction === 1 ? viewportWidth : -viewportWidth;
+
+    setIsEventSwipeDragging(true);
+    setEventSwipeOffset(enterOffset);
+
+    window.requestAnimationFrame(() => {
+      window.requestAnimationFrame(() => {
+        setIsEventSwipeDragging(false);
+        setEventSwipeOffset(0);
+
+        window.setTimeout(() => {
+          setEventSwipeAnimating(false);
+        }, 280);
+      });
+    });
+  }, [event.id]);
 
   function selectOption(option: EventOption) {
     setContextSelection((current) =>
@@ -3254,15 +3284,125 @@ function ProductionDetail({
     }
   }
 
+  function isTouchEventSwipeTarget(target: EventTarget | null) {
+    return target instanceof HTMLElement && !target.closest("input, textarea, select, a, [contenteditable='true']");
+  }
+
+  function resetEventHeaderSwipe() {
+    eventSwipeStartRef.current = null;
+    setIsEventSwipeDragging(false);
+    setEventSwipeOffset(0);
+  }
+
+  function animateEventNavigation(direction: -1 | 1) {
+    const canNavigate = direction === 1 ? hasNext : hasPrevious;
+    if (!canNavigate || eventSwipeAnimating) {
+      resetEventHeaderSwipe();
+      return;
+    }
+
+    const viewportWidth = eventSwipeViewportRef.current?.clientWidth ?? window.innerWidth;
+    const exitOffset = direction === 1 ? -viewportWidth : viewportWidth;
+    pendingEventSwipeDirectionRef.current = direction;
+    setIsEventSwipeDragging(false);
+    setEventSwipeAnimating(true);
+    setEventSwipeOffset(exitOffset);
+
+    window.setTimeout(() => {
+      if (direction === 1) {
+        goNext();
+      } else {
+        goPrevious();
+      }
+    }, 230);
+  }
+
+  function handleEventHeaderPointerDown(pointerEvent: ReactPointerEvent<HTMLElement>) {
+    if (eventSwipeAnimating || pointerEvent.pointerType === "mouse" || !isTouchEventSwipeTarget(pointerEvent.target)) return;
+    if (typeof window !== "undefined" && !window.matchMedia("(hover: none), (pointer: coarse)").matches) return;
+
+    eventSwipeStartRef.current = {
+      pointerId: pointerEvent.pointerId,
+      x: pointerEvent.clientX,
+      y: pointerEvent.clientY,
+      axis: null,
+    };
+    suppressEventSwipeClickRef.current = false;
+    setIsEventSwipeDragging(true);
+    pointerEvent.currentTarget.setPointerCapture(pointerEvent.pointerId);
+  }
+
+  function handleEventHeaderPointerMove(pointerEvent: ReactPointerEvent<HTMLElement>) {
+    const swipeStart = eventSwipeStartRef.current;
+    if (!swipeStart || swipeStart.pointerId !== pointerEvent.pointerId || eventSwipeAnimating) return;
+
+    const deltaX = pointerEvent.clientX - swipeStart.x;
+    const deltaY = pointerEvent.clientY - swipeStart.y;
+
+    if (!swipeStart.axis && (Math.abs(deltaX) > 8 || Math.abs(deltaY) > 8)) {
+      swipeStart.axis = Math.abs(deltaX) > Math.abs(deltaY) ? "horizontal" : "vertical";
+    }
+
+    if (swipeStart.axis === "vertical") {
+      resetEventHeaderSwipe();
+      return;
+    }
+
+    if (swipeStart.axis !== "horizontal") return;
+
+    pointerEvent.preventDefault();
+    suppressEventSwipeClickRef.current = true;
+
+    const canNavigate = deltaX < 0 ? hasNext : hasPrevious;
+    const viewportWidth = eventSwipeViewportRef.current?.clientWidth ?? pointerEvent.currentTarget.clientWidth;
+    const resistedOffset = canNavigate ? deltaX : deltaX * 0.22;
+    const boundedOffset = Math.max(-viewportWidth, Math.min(viewportWidth, resistedOffset));
+    setEventSwipeOffset(boundedOffset);
+  }
+
+  function handleEventHeaderPointerUp(pointerEvent: ReactPointerEvent<HTMLElement>) {
+    const swipeStart = eventSwipeStartRef.current;
+    if (!swipeStart || swipeStart.pointerId !== pointerEvent.pointerId) return;
+
+    const deltaX = pointerEvent.clientX - swipeStart.x;
+    const viewportWidth = eventSwipeViewportRef.current?.clientWidth ?? pointerEvent.currentTarget.clientWidth;
+    const swipeThreshold = Math.min(120, Math.max(58, viewportWidth * 0.18));
+    eventSwipeStartRef.current = null;
+    setIsEventSwipeDragging(false);
+
+    if (swipeStart.axis === "horizontal" && Math.abs(deltaX) >= swipeThreshold) {
+      animateEventNavigation(deltaX < 0 ? 1 : -1);
+      return;
+    }
+
+    setEventSwipeOffset(0);
+  }
+
   return (
-    <section className="flex min-h-0 flex-1 flex-col gap-5 overflow-hidden">
-      <Card className="premium-surface shrink-0 p-5 sm:p-8">
+    <section
+      ref={eventSwipeViewportRef}
+      className={cn("flex min-h-0 flex-1 flex-col gap-5 overflow-hidden", !isEventSwipeDragging && "transition-transform duration-300 ease-out")}
+      style={{ transform: `translate3d(${eventSwipeOffset}px, 0, 0)` }}
+    >
+      <Card
+        className="premium-surface shrink-0 touch-pan-y p-5 sm:p-8"
+        onPointerDown={handleEventHeaderPointerDown}
+        onPointerMove={handleEventHeaderPointerMove}
+        onPointerUp={handleEventHeaderPointerUp}
+        onPointerCancel={resetEventHeaderSwipe}
+        onClickCapture={(clickEvent) => {
+          if (!suppressEventSwipeClickRef.current) return;
+          clickEvent.preventDefault();
+          clickEvent.stopPropagation();
+          suppressEventSwipeClickRef.current = false;
+        }}
+      >
         <div className="flex items-start justify-between gap-4">
           <div className="min-w-0 flex-1">
             <h1 className="truncate text-4xl font-semibold leading-tight text-stone-950 sm:text-6xl">{event.clientName}</h1>
             <p className="mt-2 truncate text-base font-medium text-stone-500">{event.eventName}</p>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="hidden items-center gap-2 sm:flex">
             <button onClick={goPrevious} disabled={!hasPrevious} className={calendarArrowClassName} aria-label="Événement précédent">
               ←
             </button>
