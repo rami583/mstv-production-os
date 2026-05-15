@@ -2339,13 +2339,14 @@ export default function Home() {
       )}
 
       {dateEditorOpen && selectedEvent && (
-        <EventDatePicker
-          event={selectedEvent}
+        <SharedDatePicker
+          selectedDate={selectedEvent.date}
           onClose={() => setDateEditorOpen(false)}
-          onSubmit={async (nextDate) => {
+          onSelectDate={async (nextDate) => {
             await updateEventDate(selectedEvent, nextDate);
             setDateEditorOpen(false);
           }}
+          confirmationTitle="Modifier la date de cet événement ?"
         />
       )}
 
@@ -5591,6 +5592,7 @@ function CreateEventModal({
   });
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [datePickerOpen, setDatePickerOpen] = useState(false);
 
   async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -5630,7 +5632,13 @@ function CreateEventModal({
             <input required value={form.eventName} onChange={(event) => updateField("eventName", event.target.value)} className={formInputClassName} />
           </Field>
           <Field label="Date">
-            <input required type="date" value={form.date} onChange={(event) => updateField("date", event.target.value)} className={formInputClassName} />
+            <button
+              type="button"
+              onClick={() => setDatePickerOpen(true)}
+              className={cn(formInputClassName, "flex items-center text-left")}
+            >
+              {formatFullDate(form.date)}
+            </button>
           </Field>
           <Field label="Arrivée client">
             <TimeTextInput value={form.clientArrivalTime} onChange={(value) => updateField("clientArrivalTime", value)} className={formInputClassName} />
@@ -5656,6 +5664,17 @@ function CreateEventModal({
             {submitting ? (isEditing ? "Modification..." : "Création...") : isEditing ? "Modifier" : "Créer"}
           </button>
         </div>
+
+        {datePickerOpen && (
+          <SharedDatePicker
+            selectedDate={form.date}
+            onClose={() => setDatePickerOpen(false)}
+            onSelectDate={(date) => {
+              updateField("date", date);
+              setDatePickerOpen(false);
+            }}
+          />
+        )}
       </form>
     </div>
   );
@@ -5689,6 +5708,7 @@ function QuoteImportModal({
   const [extracting, setExtracting] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [datePickerOpen, setDatePickerOpen] = useState(false);
   const initialFileProcessedRef = useRef<File | null>(null);
 
   function updateField<Key extends keyof CreateEventInput>(key: Key, value: CreateEventInput[Key]) {
@@ -5797,7 +5817,13 @@ function QuoteImportModal({
                 <input required value={form.eventName} onChange={(event) => updateField("eventName", event.target.value)} className={formInputClassName} />
               </Field>
               <Field label="Date">
-                <input required type="date" value={form.date} onChange={(event) => updateField("date", event.target.value)} className={formInputClassName} />
+                <button
+                  type="button"
+                  onClick={() => setDatePickerOpen(true)}
+                  className={cn(formInputClassName, "flex items-center text-left")}
+                >
+                  {formatFullDate(form.date)}
+                </button>
               </Field>
               <Field label="Arrivée client">
                 <TimeTextInput value={form.clientArrivalTime} onChange={(value) => updateField("clientArrivalTime", value)} className={formInputClassName} />
@@ -5824,6 +5850,17 @@ function QuoteImportModal({
               />
             </label>
           </>
+        )}
+
+        {datePickerOpen && (
+          <SharedDatePicker
+            selectedDate={form.date}
+            onClose={() => setDatePickerOpen(false)}
+            onSelectDate={(date) => {
+              updateField("date", date);
+              setDatePickerOpen(false);
+            }}
+          />
         )}
 
         {error && <div className="mt-4 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-base font-medium text-rose-700">{error}</div>}
@@ -5912,16 +5949,18 @@ function DeleteEventDialog({
   );
 }
 
-function EventDatePicker({
-  event,
+function SharedDatePicker({
+  selectedDate,
   onClose,
-  onSubmit,
+  onSelectDate,
+  confirmationTitle,
 }: {
-  event: ProductionEvent;
+  selectedDate: string;
   onClose: () => void;
-  onSubmit: (date: string) => Promise<void>;
+  onSelectDate: (date: string) => Promise<void> | void;
+  confirmationTitle?: string;
 }) {
-  const [pickerMonth, setPickerMonth] = useState(() => new Date(`${event.date}T12:00:00`));
+  const [pickerMonth, setPickerMonth] = useState(() => new Date(`${selectedDate}T12:00:00`));
   const [pendingDate, setPendingDate] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -5930,8 +5969,13 @@ function EventDatePicker({
   const monthData = useMemo(() => getCalendarMonthData(pickerMonth, []), [pickerMonth]);
 
   function selectDate(dateKey: string) {
-    if (dateKey === event.date) {
+    if (dateKey === selectedDate) {
       onClose();
+      return;
+    }
+
+    if (!confirmationTitle) {
+      void applyDate(dateKey);
       return;
     }
 
@@ -5939,18 +5983,21 @@ function EventDatePicker({
     setError(null);
   }
 
-  async function confirmDateChange() {
-    if (!pendingDate) return;
-
+  async function applyDate(dateKey: string) {
     setSaving(true);
     setError(null);
 
     try {
-      await onSubmit(pendingDate);
+      await onSelectDate(dateKey);
     } catch (saveError) {
       setError(saveError instanceof Error ? saveError.message : "Impossible de modifier la date.");
       setSaving(false);
     }
+  }
+
+  async function confirmDateChange() {
+    if (!pendingDate) return;
+    await applyDate(pendingDate);
   }
 
   function changePickerMonth(delta: -1 | 1) {
@@ -6046,7 +6093,7 @@ function EventDatePicker({
             <span key={`empty-start-${index}`} className="aspect-square" />
           ))}
           {monthData.calendarDays.map((day) => {
-            const isSelected = day.dateKey === event.date;
+            const isSelected = day.dateKey === selectedDate;
             return (
               <button
                 key={day.dateKey}
@@ -6082,11 +6129,11 @@ function EventDatePicker({
         <div className="absolute inset-0 flex items-end justify-center bg-stone-950/10 p-3 sm:items-center sm:p-6">
           <div className="w-full max-w-sm rounded-3xl border border-stone-200 bg-white p-5 sm:p-6">
             <div className="mb-5">
-              <h2 className="text-base font-semibold text-stone-950">Modifier la date de cet événement ?</h2>
+              <h2 className="text-base font-semibold text-stone-950">{confirmationTitle}</h2>
               <div className="mt-4 grid grid-cols-2 gap-2">
                 <div className="rounded-2xl bg-stone-50 px-3 py-3">
                   <p className="text-xs font-semibold uppercase tracking-normal text-stone-400">Ancienne date</p>
-                  <p className="mt-1 text-base font-semibold text-stone-800">{formatFullDate(event.date)}</p>
+                  <p className="mt-1 text-base font-semibold text-stone-800">{formatFullDate(selectedDate)}</p>
                 </div>
                 <div className="rounded-2xl bg-[#bb2720]/[0.06] px-3 py-3">
                   <p className="text-xs font-semibold uppercase tracking-normal text-[#bb2720]/70">Nouvelle date</p>
