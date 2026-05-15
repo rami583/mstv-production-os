@@ -4015,6 +4015,12 @@ function ProductionDetail({
     setEventSwipeIncomingOffset(0);
 
     window.setTimeout(() => {
+      const scrollContainer = detailScrollContainerRef.current;
+      if (scrollContainer) {
+        scrollContainer.scrollTop = 0;
+        scrollContainer.scrollLeft = 0;
+      }
+
       if (direction === 1) {
         goNext();
       } else {
@@ -4166,7 +4172,7 @@ function ProductionDetail({
         />
       </Card>
 
-      <div ref={detailScrollContainerRef} className="no-scrollbar min-h-0 flex-1 space-y-5 overflow-y-auto overscroll-contain pb-6">
+      <div key={event.id} ref={detailScrollContainerRef} className="no-scrollbar min-h-0 flex-1 space-y-5 overflow-y-auto overscroll-contain pb-6">
         <Card className="premium-surface overflow-hidden p-3 sm:p-5">
         <div className="grid grid-cols-[repeat(3,minmax(0,1fr))] gap-1.5 sm:gap-4 lg:items-start">
           <div className="min-w-0">
