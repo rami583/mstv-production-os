@@ -2316,8 +2316,8 @@ function AppHeader({
             className={cn(
               "rounded-full border px-2.5 py-2 text-base font-semibold transition sm:px-3",
               isSelectedDateToday
-                ? "border-[#bb2720] bg-[#bb2720] text-white hover:bg-[#a7211b]"
-                : "border-stone-200 bg-white text-[#bb2720] hover:bg-[#bb2720]/[0.05]",
+                ? "border-[#bb2720]/20 bg-[#bb2720]/[0.08] text-[#bb2720] hover:bg-[#bb2720]/[0.1]"
+                : "border-stone-200 bg-white text-stone-700 hover:bg-stone-50",
             )}
             aria-pressed={isSelectedDateToday}
           >
