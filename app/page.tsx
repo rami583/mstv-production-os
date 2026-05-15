@@ -3062,12 +3062,6 @@ function CreateMenu({
       >
         Créer un événement
       </button>
-      <button
-        onClick={onOpenTrash}
-        className="block w-full rounded-xl px-4 py-3 text-left text-base font-medium text-stone-700 transition hover:bg-[#bb2720]/[0.05] hover:text-stone-950"
-      >
-        Corbeille
-      </button>
       {canDeleteEvent && (
         <button
           onClick={onDeleteEvent}
@@ -3076,6 +3070,14 @@ function CreateMenu({
           Supprimer l'événement
         </button>
       )}
+      <button
+        onClick={onOpenTrash}
+        aria-label="Corbeille"
+        title="Corbeille"
+        className="flex w-full items-center justify-center rounded-xl px-4 py-3 text-stone-500 transition hover:bg-[#bb2720]/[0.05] hover:text-stone-800"
+      >
+        <Trash2 className="h-4 w-4" aria-hidden="true" />
+      </button>
     </div>
   );
 }
