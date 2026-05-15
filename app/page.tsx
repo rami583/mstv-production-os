@@ -3752,55 +3752,117 @@ function EventSwipePreview({ event, style }: { event: ProductionEvent; style: Re
       <div className="no-scrollbar min-h-0 flex-1 space-y-5 overflow-hidden pb-6">
         <Card className="premium-surface overflow-hidden p-3 sm:p-5">
           <div className="grid grid-cols-[repeat(3,minmax(0,1fr))] gap-1.5 sm:gap-4 lg:items-start">
-            <EventSwipePreviewColumn label="Options">
-              {event.options.slice(0, 6).map((option) => {
+            <div className="min-w-0">
+              <SectionHeader label="Options" tone="option" addLabel="Ajouter une option" onAdd={() => {}} />
+              <div className="grid grid-cols-1 gap-1.5 sm:gap-2">
+                {event.options.map((option) => {
                 const Icon = getOptionIcon(option.label);
                 const optionTone = getOptionTone(option.status);
+                const optionAssignee = getOptionAssignee(option);
+                const optionAssigneeInitials = optionAssignee ? getOptionCollaboratorProfile(optionAssignee)?.initials : null;
+                const showOptionAssigneeInitials = option.status === "incomplete" && Boolean(optionAssigneeInitials);
                 return (
-                  <div key={option.id} className={cn("flex min-h-14 min-w-0 items-center gap-2 rounded-xl border px-2.5 py-2", optionTone.surface, optionTone.border)}>
-                    <Icon className={cn("h-4 w-4 shrink-0", optionTone.icon)} />
-                    <span className={cn("min-w-0 truncate text-base font-semibold", optionTone.text)}>{option.label}</span>
+                  <div
+                    key={option.id}
+                    className={cn(
+                      "group relative flex min-h-[4.75rem] items-center gap-1.5 rounded-xl border-2 sm:min-h-20 sm:gap-2",
+                      optionTone.surface,
+                      optionTone.border,
+                      optionTone.hover,
+                    )}
+                  >
+                    <div
+                      className={cn(
+                        "flex min-h-[4.75rem] min-w-0 flex-1 px-2 py-3 text-left sm:min-h-20 sm:px-3",
+                        showOptionAssigneeInitials ? "flex-col items-start justify-between gap-2" : "items-center gap-1.5 sm:gap-2",
+                      )}
+                    >
+                      {showOptionAssigneeInitials ? (
+                        <>
+                          <span className="inline-flex shrink-0 rounded-full border border-emerald-300 bg-white/75 px-2 py-0.5 text-base font-bold leading-tight text-emerald-800">
+                            {optionAssigneeInitials}
+                          </span>
+                          <span className="flex w-full min-w-0 items-center gap-1.5 pr-5 sm:gap-2">
+                            <Icon className={cn("h-4 w-4 shrink-0 sm:h-5 sm:w-5", optionTone.icon)} />
+                            <span className={cn("min-w-0 flex-1 truncate text-base font-semibold", optionTone.text)}>{option.label}</span>
+                          </span>
+                        </>
+                      ) : (
+                        <>
+                          <Icon className={cn("h-4 w-4 shrink-0 sm:h-5 sm:w-5", optionTone.icon)} />
+                          <span className={cn("min-w-0 flex-1 truncate pr-5 text-base font-semibold", optionTone.text)}>{option.label}</span>
+                        </>
+                      )}
+                    </div>
+                    <span className="absolute right-1.5 top-1.5 flex h-6 w-6 items-center justify-center rounded-full text-emerald-500 opacity-100 [@media(hover:hover)]:opacity-0">
+                      <X className="h-3.5 w-3.5" />
+                    </span>
                   </div>
                 );
               })}
-            </EventSwipePreviewColumn>
-            <EventSwipePreviewColumn label="Liens">
-              {event.links.slice(0, 6).map((link) => {
+              </div>
+            </div>
+            <div className="min-w-0">
+              <SectionHeader label="Liens" tone="link" addLabel="Ajouter un lien" onAdd={() => {}} />
+              <div className="grid grid-cols-1 gap-1.5 sm:gap-2">
+                {event.links.map((link) => {
                 const Icon = getLinkIcon(link.label);
                 const linkTone = getLinkTone(getLinkState(link));
                 return (
-                  <div key={link.id} className={cn("flex min-h-14 min-w-0 items-center gap-2 rounded-xl border px-2.5 py-2", linkTone.surface, linkTone.border)}>
-                    <Icon className={cn("h-4 w-4 shrink-0", linkTone.icon)} />
-                    <span className={cn("min-w-0 truncate text-base font-semibold", linkTone.text)}>{link.label}</span>
+                  <div
+                    key={link.id}
+                    className={cn(
+                      "group relative flex min-h-[4.75rem] items-center gap-1.5 rounded-xl border-2 sm:min-h-20 sm:gap-2",
+                      linkTone.surface,
+                      linkTone.border,
+                      linkTone.hover,
+                    )}
+                  >
+                    <div className="flex min-h-[4.75rem] min-w-0 flex-1 items-center gap-1.5 px-2 py-3 text-left sm:min-h-20 sm:gap-2 sm:px-3">
+                      <Icon className={cn("h-4 w-4 shrink-0 sm:h-5 sm:w-5", linkTone.icon)} />
+                      <span className={cn("min-w-0 flex-1 truncate pr-5 text-base font-semibold", linkTone.text)}>{link.label}</span>
+                    </div>
+                    <ExternalLink className="mr-8 hidden h-4 w-4 shrink-0 text-sky-400 sm:block" />
+                    <span className="absolute right-1.5 top-1.5 flex h-6 w-6 items-center justify-center rounded-full text-sky-500 opacity-100 [@media(hover:hover)]:opacity-0">
+                      <X className="h-3.5 w-3.5" />
+                    </span>
                   </div>
                 );
               })}
-            </EventSwipePreviewColumn>
-            <EventSwipePreviewColumn label="Documents">
-              {event.documentGroups.slice(0, 6).map((group) => {
+              </div>
+            </div>
+            <div className="min-w-0">
+              <SectionHeader label="Documents" tone="document" addLabel="Ajouter un document" onAdd={() => {}} />
+              <div className="grid grid-cols-1 gap-1.5 sm:gap-2">
+                {event.documentGroups.map((group) => {
                 const Icon = getDocumentGroupIcon(group);
                 const documentTone = getDocumentTone(group.files.length > 0);
                 return (
-                  <div key={group.id} className={cn("flex min-h-14 min-w-0 items-center gap-2 rounded-xl border px-2.5 py-2", documentTone.surface, documentTone.border)}>
-                    <Icon className={cn("h-4 w-4 shrink-0", documentTone.icon)} />
-                    <span className={cn("min-w-0 truncate text-base font-semibold", documentTone.text)}>{group.label}</span>
+                  <div
+                    key={group.id}
+                    className={cn(
+                      "group relative flex min-h-[4.75rem] items-center gap-1.5 rounded-xl border-2 sm:min-h-20 sm:gap-2",
+                      documentTone.surface,
+                      documentTone.border,
+                      documentTone.hover,
+                    )}
+                  >
+                    <div className="flex min-h-[4.75rem] min-w-0 flex-1 items-center gap-1.5 px-2 py-3 text-left sm:min-h-20 sm:gap-2 sm:px-3">
+                      <Icon className={cn("h-4 w-4 shrink-0 sm:h-5 sm:w-5", documentTone.icon)} />
+                      <span className={cn("min-w-0 flex-1 truncate pr-5 text-base font-semibold", documentTone.text)}>{group.label}</span>
+                    </div>
+                    <span className="absolute right-1.5 top-1.5 flex h-6 w-6 items-center justify-center rounded-full text-amber-500 opacity-100 [@media(hover:hover)]:opacity-0">
+                      <X className="h-3.5 w-3.5" />
+                    </span>
                   </div>
                 );
               })}
-            </EventSwipePreviewColumn>
+              </div>
+            </div>
           </div>
         </Card>
       </div>
     </section>
-  );
-}
-
-function EventSwipePreviewColumn({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <div className="min-w-0">
-      <div className="mb-2 px-1 text-base font-semibold uppercase tracking-[0.12em] text-stone-400">{label}</div>
-      <div className="grid grid-cols-1 gap-1.5 sm:gap-2">{children}</div>
-    </div>
   );
 }
 
