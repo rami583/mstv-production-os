@@ -2294,7 +2294,6 @@ export default function Home() {
           events={events}
           visibleMonth={visibleMonth}
           todayKey={todayKey}
-          onClose={() => setYearOverviewOpen(false)}
           onSelectMonth={selectYearOverviewMonth}
         />
       )}
@@ -2600,55 +2599,125 @@ function YearOverviewOverlay({
   events,
   visibleMonth,
   todayKey,
-  onClose,
   onSelectMonth,
 }: {
   initialYear: number;
   events: ProductionEvent[];
   visibleMonth: Date;
   todayKey: string;
-  onClose: () => void;
   onSelectMonth: (year: number, monthIndex: number) => void;
 }) {
   const [displayYear, setDisplayYear] = useState(initialYear);
   const swipeStartRef = useRef<{ pointerId: number; x: number; y: number } | null>(null);
   const touchSwipeStartRef = useRef<{ x: number; y: number } | null>(null);
+  const yearPagerRef = useRef<HTMLDivElement | null>(null);
   const wheelLockRef = useRef<number | null>(null);
+  const yearTransitionTimeoutRef = useRef<number | null>(null);
+  const yearTransitioningRef = useRef(false);
   const suppressYearClickRef = useRef(false);
+  const [yearPagerOffset, setYearPagerOffset] = useState(0);
+  const [yearTransitionEnabled, setYearTransitionEnabled] = useState(false);
   const shortWeekdays = ["L", "M", "M", "J", "V", "S", "D"];
 
   useEffect(() => {
     function handleKeyDown(event: KeyboardEvent) {
-      if (event.key === "Escape") onClose();
-      if (event.key === "ArrowUp") setDisplayYear((current) => current - 1);
-      if (event.key === "ArrowDown") setDisplayYear((current) => current + 1);
+      if (event.key === "ArrowUp") animateYearChange(-1);
+      if (event.key === "ArrowDown") animateYearChange(1);
     }
 
     document.addEventListener("keydown", handleKeyDown);
     return () => document.removeEventListener("keydown", handleKeyDown);
-  }, [onClose]);
+  });
 
   useEffect(() => {
     return () => {
       if (wheelLockRef.current) {
         window.clearTimeout(wheelLockRef.current);
       }
+      if (yearTransitionTimeoutRef.current) {
+        window.clearTimeout(yearTransitionTimeoutRef.current);
+      }
     };
   }, []);
 
-  function changeYear(delta: -1 | 1) {
-    setDisplayYear((current) => current + delta);
+  function getYearPageStep() {
+    return (yearPagerRef.current?.clientHeight ?? window.innerHeight) + PAGE_GAP;
+  }
+
+  function animateYearChange(direction: -1 | 1) {
+    if (yearTransitioningRef.current) return;
+
+    const pageStep = getYearPageStep();
+    yearTransitioningRef.current = true;
+    swipeStartRef.current = null;
+    touchSwipeStartRef.current = null;
+    setYearTransitionEnabled(true);
+    setYearPagerOffset(direction === 1 ? -pageStep : pageStep);
+
+    if (yearTransitionTimeoutRef.current) {
+      window.clearTimeout(yearTransitionTimeoutRef.current);
+    }
+
+    yearTransitionTimeoutRef.current = window.setTimeout(() => {
+      setYearTransitionEnabled(false);
+      setDisplayYear((current) => current + direction);
+      setYearPagerOffset(0);
+
+      window.requestAnimationFrame(() => {
+        window.requestAnimationFrame(() => {
+          yearTransitioningRef.current = false;
+          yearTransitionTimeoutRef.current = null;
+        });
+      });
+    }, PAGE_TRANSITION_MS);
+  }
+
+  function settleYearSwipe(deltaY: number, deltaX: number) {
+    const pageStep = getYearPageStep();
+    const threshold = Math.min(160, Math.max(58, pageStep * 0.14));
+
+    swipeStartRef.current = null;
+    touchSwipeStartRef.current = null;
+
+    if (Math.abs(deltaY) < threshold || Math.abs(deltaY) < Math.abs(deltaX) * 1.2) {
+      setYearTransitionEnabled(true);
+      setYearPagerOffset(0);
+      window.setTimeout(() => {
+        if (!yearTransitioningRef.current) setYearTransitionEnabled(false);
+      }, PAGE_TRANSITION_MS);
+      return;
+    }
+
+    suppressYearClickRef.current = true;
+    window.setTimeout(() => {
+      suppressYearClickRef.current = false;
+    }, 0);
+    animateYearChange(deltaY < 0 ? 1 : -1);
   }
 
   function handlePointerDown(pointerEvent: ReactPointerEvent<HTMLDivElement>) {
-    if (pointerEvent.pointerType === "touch") return;
+    if (pointerEvent.pointerType === "touch" || yearTransitioningRef.current) return;
 
     swipeStartRef.current = {
       pointerId: pointerEvent.pointerId,
       x: pointerEvent.clientX,
       y: pointerEvent.clientY,
     };
+    setYearTransitionEnabled(false);
     pointerEvent.currentTarget.setPointerCapture(pointerEvent.pointerId);
+  }
+
+  function handlePointerMove(pointerEvent: ReactPointerEvent<HTMLDivElement>) {
+    const swipeStart = swipeStartRef.current;
+    if (!swipeStart || swipeStart.pointerId !== pointerEvent.pointerId || yearTransitioningRef.current) return;
+
+    const deltaY = pointerEvent.clientY - swipeStart.y;
+    const deltaX = pointerEvent.clientX - swipeStart.x;
+    if (Math.abs(deltaY) <= Math.abs(deltaX) || Math.abs(deltaY) < 8) return;
+
+    pointerEvent.preventDefault();
+    const pageStep = getYearPageStep();
+    setYearPagerOffset(Math.max(-pageStep, Math.min(pageStep, deltaY)));
   }
 
   function handlePointerUp(pointerEvent: ReactPointerEvent<HTMLDivElement>) {
@@ -2657,17 +2726,12 @@ function YearOverviewOverlay({
 
     const deltaX = pointerEvent.clientX - swipeStart.x;
     const deltaY = pointerEvent.clientY - swipeStart.y;
-    swipeStartRef.current = null;
-
-    if (Math.abs(deltaY) < 54 || Math.abs(deltaY) < Math.abs(deltaX) * 1.2) return;
-    suppressYearClickRef.current = true;
-    window.setTimeout(() => {
-      suppressYearClickRef.current = false;
-    }, 0);
-    changeYear(deltaY < 0 ? 1 : -1);
+    settleYearSwipe(deltaY, deltaX);
   }
 
   function handleTouchStart(touchEvent: ReactTouchEvent<HTMLDivElement>) {
+    if (yearTransitioningRef.current) return;
+
     const touch = touchEvent.changedTouches.item(0);
     if (!touch) return;
 
@@ -2675,47 +2739,63 @@ function YearOverviewOverlay({
       x: touch.clientX,
       y: touch.clientY,
     };
+    setYearTransitionEnabled(false);
+  }
+
+  function handleTouchMove(touchEvent: ReactTouchEvent<HTMLDivElement>) {
+    const touch = touchEvent.changedTouches.item(0);
+    const swipeStart = touchSwipeStartRef.current;
+    if (!touch || !swipeStart || yearTransitioningRef.current) return;
+
+    const deltaX = touch.clientX - swipeStart.x;
+    const deltaY = touch.clientY - swipeStart.y;
+    if (Math.abs(deltaY) <= Math.abs(deltaX) || Math.abs(deltaY) < 8) return;
+
+    touchEvent.preventDefault();
+    const pageStep = getYearPageStep();
+    setYearPagerOffset(Math.max(-pageStep, Math.min(pageStep, deltaY)));
   }
 
   function handleTouchEnd(touchEvent: ReactTouchEvent<HTMLDivElement>) {
     const touch = touchEvent.changedTouches.item(0);
     const swipeStart = touchSwipeStartRef.current;
-    touchSwipeStartRef.current = null;
     if (!touch || !swipeStart) return;
 
     const deltaX = touch.clientX - swipeStart.x;
     const deltaY = touch.clientY - swipeStart.y;
-
-    if (Math.abs(deltaY) < 54 || Math.abs(deltaY) < Math.abs(deltaX) * 1.2) return;
-    suppressYearClickRef.current = true;
-    window.setTimeout(() => {
-      suppressYearClickRef.current = false;
-    }, 0);
-    changeYear(deltaY < 0 ? 1 : -1);
+    settleYearSwipe(deltaY, deltaX);
   }
 
   function handleWheel(wheelEvent: ReactWheelEvent<HTMLDivElement>) {
     if (wheelLockRef.current || Math.abs(wheelEvent.deltaY) < 36 || Math.abs(wheelEvent.deltaY) < Math.abs(wheelEvent.deltaX)) return;
-    changeYear(wheelEvent.deltaY > 0 ? 1 : -1);
+    animateYearChange(wheelEvent.deltaY > 0 ? 1 : -1);
     wheelLockRef.current = window.setTimeout(() => {
       wheelLockRef.current = null;
     }, 420);
   }
 
   return (
-    <div className="fixed inset-0 z-50 bg-[#f7f9fb]/95 px-4 py-[calc(0.65rem+env(safe-area-inset-top))] backdrop-blur-xl sm:px-6 sm:py-[calc(1rem+env(safe-area-inset-top))]">
+    <div className="fixed inset-0 z-50 overflow-hidden bg-[#f7f9fb]/95 px-4 py-[calc(1.15rem+env(safe-area-inset-top))] backdrop-blur-xl sm:px-6 sm:py-[calc(1.5rem+env(safe-area-inset-top))]">
       <div
-        className="mx-auto flex h-full max-w-5xl flex-col"
-        style={{ fontFamily: '"SF Pro Rounded", ui-rounded, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif' }}
+        ref={yearPagerRef}
+        className="mx-auto h-full max-w-5xl overflow-hidden"
+        style={{
+          fontFamily: '"SF Pro Rounded", ui-rounded, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
+          touchAction: "none",
+        }}
         onPointerDown={handlePointerDown}
+        onPointerMove={handlePointerMove}
         onPointerUp={handlePointerUp}
         onPointerCancel={() => {
           swipeStartRef.current = null;
+          setYearPagerOffset(0);
         }}
         onTouchStartCapture={handleTouchStart}
+        onTouchMoveCapture={handleTouchMove}
         onTouchEndCapture={handleTouchEnd}
         onTouchCancelCapture={() => {
           touchSwipeStartRef.current = null;
+          setYearPagerOffset(0);
         }}
         onClickCapture={(clickEvent) => {
           if (!suppressYearClickRef.current) return;
@@ -2724,54 +2804,65 @@ function YearOverviewOverlay({
         }}
         onWheel={handleWheel}
       >
-        <div className="flex shrink-0 items-center justify-between gap-2 px-1 pb-2 sm:gap-3 sm:pb-4">
-          <div className="flex items-center gap-1 sm:gap-2">
-            <button
-              type="button"
-              onClick={() => changeYear(-1)}
-              className="rounded-full border border-stone-200 bg-white px-2.5 py-1.5 text-sm font-semibold text-stone-600 transition hover:bg-stone-50 sm:px-3 sm:py-2 sm:text-base"
-              aria-label="Année précédente"
-            >
-              {displayYear - 1}
-            </button>
-            <button
-              type="button"
-              onClick={() => changeYear(1)}
-              className="rounded-full border border-stone-200 bg-white px-2.5 py-1.5 text-sm font-semibold text-stone-600 transition hover:bg-stone-50 sm:px-3 sm:py-2 sm:text-base"
-              aria-label="Année suivante"
-            >
-              {displayYear + 1}
-            </button>
-          </div>
-          <h2 className="text-4xl font-semibold leading-none text-stone-950 sm:text-6xl">{displayYear}</h2>
-          <button
-            type="button"
-            onClick={onClose}
-            className="rounded-full border border-stone-200 bg-white px-2.5 py-1.5 text-sm font-semibold text-stone-600 transition hover:bg-stone-50 sm:px-3 sm:py-2 sm:text-base"
-          >
-            Fermer
-          </button>
-        </div>
-
-        <div className="no-scrollbar min-h-0 flex-1 overflow-y-auto overscroll-contain pb-[calc(0.35rem+env(safe-area-inset-bottom))] sm:pb-[calc(1rem+env(safe-area-inset-bottom))]">
-          <div className="grid grid-cols-3 gap-x-2 gap-y-1.5 sm:gap-x-8 sm:gap-y-8">
-            {monthNames.map((monthName, monthIndex) => (
-              <YearOverviewMiniMonth
-                key={`${displayYear}-${monthName}`}
-                year={displayYear}
-                monthIndex={monthIndex}
-                monthName={monthName}
-                events={events}
-                todayKey={todayKey}
-                visibleMonth={visibleMonth}
-                weekdays={shortWeekdays}
-                onSelect={() => onSelectMonth(displayYear, monthIndex)}
-              />
-            ))}
-          </div>
+        <div
+          className="flex h-full flex-col"
+          style={{
+            gap: PAGE_GAP,
+            transform: `translate3d(0, calc(-100% - ${PAGE_GAP}px + ${yearPagerOffset}px), 0)`,
+            transition: yearTransitionEnabled ? `transform ${PAGE_TRANSITION_MS}ms ${PAGE_TRANSITION_EASING}` : undefined,
+          }}
+        >
+          {[displayYear - 1, displayYear, displayYear + 1].map((year) => (
+            <YearOverviewPage
+              key={year}
+              year={year}
+              events={events}
+              todayKey={todayKey}
+              visibleMonth={visibleMonth}
+              weekdays={shortWeekdays}
+              onSelectMonth={onSelectMonth}
+            />
+          ))}
         </div>
       </div>
     </div>
+  );
+}
+
+function YearOverviewPage({
+  year,
+  events,
+  todayKey,
+  visibleMonth,
+  weekdays,
+  onSelectMonth,
+}: {
+  year: number;
+  events: ProductionEvent[];
+  todayKey: string;
+  visibleMonth: Date;
+  weekdays: string[];
+  onSelectMonth: (year: number, monthIndex: number) => void;
+}) {
+  return (
+    <section className="flex h-full w-full shrink-0 flex-col">
+      <h2 className="shrink-0 px-1 pb-3 text-center text-5xl font-semibold leading-none text-stone-950 sm:pb-6 sm:text-6xl">{year}</h2>
+      <div className="grid min-h-0 flex-1 grid-cols-3 gap-x-2 gap-y-2 sm:gap-x-8 sm:gap-y-8">
+        {monthNames.map((monthName, monthIndex) => (
+          <YearOverviewMiniMonth
+            key={`${year}-${monthName}`}
+            year={year}
+            monthIndex={monthIndex}
+            monthName={monthName}
+            events={events}
+            todayKey={todayKey}
+            visibleMonth={visibleMonth}
+            weekdays={weekdays}
+            onSelect={() => onSelectMonth(year, monthIndex)}
+          />
+        ))}
+      </div>
+    </section>
   );
 }
 
