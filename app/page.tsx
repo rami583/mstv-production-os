@@ -33,7 +33,17 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { Keyboard } from "@capacitor/keyboard";
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type WheelEvent as ReactWheelEvent } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type PointerEvent as ReactPointerEvent,
+  type TouchEvent as ReactTouchEvent,
+  type WheelEvent as ReactWheelEvent,
+} from "react";
 import { Card } from "@/components/ui/card";
 import {
   publicHolidays,
@@ -2602,6 +2612,7 @@ function YearOverviewOverlay({
 }) {
   const [displayYear, setDisplayYear] = useState(initialYear);
   const swipeStartRef = useRef<{ pointerId: number; x: number; y: number } | null>(null);
+  const touchSwipeStartRef = useRef<{ x: number; y: number } | null>(null);
   const wheelLockRef = useRef<number | null>(null);
   const suppressYearClickRef = useRef(false);
   const shortWeekdays = ["L", "M", "M", "J", "V", "S", "D"];
@@ -2630,6 +2641,8 @@ function YearOverviewOverlay({
   }
 
   function handlePointerDown(pointerEvent: ReactPointerEvent<HTMLDivElement>) {
+    if (pointerEvent.pointerType === "touch") return;
+
     swipeStartRef.current = {
       pointerId: pointerEvent.pointerId,
       x: pointerEvent.clientX,
@@ -2654,6 +2667,33 @@ function YearOverviewOverlay({
     changeYear(deltaY < 0 ? 1 : -1);
   }
 
+  function handleTouchStart(touchEvent: ReactTouchEvent<HTMLDivElement>) {
+    const touch = touchEvent.changedTouches.item(0);
+    if (!touch) return;
+
+    touchSwipeStartRef.current = {
+      x: touch.clientX,
+      y: touch.clientY,
+    };
+  }
+
+  function handleTouchEnd(touchEvent: ReactTouchEvent<HTMLDivElement>) {
+    const touch = touchEvent.changedTouches.item(0);
+    const swipeStart = touchSwipeStartRef.current;
+    touchSwipeStartRef.current = null;
+    if (!touch || !swipeStart) return;
+
+    const deltaX = touch.clientX - swipeStart.x;
+    const deltaY = touch.clientY - swipeStart.y;
+
+    if (Math.abs(deltaY) < 54 || Math.abs(deltaY) < Math.abs(deltaX) * 1.2) return;
+    suppressYearClickRef.current = true;
+    window.setTimeout(() => {
+      suppressYearClickRef.current = false;
+    }, 0);
+    changeYear(deltaY < 0 ? 1 : -1);
+  }
+
   function handleWheel(wheelEvent: ReactWheelEvent<HTMLDivElement>) {
     if (wheelLockRef.current || Math.abs(wheelEvent.deltaY) < 36 || Math.abs(wheelEvent.deltaY) < Math.abs(wheelEvent.deltaX)) return;
     changeYear(wheelEvent.deltaY > 0 ? 1 : -1);
@@ -2663,7 +2703,7 @@ function YearOverviewOverlay({
   }
 
   return (
-    <div className="fixed inset-0 z-50 bg-[#f7f9fb]/95 px-4 py-[calc(1rem+env(safe-area-inset-top))] backdrop-blur-xl sm:px-6">
+    <div className="fixed inset-0 z-50 bg-[#f7f9fb]/95 px-4 py-[calc(0.65rem+env(safe-area-inset-top))] backdrop-blur-xl sm:px-6 sm:py-[calc(1rem+env(safe-area-inset-top))]">
       <div
         className="mx-auto flex h-full max-w-5xl flex-col"
         style={{ fontFamily: '"SF Pro Rounded", ui-rounded, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif' }}
@@ -2672,6 +2712,11 @@ function YearOverviewOverlay({
         onPointerCancel={() => {
           swipeStartRef.current = null;
         }}
+        onTouchStartCapture={handleTouchStart}
+        onTouchEndCapture={handleTouchEnd}
+        onTouchCancelCapture={() => {
+          touchSwipeStartRef.current = null;
+        }}
         onClickCapture={(clickEvent) => {
           if (!suppressYearClickRef.current) return;
           clickEvent.preventDefault();
@@ -2679,37 +2724,37 @@ function YearOverviewOverlay({
         }}
         onWheel={handleWheel}
       >
-        <div className="flex shrink-0 items-center justify-between gap-3 px-1 pb-4">
-          <div className="flex items-center gap-2">
+        <div className="flex shrink-0 items-center justify-between gap-2 px-1 pb-2 sm:gap-3 sm:pb-4">
+          <div className="flex items-center gap-1 sm:gap-2">
             <button
               type="button"
               onClick={() => changeYear(-1)}
-              className={calendarArrowClassName}
+              className="rounded-full border border-stone-200 bg-white px-2.5 py-1.5 text-sm font-semibold text-stone-600 transition hover:bg-stone-50 sm:px-3 sm:py-2 sm:text-base"
               aria-label="Année précédente"
             >
-              ↑
+              {displayYear - 1}
             </button>
             <button
               type="button"
               onClick={() => changeYear(1)}
-              className={calendarArrowClassName}
+              className="rounded-full border border-stone-200 bg-white px-2.5 py-1.5 text-sm font-semibold text-stone-600 transition hover:bg-stone-50 sm:px-3 sm:py-2 sm:text-base"
               aria-label="Année suivante"
             >
-              ↓
+              {displayYear + 1}
             </button>
           </div>
-          <h2 className="text-5xl font-semibold leading-none text-stone-950 sm:text-6xl">{displayYear}</h2>
+          <h2 className="text-4xl font-semibold leading-none text-stone-950 sm:text-6xl">{displayYear}</h2>
           <button
             type="button"
             onClick={onClose}
-            className="rounded-full border border-stone-200 bg-white px-3 py-2 text-base font-semibold text-stone-600 transition hover:bg-stone-50"
+            className="rounded-full border border-stone-200 bg-white px-2.5 py-1.5 text-sm font-semibold text-stone-600 transition hover:bg-stone-50 sm:px-3 sm:py-2 sm:text-base"
           >
             Fermer
           </button>
         </div>
 
-        <div className="no-scrollbar min-h-0 flex-1 overflow-y-auto overscroll-contain pb-[calc(1rem+env(safe-area-inset-bottom))]">
-          <div className="grid grid-cols-3 gap-x-3 gap-y-5 sm:gap-x-8 sm:gap-y-8">
+        <div className="no-scrollbar min-h-0 flex-1 overflow-y-auto overscroll-contain pb-[calc(0.35rem+env(safe-area-inset-bottom))] sm:pb-[calc(1rem+env(safe-area-inset-bottom))]">
+          <div className="grid grid-cols-3 gap-x-2 gap-y-1.5 sm:gap-x-8 sm:gap-y-8">
             {monthNames.map((monthName, monthIndex) => (
               <YearOverviewMiniMonth
                 key={`${displayYear}-${monthName}`}
@@ -2757,16 +2802,16 @@ function YearOverviewMiniMonth({
       type="button"
       onClick={onSelect}
       className={cn(
-        "min-w-0 rounded-[1.25rem] p-2 text-left transition hover:bg-white/70 sm:p-3",
+        "min-w-0 rounded-[1.1rem] p-1.5 text-left transition hover:bg-white/70 sm:rounded-[1.25rem] sm:p-3",
         isVisibleMonth && "bg-white/90 ring-1 ring-[#bb2720]/20",
       )}
     >
-      <span className={cn("mb-2 block truncate text-sm font-semibold leading-none sm:text-base", isVisibleMonth ? "text-[#bb2720]" : "text-stone-950")}>
+      <span className={cn("mb-1 block truncate text-xs font-semibold leading-none sm:mb-2 sm:text-base", isVisibleMonth ? "text-[#bb2720]" : "text-stone-950")}>
         {monthName}
       </span>
-      <span className="grid grid-cols-7 gap-y-1">
+      <span className="grid grid-cols-7 gap-y-0.5 sm:gap-y-1">
         {weekdays.map((weekday, index) => (
-          <span key={`${weekday}-${index}`} className="text-center text-[0.55rem] font-semibold leading-none text-stone-300 sm:text-[0.625rem]">
+          <span key={`${weekday}-${index}`} className="text-center text-[0.48rem] font-semibold leading-none text-stone-300 sm:text-[0.625rem]">
             {weekday}
           </span>
         ))}
@@ -2780,13 +2825,13 @@ function YearOverviewMiniMonth({
             <span key={day.dateKey} className="relative flex aspect-square min-w-0 items-center justify-center">
               <span
                 className={cn(
-                  "flex h-5 w-5 items-center justify-center rounded-full text-[0.65rem] font-semibold leading-none sm:h-6 sm:w-6 sm:text-xs",
+                  "flex h-4 w-4 items-center justify-center rounded-full text-[0.56rem] font-semibold leading-none sm:h-6 sm:w-6 sm:text-xs",
                   isToday ? "bg-[#bb2720] text-white" : "text-stone-700",
                 )}
               >
                 {day.day}
               </span>
-              {hasEvents && <span className={cn("absolute bottom-0 h-1 w-1 rounded-full", isToday ? "bg-[#bb2720]" : "bg-stone-400")} />}
+              {hasEvents && <span className={cn("absolute bottom-0 h-0.5 w-0.5 rounded-full sm:h-1 sm:w-1", isToday ? "bg-[#bb2720]" : "bg-stone-400")} />}
             </span>
           );
         })}
