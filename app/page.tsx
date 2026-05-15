@@ -32,7 +32,8 @@ import {
   X,
   type LucideIcon,
 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
+import { Keyboard } from "@capacitor/keyboard";
+import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { Card } from "@/components/ui/card";
 import {
   publicHolidays,
@@ -954,6 +955,10 @@ export default function Home() {
   const [deleteDialogEvent, setDeleteDialogEvent] = useState<ProductionEvent | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [isTimelineTimeEditing, setIsTimelineTimeEditing] = useState(false);
+  const [keyboardVisible, setKeyboardVisible] = useState(false);
+  const [keyboardHeight, setKeyboardHeight] = useState(0);
+  const timelineTimeSaveRef = useRef<(() => Promise<void>) | null>(null);
 
   const chronologicalEvents = useMemo(() => [...events].sort((a, b) => eventSortValue(a) - eventSortValue(b)), [events]);
   const selectedEvent = useMemo(() => chronologicalEvents.find((item) => item.id === selectedId) ?? chronologicalEvents[0] ?? null, [chronologicalEvents, selectedId]);
@@ -964,6 +969,70 @@ export default function Home() {
 
   useEffect(() => {
     void reloadData();
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    const handles: Array<{ remove: () => Promise<void> }> = [];
+
+    async function setupKeyboardListeners() {
+      try {
+        const keyboardWillShow = await Keyboard.addListener("keyboardWillShow", (info) => {
+          console.log("Timeline keyboard accessory: keyboardWillShow", { keyboardHeight: info.keyboardHeight });
+          setKeyboardHeight(info.keyboardHeight);
+          setKeyboardVisible(true);
+        });
+        if (cancelled) {
+          void keyboardWillShow.remove();
+        } else {
+          handles.push(keyboardWillShow);
+        }
+
+        const keyboardDidShow = await Keyboard.addListener("keyboardDidShow", (info) => {
+          console.log("Timeline keyboard accessory: keyboardDidShow", { keyboardHeight: info.keyboardHeight });
+          setKeyboardHeight(info.keyboardHeight);
+          setKeyboardVisible(true);
+        });
+        if (cancelled) {
+          void keyboardDidShow.remove();
+        } else {
+          handles.push(keyboardDidShow);
+        }
+
+        const keyboardWillHide = await Keyboard.addListener("keyboardWillHide", () => {
+          console.log("Timeline keyboard accessory: keyboardWillHide");
+          setKeyboardVisible(false);
+          setKeyboardHeight(0);
+        });
+        if (cancelled) {
+          void keyboardWillHide.remove();
+        } else {
+          handles.push(keyboardWillHide);
+        }
+
+        const keyboardDidHide = await Keyboard.addListener("keyboardDidHide", () => {
+          console.log("Timeline keyboard accessory: keyboardDidHide");
+          setKeyboardVisible(false);
+          setKeyboardHeight(0);
+        });
+        if (cancelled) {
+          void keyboardDidHide.remove();
+        } else {
+          handles.push(keyboardDidHide);
+        }
+      } catch (keyboardError) {
+        console.warn("Timeline keyboard accessory: unable to attach Capacitor Keyboard listeners", keyboardError);
+      }
+    }
+
+    void setupKeyboardListeners();
+
+    return () => {
+      cancelled = true;
+      handles.forEach((handle) => {
+        void handle.remove();
+      });
+    };
   }, []);
 
   async function reloadData(nextSelectedId?: string | null) {
@@ -1011,6 +1080,22 @@ export default function Home() {
     if (!nextEvent) return;
     setSelectedId(nextEvent.id);
   }
+
+  const startTimelineTimeEditing = useCallback((saveTime: () => Promise<void>) => {
+    console.log("Timeline keyboard accessory: timeline input focused");
+    timelineTimeSaveRef.current = saveTime;
+    setIsTimelineTimeEditing(true);
+  }, []);
+
+  const endTimelineTimeEditing = useCallback(() => {
+    timelineTimeSaveRef.current = null;
+    setIsTimelineTimeEditing(false);
+  }, []);
+
+  const confirmTimelineTimeEdit = useCallback(async () => {
+    console.log("Timeline keyboard accessory: OK tapped");
+    await timelineTimeSaveRef.current?.();
+  }, []);
 
   function isPdfFile(file: File | null | undefined) {
     return Boolean(file && (file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf")));
@@ -2068,6 +2153,8 @@ export default function Home() {
               onDeleteDocumentFile={deleteEventDocument}
               onOpenDocument={openEventDocument}
               onDownloadDocument={downloadEventDocument}
+              onTimelineTimeEditStart={startTimelineTimeEditing}
+              onTimelineTimeEditEnd={endTimelineTimeEditing}
             />
           )}
 
@@ -2130,6 +2217,10 @@ export default function Home() {
           onClose={() => setDeleteDialogEvent(null)}
           onConfirm={deleteCurrentEvent}
         />
+      )}
+
+      {isTimelineTimeEditing && keyboardVisible && (
+        <TimelineKeyboardAccessoryBar keyboardHeight={keyboardHeight} onConfirm={confirmTimelineTimeEdit} />
       )}
     </main>
   );
@@ -2965,6 +3056,8 @@ function ProductionDetail({
   onDeleteDocumentFile,
   onOpenDocument,
   onDownloadDocument,
+  onTimelineTimeEditStart,
+  onTimelineTimeEditEnd,
 }: {
   event: ProductionEvent;
   teamMembers: TeamMember[];
@@ -2991,6 +3084,8 @@ function ProductionDetail({
   onDeleteDocumentFile: (document: EventDocument) => Promise<void>;
   onOpenDocument: (document: EventDocument) => Promise<void>;
   onDownloadDocument: (document: EventDocument) => Promise<void>;
+  onTimelineTimeEditStart: (saveTime: () => Promise<void>) => void;
+  onTimelineTimeEditEnd: () => void;
 }) {
   const [contextSelection, setContextSelection] = useState<ContextSelection>(null);
   const [addForm, setAddForm] = useState<ItemKind | null>(null);
@@ -3176,7 +3271,12 @@ function ProductionDetail({
             </button>
           </div>
         </div>
-        <ProductionTimeline event={event} onUpdateTime={onUpdateEventTime} />
+        <ProductionTimeline
+          event={event}
+          onUpdateTime={onUpdateEventTime}
+          onTimelineTimeEditStart={onTimelineTimeEditStart}
+          onTimelineTimeEditEnd={onTimelineTimeEditEnd}
+        />
       </Card>
 
       <div ref={detailScrollContainerRef} className="no-scrollbar min-h-0 flex-1 space-y-5 overflow-y-auto overscroll-contain pb-6">
@@ -3545,9 +3645,13 @@ function getLinkTone(state: LinkStatus) {
 function ProductionTimeline({
   event,
   onUpdateTime,
+  onTimelineTimeEditStart,
+  onTimelineTimeEditEnd,
 }: {
   event: ProductionEvent;
   onUpdateTime: (event: ProductionEvent, field: EventTimeField, value: string) => Promise<void>;
+  onTimelineTimeEditStart: (saveTime: () => Promise<void>) => void;
+  onTimelineTimeEditEnd: () => void;
 }) {
   const moments = [
     { label: "Arrivée client", field: "clientArrivalTime" as const, value: event.clientArrivalTime },
@@ -3573,6 +3677,8 @@ function ProductionTimeline({
               <TimelineTimeCapsule
                 value={moment.value}
                 onSave={(value) => onUpdateTime(event, moment.field, value)}
+                onEditingStart={onTimelineTimeEditStart}
+                onEditingEnd={onTimelineTimeEditEnd}
               />
             </div>
           </div>
@@ -3585,18 +3691,31 @@ function ProductionTimeline({
 function TimelineTimeCapsule({
   value,
   onSave,
+  onEditingStart,
+  onEditingEnd,
 }: {
   value: string | null;
   onSave: (value: string) => Promise<void>;
+  onEditingStart: (saveTime: () => Promise<void>) => void;
+  onEditingEnd: () => void;
 }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(toTimeInputValue(value));
   const [saving, setSaving] = useState(false);
   const inputRef = useRef<HTMLInputElement | null>(null);
+  const skipBlurSaveRef = useRef(false);
+  const saveTimeRef = useRef<() => Promise<void>>(async () => undefined);
 
   useEffect(() => {
-    if (!editing) setDraft(toTimeInputValue(value));
-  }, [editing, value]);
+    if (!editing) {
+      setDraft(toTimeInputValue(value));
+      onEditingEnd();
+    }
+  }, [editing, onEditingEnd, value]);
+
+  useEffect(() => {
+    saveTimeRef.current = () => saveTime(true);
+  });
 
   useEffect(() => {
     if (!editing) return;
@@ -3604,12 +3723,18 @@ function TimelineTimeCapsule({
     inputRef.current?.select();
   }, [editing]);
 
-  async function saveTime() {
+  function blurAfterValidation() {
+    skipBlurSaveRef.current = true;
+    inputRef.current?.blur();
+  }
+
+  async function saveTime(blurAfterSave = false) {
     if (saving) return;
     const nextValue = normalizeCompactTimeInput(draft);
     setDraft(nextValue);
 
     if (nextValue === toTimeInputValue(value)) {
+      if (blurAfterSave) blurAfterValidation();
       setEditing(false);
       return;
     }
@@ -3617,6 +3742,7 @@ function TimelineTimeCapsule({
     setSaving(true);
     try {
       await onSave(nextValue);
+      if (blurAfterSave) blurAfterValidation();
       setEditing(false);
     } catch {
       inputRef.current?.focus();
@@ -3627,28 +3753,40 @@ function TimelineTimeCapsule({
 
   if (editing) {
     return (
-      <input
-        ref={inputRef}
-        type="text"
-        inputMode="numeric"
-        placeholder="HH:mm"
-        value={draft}
-        disabled={saving}
-        onChange={(event) => setDraft(sanitizeTimeDraft(event.target.value))}
-        onBlur={() => void saveTime()}
-        onKeyDown={(event) => {
-          if (event.key === "Enter") {
-            event.preventDefault();
+      <>
+        <input
+          ref={inputRef}
+          type="text"
+          inputMode="numeric"
+          enterKeyHint="done"
+          placeholder="HH:mm"
+          value={draft}
+          disabled={saving}
+          onFocus={() => onEditingStart(() => saveTimeRef.current())}
+          onChange={(event) => setDraft(sanitizeTimeDraft(event.target.value))}
+          onBlur={() => {
+            onEditingEnd();
+            if (skipBlurSaveRef.current) {
+              skipBlurSaveRef.current = false;
+              return;
+            }
             void saveTime();
-          }
-          if (event.key === "Escape") {
-            event.preventDefault();
-            setDraft(toTimeInputValue(value));
-            setEditing(false);
-          }
-        }}
-        className="h-7 w-24 rounded-full border border-slate-200 bg-slate-100 px-2.5 text-center text-base font-semibold leading-none text-slate-700 outline-none transition focus:border-slate-300 disabled:opacity-70"
-      />
+          }}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") {
+              event.preventDefault();
+              void saveTime(true);
+            }
+            if (event.key === "Escape") {
+              event.preventDefault();
+              setDraft(toTimeInputValue(value));
+              event.currentTarget.blur();
+              setEditing(false);
+            }
+          }}
+          className="h-7 w-24 rounded-full border border-slate-200 bg-slate-100 px-2.5 text-center text-base font-semibold leading-none text-slate-700 outline-none transition focus:border-slate-300 disabled:opacity-70"
+        />
+      </>
     );
   }
 
@@ -4799,6 +4937,36 @@ function StatusBadge({ status, large = false }: { status: EventStatus; large?: b
     <span className={cn("inline-flex items-center rounded-full text-base font-bold ring-1", large ? "px-3 py-1.5" : "px-2.5 py-1 leading-tight", statusStyles[status])}>
       {large && status === "Prêt" ? "PRÊT" : status}
     </span>
+  );
+}
+
+function TimelineKeyboardAccessoryBar({
+  keyboardHeight,
+  onConfirm,
+}: {
+  keyboardHeight: number;
+  onConfirm: () => Promise<void>;
+}) {
+  useEffect(() => {
+    console.log("Timeline keyboard accessory: OK bar rendered", { keyboardHeight });
+  }, [keyboardHeight]);
+
+  return (
+    <div
+      className="fixed inset-x-0 z-[100] border-t border-stone-200/80 bg-white/95 px-4 py-1.5"
+      style={{ bottom: `${Math.max(0, Math.round(keyboardHeight))}px` }}
+    >
+      <div className="mx-auto flex h-11 max-w-7xl items-center justify-end">
+        <button
+          type="button"
+          onPointerDown={(event) => event.preventDefault()}
+          onClick={() => void onConfirm()}
+          className="rounded-full bg-stone-950 px-4 py-1.5 text-sm font-semibold text-white transition hover:bg-stone-800 active:bg-stone-800"
+        >
+          OK
+        </button>
+      </div>
+    </div>
   );
 }
 
