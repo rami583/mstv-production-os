@@ -4233,6 +4233,20 @@ function ProductionDetail({
   }, [event.documentGroups, event.id, event.links, event.options]);
 
   useEffect(() => {
+    if (!confirmDelete) return;
+
+    function handlePointerDown(pointerEvent: PointerEvent) {
+      const target = pointerEvent.target;
+      if (!(target instanceof HTMLElement)) return;
+      if (target.closest("[data-grid-delete-confirm]")) return;
+      setConfirmDelete(null);
+    }
+
+    document.addEventListener("pointerdown", handlePointerDown);
+    return () => document.removeEventListener("pointerdown", handlePointerDown);
+  }, [confirmDelete]);
+
+  useEffect(() => {
     const previousSelectionKey = previousContextSelectionKeyRef.current;
     previousContextSelectionKeyRef.current = contextSelectionKey;
 
@@ -4619,6 +4633,7 @@ function ProductionDetail({
                 return (
                   <div
                     key={option.id}
+                    data-grid-delete-confirm={isConfirmingDelete ? true : undefined}
                     className={cn(
                       "group relative flex min-h-[4.75rem] items-center gap-1.5 rounded-xl border-2 transition sm:min-h-20 sm:gap-2",
                       optionTone.surface,
@@ -4627,49 +4642,50 @@ function ProductionDetail({
                       isSelectedOption && "border-emerald-700 ring-2 ring-emerald-700/20",
                     )}
                   >
-                    <button
-                      onClick={() => selectOption(option)}
-                      className={cn(
-                        "flex min-h-[4.75rem] min-w-0 flex-1 px-2 py-3 text-left sm:min-h-20 sm:px-3",
-                        showOptionAssigneeInitials ? "flex-col items-start justify-between gap-2" : "items-center gap-1.5 sm:gap-2",
-                      )}
-                    >
-                      {showOptionAssigneeInitials ? (
-                        <>
-                          <span className="inline-flex shrink-0 rounded-full border border-emerald-300 bg-white/75 px-2 py-0.5 text-base font-bold leading-tight text-emerald-800">
-                            {optionAssigneeInitials}
-                          </span>
-                          <span className="flex w-full min-w-0 items-center gap-1.5 pr-5 sm:gap-2">
-                            <Icon className={cn("h-4 w-4 shrink-0 sm:h-5 sm:w-5", optionTone.icon)} />
-                            <span className={cn("min-w-0 flex-1 truncate text-base font-semibold", optionTone.text)}>{option.label}</span>
-                          </span>
-                        </>
-                      ) : (
-                        <>
-                          <Icon className={cn("h-4 w-4 shrink-0 sm:h-5 sm:w-5", optionTone.icon)} />
-                          <span className={cn("min-w-0 flex-1 truncate pr-5 text-base font-semibold", optionTone.text)}>{option.label}</span>
-                        </>
-                      )}
-                    </button>
-                    <button
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        setConfirmDelete({ type: "option", optionId: option.id });
-                      }}
-                      className="absolute right-1.5 top-1.5 flex h-6 w-6 items-center justify-center rounded-full text-emerald-500 opacity-100 transition hover:bg-white/70 hover:text-emerald-800 focus:opacity-100 [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover:opacity-100"
-                      aria-label="Supprimer cette option"
-                    >
-                      <X className="h-3.5 w-3.5" />
-                    </button>
-                    {isConfirmingDelete && (
-                      <div className="absolute right-1 top-9 z-30">
-                        <DeleteConfirmBubble
-                          label="Supprimer cette option ?"
-                          deleting={deletingItem}
-                          onCancel={() => setConfirmDelete(null)}
-                          onConfirm={() => void deleteSelectedGridItem()}
-                        />
-                      </div>
+                    {isConfirmingDelete ? (
+                      <InlineGridDeleteConfirmation
+                        tone="option"
+                        deleting={deletingItem}
+                        onCancel={() => setConfirmDelete(null)}
+                        onConfirm={() => void deleteSelectedGridItem()}
+                      />
+                    ) : (
+                      <>
+                        <button
+                          onClick={() => selectOption(option)}
+                          className={cn(
+                            "flex min-h-[4.75rem] min-w-0 flex-1 px-2 py-3 text-left sm:min-h-20 sm:px-3",
+                            showOptionAssigneeInitials ? "flex-col items-start justify-between gap-2" : "items-center gap-1.5 sm:gap-2",
+                          )}
+                        >
+                          {showOptionAssigneeInitials ? (
+                            <>
+                              <span className="inline-flex shrink-0 rounded-full border border-emerald-300 bg-white/75 px-2 py-0.5 text-base font-bold leading-tight text-emerald-800">
+                                {optionAssigneeInitials}
+                              </span>
+                              <span className="flex w-full min-w-0 items-center gap-1.5 pr-5 sm:gap-2">
+                                <Icon className={cn("h-4 w-4 shrink-0 sm:h-5 sm:w-5", optionTone.icon)} />
+                                <span className={cn("min-w-0 flex-1 truncate text-base font-semibold", optionTone.text)}>{option.label}</span>
+                              </span>
+                            </>
+                          ) : (
+                            <>
+                              <Icon className={cn("h-4 w-4 shrink-0 sm:h-5 sm:w-5", optionTone.icon)} />
+                              <span className={cn("min-w-0 flex-1 truncate pr-5 text-base font-semibold", optionTone.text)}>{option.label}</span>
+                            </>
+                          )}
+                        </button>
+                        <button
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            setConfirmDelete({ type: "option", optionId: option.id });
+                          }}
+                          className="absolute right-1.5 top-1.5 flex h-6 w-6 items-center justify-center rounded-full text-emerald-500 opacity-100 transition hover:bg-white/70 hover:text-emerald-800 focus:opacity-100 [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover:opacity-100"
+                          aria-label="Supprimer cette option"
+                        >
+                          <X className="h-3.5 w-3.5" />
+                        </button>
+                      </>
                     )}
                   </div>
                 );
@@ -4707,6 +4723,7 @@ function ProductionDetail({
                 return (
                   <div
                     key={link.id}
+                    data-grid-delete-confirm={isConfirmingDelete ? true : undefined}
                     className={cn(
                       "group relative flex min-h-[4.75rem] items-center gap-1.5 rounded-xl border-2 transition sm:min-h-20 sm:gap-2",
                       linkTone.surface,
@@ -4715,30 +4732,31 @@ function ProductionDetail({
                       isSelectedLink && "border-sky-700 ring-2 ring-sky-700/20",
                     )}
                   >
-                    <button onClick={() => selectLink(link)} className="flex min-h-[4.75rem] min-w-0 flex-1 items-center gap-1.5 px-2 py-3 text-left sm:min-h-20 sm:gap-2 sm:px-3">
-                      <Icon className={cn("h-4 w-4 shrink-0 sm:h-5 sm:w-5", linkTone.icon)} />
-                      <span className={cn("min-w-0 flex-1 truncate pr-5 text-base font-semibold", linkTone.text)}>{link.label}</span>
-                    </button>
-                    <ExternalLink className="mr-8 hidden h-4 w-4 shrink-0 text-sky-400 sm:block" />
-                    <button
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        setConfirmDelete({ type: "link", linkId: link.id });
-                      }}
-                      className="absolute right-1.5 top-1.5 flex h-6 w-6 items-center justify-center rounded-full text-sky-500 opacity-100 transition hover:bg-white/70 hover:text-sky-800 focus:opacity-100 [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover:opacity-100"
-                      aria-label="Supprimer ce lien"
-                    >
-                      <X className="h-3.5 w-3.5" />
-                    </button>
-                    {isConfirmingDelete && (
-                      <div className="absolute right-1 top-9 z-30">
-                        <DeleteConfirmBubble
-                          label="Supprimer ce lien ?"
-                          deleting={deletingItem}
-                          onCancel={() => setConfirmDelete(null)}
-                          onConfirm={() => void deleteSelectedGridItem()}
-                        />
-                      </div>
+                    {isConfirmingDelete ? (
+                      <InlineGridDeleteConfirmation
+                        tone="link"
+                        deleting={deletingItem}
+                        onCancel={() => setConfirmDelete(null)}
+                        onConfirm={() => void deleteSelectedGridItem()}
+                      />
+                    ) : (
+                      <>
+                        <button onClick={() => selectLink(link)} className="flex min-h-[4.75rem] min-w-0 flex-1 items-center gap-1.5 px-2 py-3 text-left sm:min-h-20 sm:gap-2 sm:px-3">
+                          <Icon className={cn("h-4 w-4 shrink-0 sm:h-5 sm:w-5", linkTone.icon)} />
+                          <span className={cn("min-w-0 flex-1 truncate pr-5 text-base font-semibold", linkTone.text)}>{link.label}</span>
+                        </button>
+                        <ExternalLink className="mr-8 hidden h-4 w-4 shrink-0 text-sky-400 sm:block" />
+                        <button
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            setConfirmDelete({ type: "link", linkId: link.id });
+                          }}
+                          className="absolute right-1.5 top-1.5 flex h-6 w-6 items-center justify-center rounded-full text-sky-500 opacity-100 transition hover:bg-white/70 hover:text-sky-800 focus:opacity-100 [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover:opacity-100"
+                          aria-label="Supprimer ce lien"
+                        >
+                          <X className="h-3.5 w-3.5" />
+                        </button>
+                      </>
                     )}
                   </div>
                 );
@@ -4776,6 +4794,7 @@ function ProductionDetail({
                 return (
                   <div
                     key={group.id}
+                    data-grid-delete-confirm={isConfirmingDelete ? true : undefined}
                     className={cn(
                       "group relative flex min-h-[4.75rem] items-center gap-1.5 rounded-xl border-2 transition sm:min-h-20 sm:gap-2",
                       documentTone.surface,
@@ -4784,32 +4803,33 @@ function ProductionDetail({
                       isSelectedDocument && documentTone.selected,
                     )}
                   >
-                    <button
-                      onClick={() => selectDocumentGroup(group)}
-                      className="flex min-h-[4.75rem] min-w-0 flex-1 items-center gap-1.5 px-2 py-3 text-left sm:min-h-20 sm:gap-2 sm:px-3"
-                    >
-                      <Icon className={cn("h-4 w-4 shrink-0 sm:h-5 sm:w-5", documentTone.icon)} />
-                      <span className={cn("min-w-0 flex-1 truncate pr-5 text-base font-semibold", documentTone.text)}>{group.label}</span>
-                    </button>
-                    <button
-                      onClick={(buttonEvent) => {
-                        buttonEvent.stopPropagation();
-                        setConfirmDelete({ type: "document", groupId: group.id });
-                      }}
-                      className="absolute right-1.5 top-1.5 flex h-6 w-6 items-center justify-center rounded-full text-amber-500 opacity-100 transition hover:bg-white/70 hover:text-amber-800 focus:opacity-100 [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover:opacity-100"
-                      aria-label="Supprimer ce document"
-                    >
-                      <X className="h-3.5 w-3.5" />
-                    </button>
-                    {isConfirmingDelete && (
-                      <div className="absolute right-1 top-9 z-30">
-                        <DeleteConfirmBubble
-                          label="Supprimer ce document ?"
-                          deleting={deletingItem}
-                          onCancel={() => setConfirmDelete(null)}
-                          onConfirm={() => void deleteSelectedGridItem()}
-                        />
-                      </div>
+                    {isConfirmingDelete ? (
+                      <InlineGridDeleteConfirmation
+                        tone="document"
+                        deleting={deletingItem}
+                        onCancel={() => setConfirmDelete(null)}
+                        onConfirm={() => void deleteSelectedGridItem()}
+                      />
+                    ) : (
+                      <>
+                        <button
+                          onClick={() => selectDocumentGroup(group)}
+                          className="flex min-h-[4.75rem] min-w-0 flex-1 items-center gap-1.5 px-2 py-3 text-left sm:min-h-20 sm:gap-2 sm:px-3"
+                        >
+                          <Icon className={cn("h-4 w-4 shrink-0 sm:h-5 sm:w-5", documentTone.icon)} />
+                          <span className={cn("min-w-0 flex-1 truncate pr-5 text-base font-semibold", documentTone.text)}>{group.label}</span>
+                        </button>
+                        <button
+                          onClick={(buttonEvent) => {
+                            buttonEvent.stopPropagation();
+                            setConfirmDelete({ type: "document", groupId: group.id });
+                          }}
+                          className="absolute right-1.5 top-1.5 flex h-6 w-6 items-center justify-center rounded-full text-amber-500 opacity-100 transition hover:bg-white/70 hover:text-amber-800 focus:opacity-100 [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover:opacity-100"
+                          aria-label="Supprimer ce document"
+                        >
+                          <X className="h-3.5 w-3.5" />
+                        </button>
+                      </>
                     )}
                   </div>
                 );
@@ -7090,28 +7110,48 @@ function InlineAddForm({
   );
 }
 
-function DeleteConfirmBubble({
-  label,
+function InlineGridDeleteConfirmation({
+  tone,
   deleting,
   onCancel,
   onConfirm,
 }: {
-  label: string;
+  tone: ItemKind;
   deleting: boolean;
   onCancel: () => void;
   onConfirm: () => void;
 }) {
+  const toneClassName =
+    tone === "option"
+      ? "bg-emerald-50/80"
+      : tone === "link"
+        ? "bg-sky-50/80"
+        : "bg-amber-50/80";
+
   return (
-    <div className="flex max-w-full flex-wrap items-center justify-end gap-2 rounded-xl border border-stone-200 bg-white px-3 py-2">
-      <div className="text-base font-semibold text-stone-700">{label}</div>
-      <div className="flex justify-end gap-1.5">
-        <button onClick={onCancel} disabled={deleting} className="rounded-full border border-stone-200 px-3 py-1.5 text-base font-semibold text-stone-600 disabled:text-stone-300">
-          Annuler
-        </button>
-        <button onClick={onConfirm} disabled={deleting} className="rounded-full bg-[#bb2720] px-3 py-1.5 text-base font-semibold text-white disabled:bg-stone-300">
-          Supprimer
-        </button>
-      </div>
+    <div className={cn("flex min-h-[4.75rem] min-w-0 flex-1 items-center justify-center gap-1.5 rounded-[0.65rem] px-1.5 py-2 sm:min-h-20 sm:gap-2 sm:px-2", toneClassName)}>
+      <button
+        type="button"
+        onClick={(event) => {
+          event.stopPropagation();
+          onCancel();
+        }}
+        disabled={deleting}
+        className="min-w-0 rounded-full border border-stone-200 bg-white/80 px-2 py-1.5 text-[11px] font-semibold leading-none text-stone-600 transition hover:bg-white disabled:text-stone-300 sm:px-3 sm:text-sm"
+      >
+        Annuler
+      </button>
+      <button
+        type="button"
+        onClick={(event) => {
+          event.stopPropagation();
+          onConfirm();
+        }}
+        disabled={deleting}
+        className="min-w-0 rounded-full bg-[#bb2720]/90 px-2 py-1.5 text-[11px] font-semibold leading-none text-white transition hover:bg-[#a9231d] disabled:bg-stone-300 sm:px-3 sm:text-sm"
+      >
+        {deleting ? "..." : "Supprimer"}
+      </button>
     </div>
   );
 }
