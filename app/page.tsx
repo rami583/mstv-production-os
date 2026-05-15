@@ -4647,29 +4647,9 @@ function ProductionDetail({
                       <InlineGridDeleteConfirmation
                         tone="option"
                         deleting={deletingItem}
-                        contentClassName={cn(
-                          showOptionAssigneeInitials ? "flex-col items-start justify-between gap-2" : "items-center gap-1.5 sm:gap-2",
-                        )}
                         onCancel={() => setConfirmDelete(null)}
                         onConfirm={() => void deleteSelectedGridItem()}
-                      >
-                        {showOptionAssigneeInitials ? (
-                          <>
-                            <span className="inline-flex shrink-0 rounded-full border border-emerald-300 bg-white/75 px-2 py-0.5 text-base font-bold leading-tight text-emerald-800">
-                              {optionAssigneeInitials}
-                            </span>
-                            <span className="flex w-full min-w-0 items-center gap-1.5 sm:gap-2">
-                              <Icon className={cn("h-4 w-4 shrink-0 sm:h-5 sm:w-5", optionTone.icon)} />
-                              <span className={cn("min-w-0 flex-1 truncate text-base font-semibold", optionTone.text)}>{option.label}</span>
-                            </span>
-                          </>
-                        ) : (
-                          <>
-                            <Icon className={cn("h-4 w-4 shrink-0 sm:h-5 sm:w-5", optionTone.icon)} />
-                            <span className={cn("min-w-0 flex-1 truncate text-base font-semibold", optionTone.text)}>{option.label}</span>
-                          </>
-                        )}
-                      </InlineGridDeleteConfirmation>
+                      />
                     ) : (
                       <>
                         <button
@@ -4757,13 +4737,9 @@ function ProductionDetail({
                       <InlineGridDeleteConfirmation
                         tone="link"
                         deleting={deletingItem}
-                        contentClassName="items-center gap-1.5 sm:gap-2"
                         onCancel={() => setConfirmDelete(null)}
                         onConfirm={() => void deleteSelectedGridItem()}
-                      >
-                        <Icon className={cn("h-4 w-4 shrink-0 sm:h-5 sm:w-5", linkTone.icon)} />
-                        <span className={cn("min-w-0 flex-1 truncate text-base font-semibold", linkTone.text)}>{link.label}</span>
-                      </InlineGridDeleteConfirmation>
+                      />
                     ) : (
                       <>
                         <button onClick={() => selectLink(link)} className="flex min-h-[4.75rem] min-w-0 flex-1 items-center gap-1.5 px-2 py-3 text-left sm:min-h-20 sm:gap-2 sm:px-3">
@@ -4832,13 +4808,9 @@ function ProductionDetail({
                       <InlineGridDeleteConfirmation
                         tone="document"
                         deleting={deletingItem}
-                        contentClassName="items-center gap-1.5 sm:gap-2"
                         onCancel={() => setConfirmDelete(null)}
                         onConfirm={() => void deleteSelectedGridItem()}
-                      >
-                        <Icon className={cn("h-4 w-4 shrink-0 sm:h-5 sm:w-5", documentTone.icon)} />
-                        <span className={cn("min-w-0 flex-1 truncate text-base font-semibold", documentTone.text)}>{group.label}</span>
-                      </InlineGridDeleteConfirmation>
+                      />
                     ) : (
                       <>
                         <button
@@ -7142,15 +7114,11 @@ function InlineAddForm({
 function InlineGridDeleteConfirmation({
   tone,
   deleting,
-  contentClassName,
-  children,
   onCancel,
   onConfirm,
 }: {
   tone: ItemKind;
   deleting: boolean;
-  contentClassName?: string;
-  children: React.ReactNode;
   onCancel: () => void;
   onConfirm: () => void;
 }) {
@@ -7162,9 +7130,8 @@ function InlineGridDeleteConfirmation({
         : "bg-amber-50/80";
 
   return (
-    <div className={cn("flex min-h-[4.75rem] min-w-0 flex-1 items-center gap-1.5 rounded-[0.65rem] px-2 py-3 transition sm:min-h-20 sm:gap-2 sm:px-3", toneClassName)}>
-      <div className={cn("flex min-w-0 flex-1", contentClassName)}>{children}</div>
-      <div className="flex shrink-0 items-center gap-1">
+    <div className={cn("flex min-h-[4.75rem] min-w-0 flex-1 items-center justify-center rounded-[0.65rem] px-2 py-3 transition sm:min-h-20 sm:px-3", toneClassName)}>
+      <div className="flex items-center justify-center gap-3">
         <button
           type="button"
           onClick={(event) => {
