@@ -33,7 +33,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { Keyboard } from "@capacitor/keyboard";
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type TouchEvent as ReactTouchEvent } from "react";
 import { Card } from "@/components/ui/card";
 import {
   publicHolidays,
@@ -3209,7 +3209,7 @@ function ProductionDetail({
   const detailBlockRef = useRef<HTMLDivElement | null>(null);
   const previousContextSelectionKeyRef = useRef<string | null>(null);
   const eventSwipeViewportRef = useRef<HTMLDivElement | null>(null);
-  const eventSwipeStartRef = useRef<{ pointerId: number; x: number; y: number; axis: "horizontal" | "vertical" | null } | null>(null);
+  const eventSwipeStartRef = useRef<{ pointerId: number | "touch"; x: number; y: number; axis: "horizontal" | "vertical" | null } | null>(null);
   const eventSwipeResetAfterEventChangeRef = useRef(false);
   const suppressEventSwipeClickRef = useRef(false);
   const [eventSwipeOffset, setEventSwipeOffset] = useState(0);
@@ -3387,11 +3387,13 @@ function ProductionDetail({
     }
   }
 
-  function isTouchEventSwipeTarget(target: EventTarget | null) {
+  function shouldIgnoreEventSwipe(target: EventTarget | null) {
     return (
-      target instanceof HTMLElement &&
-      !target.closest(
-        "input, textarea, select, button, a, label, [contenteditable='true'], [role='button'], [data-no-event-swipe]",
+      !(target instanceof HTMLElement) ||
+      Boolean(
+        target.closest(
+          "input, textarea, select, button, a, label, [contenteditable='true'], [role='button'], [data-no-event-swipe]",
+        ),
       )
     );
   }
@@ -3431,27 +3433,23 @@ function ProductionDetail({
     }, PAGE_TRANSITION_MS);
   }
 
-  function handleEventSwipePointerDown(pointerEvent: ReactPointerEvent<HTMLDivElement>) {
-    if (eventSwipeAnimating || pointerEvent.pointerType === "mouse" || !isTouchEventSwipeTarget(pointerEvent.target)) return;
-    if (typeof window !== "undefined" && !window.matchMedia("(hover: none), (pointer: coarse)").matches) return;
-
+  function beginEventSwipe(pointerId: number | "touch", clientX: number, clientY: number) {
     eventSwipeStartRef.current = {
-      pointerId: pointerEvent.pointerId,
-      x: pointerEvent.clientX,
-      y: pointerEvent.clientY,
+      pointerId,
+      x: clientX,
+      y: clientY,
       axis: null,
     };
     suppressEventSwipeClickRef.current = false;
     setIsEventSwipeDragging(true);
-    pointerEvent.currentTarget.setPointerCapture(pointerEvent.pointerId);
   }
 
-  function handleEventSwipePointerMove(pointerEvent: ReactPointerEvent<HTMLDivElement>) {
+  function updateEventSwipe(pointerId: number | "touch", clientX: number, clientY: number, currentTargetWidth: number, preventDefault: () => void) {
     const swipeStart = eventSwipeStartRef.current;
-    if (!swipeStart || swipeStart.pointerId !== pointerEvent.pointerId || eventSwipeAnimating) return;
+    if (!swipeStart || swipeStart.pointerId !== pointerId || eventSwipeAnimating) return;
 
-    const deltaX = pointerEvent.clientX - swipeStart.x;
-    const deltaY = pointerEvent.clientY - swipeStart.y;
+    const deltaX = clientX - swipeStart.x;
+    const deltaY = clientY - swipeStart.y;
 
     if (!swipeStart.axis && (Math.abs(deltaX) > 8 || Math.abs(deltaY) > 8)) {
       swipeStart.axis = Math.abs(deltaX) > Math.abs(deltaY) ? "horizontal" : "vertical";
@@ -3464,11 +3462,11 @@ function ProductionDetail({
 
     if (swipeStart.axis !== "horizontal") return;
 
-    pointerEvent.preventDefault();
+    preventDefault();
     suppressEventSwipeClickRef.current = true;
 
     const canNavigate = deltaX < 0 ? hasNext : hasPrevious;
-    const viewportWidth = eventSwipeViewportRef.current?.clientWidth ?? pointerEvent.currentTarget.clientWidth;
+    const viewportWidth = eventSwipeViewportRef.current?.clientWidth ?? currentTargetWidth;
     const pageStep = getSwipePageStep(viewportWidth);
     const resistedOffset = canNavigate ? deltaX : deltaX * 0.22;
     const boundedOffset = Math.max(-pageStep, Math.min(pageStep, resistedOffset));
@@ -3486,12 +3484,12 @@ function ProductionDetail({
     }
   }
 
-  function handleEventSwipePointerUp(pointerEvent: ReactPointerEvent<HTMLDivElement>) {
+  function finishEventSwipe(pointerId: number | "touch", clientX: number, currentTargetWidth: number) {
     const swipeStart = eventSwipeStartRef.current;
-    if (!swipeStart || swipeStart.pointerId !== pointerEvent.pointerId) return;
+    if (!swipeStart || swipeStart.pointerId !== pointerId) return;
 
-    const deltaX = pointerEvent.clientX - swipeStart.x;
-    const viewportWidth = eventSwipeViewportRef.current?.clientWidth ?? pointerEvent.currentTarget.clientWidth;
+    const deltaX = clientX - swipeStart.x;
+    const viewportWidth = eventSwipeViewportRef.current?.clientWidth ?? currentTargetWidth;
     const swipeThreshold = getSwipeThreshold(viewportWidth);
     eventSwipeStartRef.current = null;
     setIsEventSwipeDragging(false);
@@ -3506,6 +3504,44 @@ function ProductionDetail({
     setEventSwipeIncomingEvent(null);
   }
 
+  function handleEventSwipePointerDown(pointerEvent: ReactPointerEvent<HTMLDivElement>) {
+    if (eventSwipeStartRef.current || eventSwipeAnimating || pointerEvent.pointerType === "mouse" || shouldIgnoreEventSwipe(pointerEvent.target)) return;
+    if (typeof window !== "undefined" && !window.matchMedia("(hover: none), (pointer: coarse)").matches) return;
+
+    beginEventSwipe(pointerEvent.pointerId, pointerEvent.clientX, pointerEvent.clientY);
+    pointerEvent.currentTarget.setPointerCapture(pointerEvent.pointerId);
+  }
+
+  function handleEventSwipePointerMove(pointerEvent: ReactPointerEvent<HTMLDivElement>) {
+    updateEventSwipe(pointerEvent.pointerId, pointerEvent.clientX, pointerEvent.clientY, pointerEvent.currentTarget.clientWidth, () => pointerEvent.preventDefault());
+  }
+
+  function handleEventSwipePointerUp(pointerEvent: ReactPointerEvent<HTMLDivElement>) {
+    finishEventSwipe(pointerEvent.pointerId, pointerEvent.clientX, pointerEvent.currentTarget.clientWidth);
+  }
+
+  function handleEventSwipeTouchStart(touchEvent: ReactTouchEvent<HTMLDivElement>) {
+    const touch = touchEvent.changedTouches.item(0);
+    if (!touch || eventSwipeStartRef.current || eventSwipeAnimating || shouldIgnoreEventSwipe(touchEvent.target)) return;
+    if (typeof window !== "undefined" && !window.matchMedia("(hover: none), (pointer: coarse)").matches) return;
+
+    beginEventSwipe("touch", touch.clientX, touch.clientY);
+  }
+
+  function handleEventSwipeTouchMove(touchEvent: ReactTouchEvent<HTMLDivElement>) {
+    const touch = touchEvent.changedTouches.item(0);
+    if (!touch) return;
+
+    updateEventSwipe("touch", touch.clientX, touch.clientY, touchEvent.currentTarget.clientWidth, () => touchEvent.preventDefault());
+  }
+
+  function handleEventSwipeTouchEnd(touchEvent: ReactTouchEvent<HTMLDivElement>) {
+    const touch = touchEvent.changedTouches.item(0);
+    if (!touch) return;
+
+    finishEventSwipe("touch", touch.clientX, touchEvent.currentTarget.clientWidth);
+  }
+
   return (
     <div
       ref={eventSwipeViewportRef}
@@ -3514,6 +3550,10 @@ function ProductionDetail({
       onPointerMove={handleEventSwipePointerMove}
       onPointerUp={handleEventSwipePointerUp}
       onPointerCancel={resetEventSwipe}
+      onTouchStartCapture={handleEventSwipeTouchStart}
+      onTouchMoveCapture={handleEventSwipeTouchMove}
+      onTouchEndCapture={handleEventSwipeTouchEnd}
+      onTouchCancelCapture={resetEventSwipe}
       onClickCapture={(clickEvent) => {
         if (!suppressEventSwipeClickRef.current) return;
         clickEvent.preventDefault();
@@ -4805,7 +4845,7 @@ function ContextDetailBlock({
               {selectedDocumentGroup.files.map((file) => {
                 const FileIcon = getDocumentFileIcon(file);
                 return (
-                  <div key={file.id} className="flex w-full min-w-0 items-center gap-2">
+                  <div key={file.id} data-no-event-swipe className="flex w-full min-w-0 items-center gap-2">
                     <div className={cn("group inline-flex min-h-9 min-w-0 flex-1 items-center gap-2 rounded-full border px-3 py-1.5", documentTone.surface, documentTone.border)}>
                       <button
                         onClick={() => void openDocumentFile(file)}
