@@ -16,6 +16,7 @@ import {
   FileStack,
   FileText,
   FileSpreadsheet,
+  History,
   Import,
   KeyRound,
   Link,
@@ -69,6 +70,7 @@ type EventLinkRow = Database["public"]["Tables"]["event_links"]["Row"];
 type EventLinkEntryRow = Database["public"]["Tables"]["event_link_entries"]["Row"];
 type EventDocumentRow = Database["public"]["Tables"]["event_documents"]["Row"];
 type EventDocumentGroupRow = Database["public"]["Tables"]["event_document_groups"]["Row"];
+type EventActivityLogRow = Database["public"]["Tables"]["event_activity_log"]["Row"];
 type TeamMemberRow = Database["public"]["Tables"]["team_members"]["Row"];
 
 type EventQueryRow = EventRow & {
@@ -153,6 +155,21 @@ type DocumentPreview = {
   file: EventDocument;
   url: string;
   kind: "pdf" | "image";
+};
+
+type ActivityValue = Record<string, unknown> | null;
+
+type EventActivityLog = {
+  id: string;
+  eventId: string;
+  actionType: string;
+  entityType: string | null;
+  entityId: string | null;
+  description: string;
+  previousValue: ActivityValue;
+  newValue: ActivityValue;
+  createdBy: string | null;
+  createdAt: string;
 };
 
 type ProductionEvent = {
@@ -328,6 +345,29 @@ function formatFullDate(dateKey: string) {
     month: "long",
     year: "numeric",
   }).format(date);
+}
+
+function formatHistoryTimestamp(dateValue: string) {
+  const date = new Date(dateValue);
+  if (Number.isNaN(date.getTime())) return "";
+
+  return new Intl.DateTimeFormat("fr-FR", {
+    day: "2-digit",
+    month: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(date);
+}
+
+function getEventTimeFieldLabel(field: EventTimeField) {
+  const labels: Record<EventTimeField, string> = {
+    clientArrivalTime: "Arrivée client",
+    startTime: "Début live",
+    endTime: "Fin live",
+    endOfDayTime: "Fin journée",
+  };
+
+  return labels[field];
 }
 
 function toTimeInputValue(time: string | null) {
@@ -719,6 +759,21 @@ function mapTeamMember(row: TeamMemberRow): TeamMember {
   };
 }
 
+function mapEventActivityLog(row: EventActivityLogRow): EventActivityLog {
+  return {
+    id: row.id,
+    eventId: row.event_id,
+    actionType: row.action_type,
+    entityType: row.entity_type,
+    entityId: row.entity_id,
+    description: row.description,
+    previousValue: row.previous_value,
+    newValue: row.new_value,
+    createdBy: row.created_by,
+    createdAt: row.created_at,
+  };
+}
+
 function getOptionCollaboratorProfile(member: TeamMember) {
   return optionCollaboratorProfiles.find((profile) => profile.firstName === member.firstName) ?? null;
 }
@@ -998,6 +1053,11 @@ export default function Home() {
   const [deleteDialogEvent, setDeleteDialogEvent] = useState<ProductionEvent | null>(null);
   const [dateEditorOpen, setDateEditorOpen] = useState(false);
   const [documentPreview, setDocumentPreview] = useState<DocumentPreview | null>(null);
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [activityLog, setActivityLog] = useState<EventActivityLog[]>([]);
+  const [activityLoading, setActivityLoading] = useState(false);
+  const [activityError, setActivityError] = useState<string | null>(null);
+  const [restoringActivityId, setRestoringActivityId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [isTimelineTimeEditing, setIsTimelineTimeEditing] = useState(false);
@@ -1017,6 +1077,11 @@ export default function Home() {
   useEffect(() => {
     void reloadData();
   }, []);
+
+  useEffect(() => {
+    if (!historyOpen || !selectedEvent) return;
+    void refreshActivityLog(selectedEvent.id);
+  }, [historyOpen, selectedEvent?.id]);
 
   useEffect(() => {
     let cancelled = false;
@@ -1099,6 +1164,115 @@ export default function Home() {
       setError(supabaseError instanceof Error ? supabaseError.message : "Impossible de charger les données.");
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function fetchActivityLog(eventId: string) {
+    if (!supabase) {
+      throw new Error("Configuration Supabase manquante.");
+    }
+
+    const { data, error: logError } = await supabase
+      .from("event_activity_log")
+      .select("*")
+      .eq("event_id", eventId)
+      .order("created_at", { ascending: false })
+      .limit(80);
+
+    if (logError) throw logError;
+    return (data ?? []).map(mapEventActivityLog);
+  }
+
+  async function refreshActivityLog(eventId: string) {
+    setActivityLoading(true);
+    setActivityError(null);
+
+    try {
+      setActivityLog(await fetchActivityLog(eventId));
+    } catch (logError) {
+      console.error("Failed to load event activity log. Apply supabase/migrations/011_event_activity_log.sql if the table is missing.", logError);
+      setActivityError("Impossible de charger l'historique. Vérifiez la migration 011_event_activity_log.sql.");
+    } finally {
+      setActivityLoading(false);
+    }
+  }
+
+  async function logEventActivity(input: {
+    eventId: string;
+    actionType: string;
+    entityType?: string | null;
+    entityId?: string | null;
+    description: string;
+    previousValue?: ActivityValue;
+    newValue?: ActivityValue;
+  }) {
+    if (!supabase) return;
+
+    const { data, error: logError } = await supabase
+      .from("event_activity_log")
+      .insert({
+        event_id: input.eventId,
+        action_type: input.actionType,
+        entity_type: input.entityType ?? null,
+        entity_id: input.entityId ?? null,
+        description: input.description,
+        previous_value: input.previousValue ?? null,
+        new_value: input.newValue ?? null,
+        created_by: null,
+      })
+      .select()
+      .single();
+
+    if (logError) {
+      console.warn("Failed to write event activity log. Apply supabase/migrations/011_event_activity_log.sql if the table is missing.", {
+        payload: input,
+        errorMessage: logError.message,
+        errorCode: logError.code,
+        errorDetails: logError.details,
+        errorHint: logError.hint,
+      });
+      return;
+    }
+
+    if (historyOpen && selectedEvent?.id === input.eventId) {
+      setActivityLog((current) => [mapEventActivityLog(data), ...current].slice(0, 80));
+    }
+  }
+
+  function openHistory() {
+    if (!selectedEvent) return;
+    setHistoryOpen(true);
+  }
+
+  async function restoreActivityEntry(entry: EventActivityLog) {
+    const eventToRestore = chronologicalEvents.find((item) => item.id === entry.eventId);
+    if (!eventToRestore) {
+      setActivityError("Événement introuvable.");
+      return;
+    }
+
+    setRestoringActivityId(entry.id);
+    setActivityError(null);
+
+    try {
+      if (entry.actionType === "event_date_changed" || entry.actionType === "event_date_restored") {
+        const previousDate = typeof entry.previousValue?.date === "string" ? entry.previousValue.date : null;
+        if (!previousDate) throw new Error("Ancienne date introuvable.");
+        await updateEventDate(eventToRestore, previousDate, "Date restaurée");
+      } else if (entry.actionType === "event_time_changed" || entry.actionType === "event_time_restored") {
+        const field = typeof entry.previousValue?.field === "string" ? entry.previousValue.field : null;
+        const previousTime = typeof entry.previousValue?.value === "string" ? entry.previousValue.value : "";
+        if (!field || !["clientArrivalTime", "startTime", "endTime", "endOfDayTime"].includes(field)) {
+          throw new Error("Ancien horaire introuvable.");
+        }
+        await updateEventTime(eventToRestore, field as EventTimeField, previousTime, "Horaire restauré");
+      }
+
+      await refreshActivityLog(entry.eventId);
+    } catch (restoreError) {
+      setActivityError(restoreError instanceof Error ? restoreError.message : "Impossible de restaurer cette valeur.");
+    } finally {
+      setRestoringActivityId(null);
     }
   }
 
@@ -1239,8 +1413,21 @@ export default function Home() {
 
     if (defaultOptionItems.length > 0) {
       const { error: optionItemError } = await supabase.from("event_option_items").insert(defaultOptionItems);
-      if (optionItemError) throw optionItemError;
+    if (optionItemError) throw optionItemError;
     }
+
+    await logEventActivity({
+      eventId: event.id,
+      actionType: "event_created",
+      entityType: "event",
+      entityId: event.id,
+      description: "Événement créé",
+      newValue: {
+        clientName: normalizedInput.clientName,
+        eventName: normalizedInput.eventName,
+        date: normalizedInput.date,
+      },
+    });
 
     await reloadData(event.id);
     setSelectedDateKey(event.date);
@@ -1291,9 +1478,37 @@ export default function Home() {
     setSelectedDateKey(updatedEvent.date);
     setVisibleMonth(new Date(`${updatedEvent.date}T12:00:00`));
     setScreen(nextScreen);
+
+    if (event.date !== updatedEvent.date) {
+      await logEventActivity({
+        eventId: event.id,
+        actionType: "event_date_changed",
+        entityType: "event",
+        entityId: event.id,
+        description: "Date modifiée",
+        previousValue: { date: event.date },
+        newValue: { date: updatedEvent.date },
+      });
+    }
+
+    for (const field of ["clientArrivalTime", "startTime", "endTime", "endOfDayTime"] as EventTimeField[]) {
+      const previousValue = toTimeInputValue(event[field]) || null;
+      const nextValue = toTimeInputValue(updatedEvent[field]) || null;
+      if (previousValue === nextValue) continue;
+
+      await logEventActivity({
+        eventId: event.id,
+        actionType: "event_time_changed",
+        entityType: "event",
+        entityId: event.id,
+        description: `Horaire modifié · ${getEventTimeFieldLabel(field)}`,
+        previousValue: { field, value: previousValue },
+        newValue: { field, value: nextValue },
+      });
+    }
   }
 
-  async function updateEventTime(event: ProductionEvent, field: EventTimeField, value: string) {
+  async function updateEventTime(event: ProductionEvent, field: EventTimeField, value: string, activityDescription = "Horaire modifié") {
     if (!supabase) {
       throw new Error("Configuration Supabase manquante.");
     }
@@ -1305,6 +1520,7 @@ export default function Home() {
       endOfDayTime: "end_of_day_time",
     };
     const nextValue = normalizeCompactTimeInput(value) || null;
+    const previousValue = toTimeInputValue(event[field]) || null;
     const column = columnByField[field];
     const updatePayload: Database["public"]["Tables"]["events"]["Update"] = {
       [column]: nextValue,
@@ -1318,6 +1534,8 @@ export default function Home() {
       .single();
 
     if (updateError) throw updateError;
+
+    const updatedValue = toTimeInputValue(data[column]) || null;
 
     setEvents((current) =>
       current.map((item) =>
@@ -1333,9 +1551,21 @@ export default function Home() {
           : item,
       ),
     );
+
+    if (previousValue !== updatedValue) {
+      await logEventActivity({
+        eventId: event.id,
+        actionType: "event_time_changed",
+        entityType: "event",
+        entityId: event.id,
+        description: `${activityDescription} · ${getEventTimeFieldLabel(field)}`,
+        previousValue: { field, value: previousValue },
+        newValue: { field, value: updatedValue },
+      });
+    }
   }
 
-  async function updateEventDate(event: ProductionEvent, nextDate: string) {
+  async function updateEventDate(event: ProductionEvent, nextDate: string, activityDescription = "Date modifiée") {
     if (!supabase) {
       throw new Error("Configuration Supabase manquante.");
     }
@@ -1369,6 +1599,18 @@ export default function Home() {
     setSelectedDateKey(data.date);
     setVisibleMonth(new Date(`${data.date}T12:00:00`));
     setScreen("detail");
+
+    if (event.date !== data.date) {
+      await logEventActivity({
+        eventId: event.id,
+        actionType: "event_date_changed",
+        entityType: "event",
+        entityId: event.id,
+        description: activityDescription,
+        previousValue: { date: event.date },
+        newValue: { date: data.date },
+      });
+    }
   }
 
   async function toggleOption(option: EventOption) {
@@ -1388,9 +1630,19 @@ export default function Home() {
               ...event,
               options: event.options.map((item) => (item.id === option.id ? { ...item, status: nextStatus } : item)),
             }
-          : event,
+        : event,
       ),
     );
+
+    await logEventActivity({
+      eventId: option.eventId,
+      actionType: "option_status_changed",
+      entityType: "option",
+      entityId: option.id,
+      description: `Option ${option.label} marquée comme ${nextStatus === "completed" ? "Fait" : "À faire"}`,
+      previousValue: { status: option.status },
+      newValue: { status: nextStatus },
+    });
   }
 
   async function syncEventLinkEntries(link: EventLink, drafts: LinkEntryDraft[]) {
@@ -1492,6 +1744,18 @@ export default function Home() {
       ),
     );
 
+    if (serializeLinkEntries(link.entries, isPlatform) !== serializeLinkEntries(updatedLink.entries, isPlatform) || link.status !== nextStatus) {
+      await logEventActivity({
+        eventId: link.eventId,
+        actionType: "link_edited",
+        entityType: "link",
+        entityId: link.id,
+        description: `Lien ${link.label} modifié`,
+        previousValue: { status: link.status, entries: link.entries },
+        newValue: { status: nextStatus, entries: nextEntries },
+      });
+    }
+
     return updatedLink;
   }
 
@@ -1541,6 +1805,15 @@ export default function Home() {
       ),
     );
 
+    await logEventActivity({
+      eventId,
+      actionType: "option_created",
+      entityType: "option",
+      entityId: option.id,
+      description: `Option ${option.label} ajoutée`,
+      newValue: { label: option.label, status: option.status },
+    });
+
     return option;
   }
 
@@ -1560,9 +1833,18 @@ export default function Home() {
               ...event,
               options: event.options.filter((item) => item.id !== option.id),
             }
-          : event,
+        : event,
       ),
     );
+
+    await logEventActivity({
+      eventId: option.eventId,
+      actionType: "option_deleted",
+      entityType: "option",
+      entityId: option.id,
+      description: `Option ${option.label} supprimée`,
+      previousValue: { label: option.label, status: option.status },
+    });
   }
 
   async function renameEventOption(option: EventOption, label: string) {
@@ -1591,6 +1873,16 @@ export default function Home() {
           : event,
       ),
     );
+
+    await logEventActivity({
+      eventId: option.eventId,
+      actionType: "option_renamed",
+      entityType: "option",
+      entityId: option.id,
+      description: `Option ${option.label} renommée`,
+      previousValue: { label: option.label },
+      newValue: { label: nextLabel },
+    });
 
     return updatedOption;
   }
@@ -1682,9 +1974,10 @@ export default function Home() {
                   : item,
               ),
             }
-          : event,
+        : event,
       ),
     );
+
   }
 
   async function toggleOptionAssignee(option: EventOption, member: TeamMember) {
@@ -1737,6 +2030,16 @@ export default function Home() {
           : event,
       ),
     );
+
+    await logEventActivity({
+      eventId: option.eventId,
+      actionType: isAssigned ? "option_assignee_removed" : "option_assignee_changed",
+      entityType: "option",
+      entityId: option.id,
+      description: isAssigned ? `Collaborateur retiré de ${option.label}` : `${member.firstName} assigné à ${option.label}`,
+      previousValue: { assignedTeamMemberId: currentAssignee?.id ?? null, name: currentAssignee?.firstName ?? null },
+      newValue: { assignedTeamMemberId: nextAssignedTeamMemberId, name: isAssigned ? null : member.firstName },
+    });
   }
 
   async function createEventLink(eventId: string, input: { label: string; url: string }) {
@@ -1785,6 +2088,15 @@ export default function Home() {
       ),
     );
 
+    await logEventActivity({
+      eventId,
+      actionType: "link_created",
+      entityType: "link",
+      entityId: link.id,
+      description: `Lien ${link.label} ajouté`,
+      newValue: { label: link.label, status: link.status, url: link.url },
+    });
+
     return link;
   }
 
@@ -1804,9 +2116,18 @@ export default function Home() {
               ...event,
               links: event.links.filter((item) => item.id !== link.id),
             }
-          : event,
+        : event,
       ),
     );
+
+    await logEventActivity({
+      eventId: link.eventId,
+      actionType: "link_deleted",
+      entityType: "link",
+      entityId: link.id,
+      description: `Lien ${link.label} supprimé`,
+      previousValue: { label: link.label, status: link.status, url: link.url },
+    });
   }
 
   async function renameEventLink(link: EventLink, label: string) {
@@ -1835,6 +2156,16 @@ export default function Home() {
           : event,
       ),
     );
+
+    await logEventActivity({
+      eventId: link.eventId,
+      actionType: "link_renamed",
+      entityType: "link",
+      entityId: link.id,
+      description: `Lien ${link.label} renommé`,
+      previousValue: { label: link.label },
+      newValue: { label: nextLabel },
+    });
 
     return updatedLink;
   }
@@ -1888,6 +2219,15 @@ export default function Home() {
       ),
     );
 
+    await logEventActivity({
+      eventId,
+      actionType: "document_group_created",
+      entityType: "document_group",
+      entityId: group.id,
+      description: `Document ${group.label} créé`,
+      newValue: { label: group.label },
+    });
+
     return group;
   }
 
@@ -1917,6 +2257,16 @@ export default function Home() {
           : event,
       ),
     );
+
+    await logEventActivity({
+      eventId: group.eventId,
+      actionType: "document_group_renamed",
+      entityType: "document_group",
+      entityId: group.id,
+      description: `Document ${group.label} renommé`,
+      previousValue: { label: group.label },
+      newValue: { label: nextLabel },
+    });
 
     return updatedGroup;
   }
@@ -1975,6 +2325,15 @@ export default function Home() {
       ),
     );
 
+    await logEventActivity({
+      eventId: group.eventId,
+      actionType: "document_uploaded",
+      entityType: "document",
+      entityId: document.id,
+      description: `Document ${document.fileName} téléversé`,
+      newValue: { fileName: document.fileName, groupId: group.id, groupLabel: group.label },
+    });
+
     return document;
   }
 
@@ -1999,9 +2358,18 @@ export default function Home() {
               ...event,
               documentGroups: event.documentGroups.filter((item) => item.id !== group.id),
             }
-          : event,
+        : event,
       ),
     );
+
+    await logEventActivity({
+      eventId: group.eventId,
+      actionType: "document_group_deleted",
+      entityType: "document_group",
+      entityId: group.id,
+      description: `Document ${group.label} supprimé`,
+      previousValue: { label: group.label, fileCount: group.files.length },
+    });
   }
 
   async function deleteEventDocument(document: EventDocument) {
@@ -2030,9 +2398,18 @@ export default function Home() {
                   : group,
               ),
             }
-          : event,
+        : event,
       ),
     );
+
+    await logEventActivity({
+      eventId: document.eventId,
+      actionType: "document_deleted",
+      entityType: "document",
+      entityId: document.id,
+      description: `Document ${document.fileName} supprimé`,
+      previousValue: { fileName: document.fileName, groupId: document.groupId },
+    });
   }
 
   async function openEventDocument(file: EventDocument) {
@@ -2094,6 +2471,19 @@ export default function Home() {
       selectedEventId: selectedEvent?.id ?? null,
       clientName: eventToDelete.clientName,
       eventName: eventToDelete.eventName,
+    });
+
+    await logEventActivity({
+      eventId,
+      actionType: "event_deleted",
+      entityType: "event",
+      entityId: eventId,
+      description: "Événement supprimé",
+      previousValue: {
+        clientName: eventToDelete.clientName,
+        eventName: eventToDelete.eventName,
+        date: eventToDelete.date,
+      },
     });
 
     const documentObjectPaths = eventToDelete.documentGroups
@@ -2187,6 +2577,8 @@ export default function Home() {
             openQuoteImport();
           }}
           onSearch={() => setSearchOpen(true)}
+          canOpenHistory={screen === "detail" && Boolean(selectedEvent)}
+          onOpenHistory={openHistory}
           onOpenYearOverview={() => setYearOverviewOpen(true)}
           onCreateEvent={() => {
             setEditingEvent(null);
@@ -2374,6 +2766,18 @@ export default function Home() {
         />
       )}
 
+      {historyOpen && selectedEvent && (
+        <EventHistorySheet
+          event={selectedEvent}
+          entries={activityLog}
+          loading={activityLoading}
+          error={activityError}
+          restoringActivityId={restoringActivityId}
+          onClose={() => setHistoryOpen(false)}
+          onRestore={restoreActivityEntry}
+        />
+      )}
+
       {isTimelineTimeEditing && keyboardVisible && (
         <TimelineKeyboardAccessoryBar keyboardHeight={keyboardHeight} onConfirm={confirmTimelineTimeEdit} />
       )}
@@ -2393,6 +2797,8 @@ function AppHeader({
   setCreateMenuOpen,
   onImportQuote,
   onSearch,
+  canOpenHistory,
+  onOpenHistory,
   onLogoClick,
   onOpenYearOverview,
   onCreateEvent,
@@ -2410,6 +2816,8 @@ function AppHeader({
   setCreateMenuOpen: (open: boolean | ((current: boolean) => boolean)) => void;
   onImportQuote: () => void;
   onSearch: () => void;
+  canOpenHistory: boolean;
+  onOpenHistory: () => void;
   onLogoClick?: () => void;
   onOpenYearOverview: () => void;
   onCreateEvent: () => void;
@@ -2473,6 +2881,7 @@ function AppHeader({
             Aujourd'hui
           </button>
         )}
+        {canOpenHistory && <HeaderIcon label="Historique" icon={History} onClick={onOpenHistory} />}
         <HeaderIcon label="Rechercher" icon={Search} onClick={onSearch} />
         <div ref={menuWrapperRef} className="relative">
           <button
@@ -2853,6 +3262,8 @@ function YearOverviewOverlay({
           setCreateMenuOpen={setCreateMenuOpen}
           onImportQuote={onImportQuote}
           onSearch={onSearch}
+          canOpenHistory={false}
+          onOpenHistory={() => undefined}
           onLogoClick={onGoToday}
           onOpenYearOverview={() => undefined}
           onCreateEvent={onCreateEvent}
@@ -5887,6 +6298,112 @@ function QuoteImportModal({
           )}
         </div>
       </form>
+    </div>
+  );
+}
+
+function getActivityValueLabel(value: ActivityValue) {
+  if (!value) return "";
+
+  if (typeof value.date === "string") return formatFullDate(value.date);
+  if (typeof value.field === "string") {
+    const field = value.field as EventTimeField;
+    const label = ["clientArrivalTime", "startTime", "endTime", "endOfDayTime"].includes(field) ? getEventTimeFieldLabel(field) : "Horaire";
+    const time = typeof value.value === "string" && value.value ? value.value : "--:--";
+    return `${label} · ${time}`;
+  }
+  if (typeof value.label === "string") return value.label;
+  if (typeof value.fileName === "string") return value.fileName;
+  if (typeof value.status === "string") return value.status;
+
+  return "";
+}
+
+function canRestoreActivity(entry: EventActivityLog) {
+  if (entry.actionType === "event_date_changed") return typeof entry.previousValue?.date === "string";
+  if (entry.actionType === "event_time_changed") {
+    return typeof entry.previousValue?.field === "string" && "value" in (entry.previousValue ?? {});
+  }
+  return false;
+}
+
+function EventHistorySheet({
+  event,
+  entries,
+  loading,
+  error,
+  restoringActivityId,
+  onClose,
+  onRestore,
+}: {
+  event: ProductionEvent;
+  entries: EventActivityLog[];
+  loading: boolean;
+  error: string | null;
+  restoringActivityId: string | null;
+  onClose: () => void;
+  onRestore: (entry: EventActivityLog) => Promise<void>;
+}) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-end bg-stone-950/10 p-3 sm:items-center sm:justify-center sm:p-6">
+      <div className="flex max-h-[82vh] w-full flex-col rounded-3xl border border-stone-200 bg-white p-4 sm:max-w-lg sm:p-5">
+        <div className="mb-4 flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <h2 className="text-base font-semibold text-stone-950">Historique</h2>
+            <p className="mt-1 truncate text-base font-medium text-stone-500">
+              {event.clientName} · {event.eventName}
+            </p>
+          </div>
+          <button type="button" onClick={onClose} className="rounded-full border border-stone-200 bg-white px-3 py-1.5 text-base font-semibold text-stone-600 transition hover:bg-stone-50">
+            Fermer
+          </button>
+        </div>
+
+        {error && <div className="mb-3 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-base font-medium text-rose-700">{error}</div>}
+
+        <div className="no-scrollbar min-h-0 flex-1 overflow-y-auto overscroll-contain">
+          {loading && <div className="rounded-2xl bg-stone-50 px-4 py-3 text-base font-medium text-stone-500">Chargement...</div>}
+          {!loading && entries.length === 0 && !error && (
+            <div className="rounded-2xl bg-stone-50 px-4 py-3 text-base font-medium text-stone-500">Aucun historique pour le moment.</div>
+          )}
+          <div className="space-y-2">
+            {entries.map((entry) => {
+              const previousLabel = getActivityValueLabel(entry.previousValue);
+              const nextLabel = getActivityValueLabel(entry.newValue);
+              const isRestorable = canRestoreActivity(entry);
+              const isRestoring = restoringActivityId === entry.id;
+
+              return (
+                <div key={entry.id} className="rounded-2xl border border-stone-200 bg-stone-50/70 px-4 py-3">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="text-base font-semibold text-stone-900">{entry.description}</p>
+                      <p className="mt-1 text-sm font-medium text-stone-500">{formatHistoryTimestamp(entry.createdAt)}</p>
+                    </div>
+                    {isRestorable && (
+                      <button
+                        type="button"
+                        onClick={() => void onRestore(entry)}
+                        disabled={isRestoring}
+                        className="shrink-0 rounded-full border border-stone-200 bg-white px-3 py-1.5 text-sm font-semibold text-stone-600 transition hover:bg-stone-100 disabled:text-stone-300"
+                      >
+                        {isRestoring ? "..." : "Restaurer"}
+                      </button>
+                    )}
+                  </div>
+                  {(previousLabel || nextLabel) && (
+                    <div className="mt-2 flex flex-wrap items-center gap-1.5 text-sm font-semibold text-stone-500">
+                      {previousLabel && <span className="rounded-full bg-white px-2 py-1">{previousLabel}</span>}
+                      {previousLabel && nextLabel && <span>→</span>}
+                      {nextLabel && <span className="rounded-full bg-[#bb2720]/[0.07] px-2 py-1 text-[#bb2720]">{nextLabel}</span>}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      </div>
     </div>
   );
 }

@@ -157,6 +157,34 @@ export type Database = {
         Update: Partial<Database["public"]["Tables"]["event_document_groups"]["Insert"]>;
         Relationships: [];
       };
+      event_activity_log: {
+        Row: {
+          id: string;
+          event_id: string;
+          action_type: string;
+          entity_type: string | null;
+          entity_id: string | null;
+          description: string;
+          previous_value: Record<string, unknown> | null;
+          new_value: Record<string, unknown> | null;
+          created_by: string | null;
+          created_at: string;
+        };
+        Insert: {
+          id?: string;
+          event_id: string;
+          action_type: string;
+          entity_type?: string | null;
+          entity_id?: string | null;
+          description: string;
+          previous_value?: Record<string, unknown> | null;
+          new_value?: Record<string, unknown> | null;
+          created_by?: string | null;
+          created_at?: string;
+        };
+        Update: Partial<Database["public"]["Tables"]["event_activity_log"]["Insert"]>;
+        Relationships: [];
+      };
       team_members: {
         Row: {
           id: string;
