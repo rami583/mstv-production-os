@@ -2426,11 +2426,13 @@ function CalendarDashboard({
   const previousSelectedDateKey = getPreferredDateKeyForMonth(new Date(visibleMonth.getFullYear(), visibleMonth.getMonth() - 1, 1), events);
   const nextSelectedDateKey = getPreferredDateKeyForMonth(new Date(visibleMonth.getFullYear(), visibleMonth.getMonth() + 1, 1), events);
   const [pagerOffset, setPagerOffset] = useState(0);
-  const [isPagerDragging, setIsPagerDragging] = useState(false);
+  const [pagerTransitionEnabled, setPagerTransitionEnabled] = useState(false);
   const [pagerAnimatingDirection, setPagerAnimatingDirection] = useState<-1 | 1 | null>(null);
   const pagerViewportRef = useRef<HTMLDivElement | null>(null);
   const monthSwipeStartRef = useRef<{ pointerId: number; x: number; y: number; axis: "horizontal" | "vertical" | null } | null>(null);
   const monthTransitioningRef = useRef(false);
+  const monthTransitionIdRef = useRef(0);
+  const monthTransitionTimeoutRef = useRef<number | null>(null);
   const suppressMonthClickRef = useRef(false);
 
   useEffect(() => {
@@ -2439,24 +2441,45 @@ function CalendarDashboard({
     }
   }, [currentMonthData, events, selectedDateKey, setSelectedDateKey, visibleMonth]);
 
+  useEffect(() => {
+    return () => {
+      if (monthTransitionTimeoutRef.current) {
+        window.clearTimeout(monthTransitionTimeoutRef.current);
+      }
+    };
+  }, []);
+
   function animateMonthChange(direction: -1 | 1) {
     if (monthTransitioningRef.current) return;
 
     const viewportWidth = pagerViewportRef.current?.clientWidth ?? 0;
     const pageStep = getSwipePageStep(viewportWidth);
+    const transitionId = monthTransitionIdRef.current + 1;
+    monthTransitionIdRef.current = transitionId;
     monthTransitioningRef.current = true;
     monthSwipeStartRef.current = null;
-    setIsPagerDragging(false);
+    setPagerTransitionEnabled(true);
     setPagerAnimatingDirection(direction);
     setPagerOffset(direction === 1 ? -pageStep : pageStep);
-    window.setTimeout(() => {
-      setIsPagerDragging(true);
+
+    if (monthTransitionTimeoutRef.current) {
+      window.clearTimeout(monthTransitionTimeoutRef.current);
+    }
+
+    monthTransitionTimeoutRef.current = window.setTimeout(() => {
+      if (monthTransitionIdRef.current !== transitionId) return;
+
+      setPagerTransitionEnabled(false);
       changeMonth(direction);
       setPagerAnimatingDirection(null);
       setPagerOffset(0);
+
       window.requestAnimationFrame(() => {
-        setIsPagerDragging(false);
-        monthTransitioningRef.current = false;
+        window.requestAnimationFrame(() => {
+          if (monthTransitionIdRef.current !== transitionId) return;
+          monthTransitioningRef.current = false;
+          monthTransitionTimeoutRef.current = null;
+        });
       });
     }, PAGE_TRANSITION_MS);
   }
@@ -2470,7 +2493,7 @@ function CalendarDashboard({
       y: pointerEvent.clientY,
       axis: null,
     };
-    setIsPagerDragging(true);
+    setPagerTransitionEnabled(false);
     setPagerOffset(0);
     pointerEvent.currentTarget.setPointerCapture(pointerEvent.pointerId);
   }
@@ -2517,8 +2540,13 @@ function CalendarDashboard({
     }, 0);
 
     if (!isHorizontalSwipe || Math.abs(deltaX) < swipeThreshold) {
-      setIsPagerDragging(false);
+      setPagerTransitionEnabled(true);
       setPagerOffset(0);
+      window.setTimeout(() => {
+        if (!monthTransitioningRef.current) {
+          setPagerTransitionEnabled(false);
+        }
+      }, PAGE_TRANSITION_MS);
       return;
     }
 
@@ -2529,7 +2557,7 @@ function CalendarDashboard({
     if (monthTransitioningRef.current) return;
 
     monthSwipeStartRef.current = null;
-    setIsPagerDragging(false);
+    setPagerTransitionEnabled(false);
     setPagerOffset(0);
     suppressMonthClickRef.current = false;
   }
@@ -2541,7 +2569,7 @@ function CalendarDashboard({
         style={{
           gap: PAGE_GAP,
           transform: `translate3d(calc(-100% - ${PAGE_GAP}px + ${pagerOffset}px), 0, 0)`,
-          transition: isPagerDragging ? undefined : `transform ${PAGE_TRANSITION_MS}ms ${PAGE_TRANSITION_EASING}`,
+          transition: pagerTransitionEnabled ? `transform ${PAGE_TRANSITION_MS}ms ${PAGE_TRANSITION_EASING}` : undefined,
         }}
       >
         <CalendarMonthPage
