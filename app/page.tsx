@@ -4200,6 +4200,7 @@ function ProductionDetail({
   const [manageError, setManageError] = useState<string | null>(null);
   const [submittingAdd, setSubmittingAdd] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState<DeleteSelection | null>(null);
+  const [deleteConfirmationOpen, setDeleteConfirmationOpen] = useState(false);
   const [deletingItem, setDeletingItem] = useState(false);
   const detailScrollContainerRef = useRef<HTMLDivElement | null>(null);
   const detailBlockRef = useRef<HTMLDivElement | null>(null);
@@ -4240,6 +4241,8 @@ function ProductionDetail({
       const target = pointerEvent.target;
       if (!(target instanceof HTMLElement)) return;
       if (target.closest("[data-grid-delete-confirm]")) return;
+      if (target.closest("[data-grid-delete-dialog]")) return;
+      setDeleteConfirmationOpen(false);
       setConfirmDelete(null);
     }
 
@@ -4403,11 +4406,17 @@ function ProductionDetail({
       }
 
       setConfirmDelete(null);
+      setDeleteConfirmationOpen(false);
     } catch (deleteError) {
       setManageError(deleteError instanceof Error ? deleteError.message : "Impossible de supprimer cet élément.");
     } finally {
       setDeletingItem(false);
     }
+  }
+
+  function cancelSelectedGridDelete() {
+    setDeleteConfirmationOpen(false);
+    setConfirmDelete(null);
   }
 
   function isTouchEventSwipeTarget(target: EventTarget | null) {
@@ -4648,7 +4657,7 @@ function ProductionDetail({
                         tone="option"
                         deleting={deletingItem}
                         onCancel={() => setConfirmDelete(null)}
-                        onConfirm={() => void deleteSelectedGridItem()}
+                        onConfirm={() => setDeleteConfirmationOpen(true)}
                       />
                     ) : (
                       <>
@@ -4738,7 +4747,7 @@ function ProductionDetail({
                         tone="link"
                         deleting={deletingItem}
                         onCancel={() => setConfirmDelete(null)}
-                        onConfirm={() => void deleteSelectedGridItem()}
+                        onConfirm={() => setDeleteConfirmationOpen(true)}
                       />
                     ) : (
                       <>
@@ -4809,7 +4818,7 @@ function ProductionDetail({
                         tone="document"
                         deleting={deletingItem}
                         onCancel={() => setConfirmDelete(null)}
-                        onConfirm={() => void deleteSelectedGridItem()}
+                        onConfirm={() => setDeleteConfirmationOpen(true)}
                       />
                     ) : (
                       <>
@@ -4862,6 +4871,13 @@ function ProductionDetail({
         </div>
       </div>
     </section>
+    {deleteConfirmationOpen && confirmDelete && (
+      <CompactGridDeleteDialog
+        deleting={deletingItem}
+        onCancel={cancelSelectedGridDelete}
+        onConfirm={() => void deleteSelectedGridItem()}
+      />
+    )}
     </div>
   );
 }
@@ -7158,6 +7174,42 @@ function InlineGridDeleteConfirmation({
       >
           <Trash2 className="h-3.5 w-3.5" />
       </button>
+      </div>
+    </div>
+  );
+}
+
+function CompactGridDeleteDialog({
+  deleting,
+  onCancel,
+  onConfirm,
+}: {
+  deleting: boolean;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-end justify-center bg-stone-950/10 p-3 sm:items-center sm:p-6">
+      <div data-grid-delete-dialog className="w-full max-w-xs rounded-3xl border border-stone-200 bg-white p-4">
+        <p className="text-center text-base font-semibold text-stone-950">Supprimer cet élément ?</p>
+        <div className="mt-4 grid grid-cols-2 gap-2">
+          <button
+            type="button"
+            onClick={onCancel}
+            disabled={deleting}
+            className="rounded-full border border-stone-200 bg-white px-4 py-2 text-base font-semibold text-stone-600 transition hover:bg-stone-50 disabled:text-stone-300"
+          >
+            Annuler
+          </button>
+          <button
+            type="button"
+            onClick={onConfirm}
+            disabled={deleting}
+            className="rounded-full bg-[#bb2720] px-4 py-2 text-base font-semibold text-white transition hover:bg-[#a9231d] disabled:bg-stone-300"
+          >
+            {deleting ? "Suppression..." : "Supprimer"}
+          </button>
+        </div>
       </div>
     </div>
   );
