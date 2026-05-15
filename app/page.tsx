@@ -3751,6 +3751,8 @@ function TimelineTimeCapsule({
     }
   }
 
+  const displayedTime = formatTime(value);
+
   if (editing) {
     return (
       <>
@@ -3759,7 +3761,7 @@ function TimelineTimeCapsule({
           type="text"
           inputMode="numeric"
           enterKeyHint="done"
-          placeholder="HH:mm"
+          placeholder="--:--"
           value={draft}
           disabled={saving}
           onFocus={() => onEditingStart(() => saveTimeRef.current())}
@@ -3796,10 +3798,10 @@ function TimelineTimeCapsule({
       onClick={() => setEditing(true)}
       className={cn(
         "inline-flex rounded-full bg-slate-100 px-2.5 py-1 text-base font-semibold leading-none ring-1 ring-slate-200/70 transition hover:bg-slate-200/70",
-        value ? "text-slate-600" : "text-slate-400",
+        displayedTime ? "text-slate-600" : "text-slate-400",
       )}
     >
-      {formatTime(value) || "--:--"}
+      {displayedTime || "--:--"}
     </button>
   );
 }
