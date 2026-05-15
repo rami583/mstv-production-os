@@ -974,12 +974,14 @@ export default function Home() {
   const [keyboardVisible, setKeyboardVisible] = useState(false);
   const [keyboardHeight, setKeyboardHeight] = useState(0);
   const timelineTimeSaveRef = useRef<(() => Promise<void>) | null>(null);
+  const todayKey = formatDateKey(today);
 
   const chronologicalEvents = useMemo(() => [...events].sort((a, b) => eventSortValue(a) - eventSortValue(b)), [events]);
   const selectedEvent = useMemo(() => chronologicalEvents.find((item) => item.id === selectedId) ?? chronologicalEvents[0] ?? null, [chronologicalEvents, selectedId]);
   const selectedEventIndex = selectedEvent ? chronologicalEvents.findIndex((item) => item.id === selectedEvent.id) : -1;
   const hasPreviousEvent = selectedEventIndex > 0;
   const hasNextEvent = selectedEventIndex >= 0 && selectedEventIndex < chronologicalEvents.length - 1;
+  const isSelectedDateToday = selectedDateKey === todayKey;
   const yearLabel = String(visibleMonth.getFullYear());
 
   useEffect(() => {
@@ -1076,11 +1078,9 @@ export default function Home() {
   }
 
   function changeMonth(delta: number) {
-    setVisibleMonth((current) => {
-      const nextMonth = new Date(current.getFullYear(), current.getMonth() + delta, 1);
-      setSelectedDateKey(getPreferredDateKeyForMonth(nextMonth, events));
-      return nextMonth;
-    });
+    const nextMonth = new Date(visibleMonth.getFullYear(), visibleMonth.getMonth() + delta, 1);
+    setVisibleMonth(nextMonth);
+    setSelectedDateKey(getPreferredDateKeyForMonth(nextMonth, events));
   }
 
   function goToday() {
@@ -2092,6 +2092,7 @@ export default function Home() {
           yearLabel={yearLabel}
           detailDateLabel={screen === "detail" && selectedEvent ? formatFullDate(selectedEvent.date) : null}
           goToday={goToday}
+          isSelectedDateToday={isSelectedDateToday}
           createMenuOpen={createMenuOpen}
           setCreateMenuOpen={setCreateMenuOpen}
           onImportQuote={() => {
@@ -2249,6 +2250,7 @@ function AppHeader({
   yearLabel,
   detailDateLabel,
   goToday,
+  isSelectedDateToday,
   createMenuOpen,
   setCreateMenuOpen,
   onImportQuote,
@@ -2263,6 +2265,7 @@ function AppHeader({
   yearLabel: string;
   detailDateLabel: string | null;
   goToday: () => void;
+  isSelectedDateToday: boolean;
   createMenuOpen: boolean;
   setCreateMenuOpen: (open: boolean | ((current: boolean) => boolean)) => void;
   onImportQuote: () => void;
@@ -2310,7 +2313,13 @@ function AppHeader({
         {screen === "calendar" && (
           <button
             onClick={goToday}
-            className="rounded-full border border-stone-200 bg-white px-2.5 py-2 text-base font-semibold text-[#bb2720] transition hover:bg-[#bb2720]/[0.05] sm:px-3"
+            className={cn(
+              "rounded-full border px-2.5 py-2 text-base font-semibold transition sm:px-3",
+              isSelectedDateToday
+                ? "border-[#bb2720] bg-[#bb2720] text-white hover:bg-[#a7211b]"
+                : "border-stone-200 bg-white text-[#bb2720] hover:bg-[#bb2720]/[0.05]",
+            )}
+            aria-pressed={isSelectedDateToday}
           >
             Aujourd'hui
           </button>
@@ -2421,6 +2430,7 @@ function CalendarDashboard({
   const [pagerAnimatingDirection, setPagerAnimatingDirection] = useState<-1 | 1 | null>(null);
   const pagerViewportRef = useRef<HTMLDivElement | null>(null);
   const monthSwipeStartRef = useRef<{ pointerId: number; x: number; y: number; axis: "horizontal" | "vertical" | null } | null>(null);
+  const monthTransitioningRef = useRef(false);
   const suppressMonthClickRef = useRef(false);
 
   useEffect(() => {
@@ -2430,10 +2440,12 @@ function CalendarDashboard({
   }, [currentMonthData, events, selectedDateKey, setSelectedDateKey, visibleMonth]);
 
   function animateMonthChange(direction: -1 | 1) {
-    if (pagerAnimatingDirection) return;
+    if (monthTransitioningRef.current) return;
 
     const viewportWidth = pagerViewportRef.current?.clientWidth ?? 0;
     const pageStep = getSwipePageStep(viewportWidth);
+    monthTransitioningRef.current = true;
+    monthSwipeStartRef.current = null;
     setIsPagerDragging(false);
     setPagerAnimatingDirection(direction);
     setPagerOffset(direction === 1 ? -pageStep : pageStep);
@@ -2442,12 +2454,15 @@ function CalendarDashboard({
       changeMonth(direction);
       setPagerAnimatingDirection(null);
       setPagerOffset(0);
-      window.requestAnimationFrame(() => setIsPagerDragging(false));
+      window.requestAnimationFrame(() => {
+        setIsPagerDragging(false);
+        monthTransitioningRef.current = false;
+      });
     }, PAGE_TRANSITION_MS);
   }
 
   function handleMonthSwipePointerDown(pointerEvent: ReactPointerEvent<HTMLDivElement>) {
-    if (pagerAnimatingDirection) return;
+    if (monthTransitioningRef.current) return;
 
     monthSwipeStartRef.current = {
       pointerId: pointerEvent.pointerId,
@@ -2461,6 +2476,8 @@ function CalendarDashboard({
   }
 
   function handleMonthSwipePointerMove(pointerEvent: ReactPointerEvent<HTMLDivElement>) {
+    if (monthTransitioningRef.current) return;
+
     const swipeStart = monthSwipeStartRef.current;
     if (!swipeStart) return;
 
@@ -2483,6 +2500,8 @@ function CalendarDashboard({
   }
 
   function handleMonthSwipePointerUp(pointerEvent: ReactPointerEvent<HTMLDivElement>) {
+    if (monthTransitioningRef.current) return;
+
     const swipeStart = monthSwipeStartRef.current;
     if (!swipeStart) return;
 
@@ -2507,6 +2526,8 @@ function CalendarDashboard({
   }
 
   function resetMonthSwipe() {
+    if (monthTransitioningRef.current) return;
+
     monthSwipeStartRef.current = null;
     setIsPagerDragging(false);
     setPagerOffset(0);
