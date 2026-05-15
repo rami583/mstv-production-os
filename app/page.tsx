@@ -189,6 +189,21 @@ type QuoteExtractionResult = {
   services: string[];
 };
 
+const PAGE_GAP = 18;
+const PAGE_TRANSITION_MS = 360;
+const PAGE_TRANSITION_EASING = "cubic-bezier(0.22, 1, 0.36, 1)";
+const PAGE_SWIPE_THRESHOLD_RATIO = 0.18;
+const PAGE_SWIPE_THRESHOLD_MIN = 58;
+const PAGE_SWIPE_THRESHOLD_MAX = 124;
+
+function getSwipePageStep(viewportWidth: number) {
+  return viewportWidth + PAGE_GAP;
+}
+
+function getSwipeThreshold(viewportWidth: number) {
+  return Math.min(PAGE_SWIPE_THRESHOLD_MAX, Math.max(PAGE_SWIPE_THRESHOLD_MIN, viewportWidth * PAGE_SWIPE_THRESHOLD_RATIO));
+}
+
 const statusStyles: Record<EventStatus, string> = {
   Brouillon: "bg-stone-100 text-stone-600 ring-stone-200",
   "En préparation": "bg-amber-100 text-amber-800 ring-amber-200",
@@ -2130,6 +2145,8 @@ export default function Home() {
             <ProductionDetail
               event={selectedEvent}
               teamMembers={teamMembers}
+              previousEvent={chronologicalEvents[selectedEventIndex - 1] ?? null}
+              nextEvent={chronologicalEvents[selectedEventIndex + 1] ?? null}
               hasPrevious={hasPreviousEvent}
               hasNext={hasNextEvent}
               goPrevious={() => navigateEvent(-1)}
@@ -2416,16 +2433,17 @@ function CalendarDashboard({
     if (pagerAnimatingDirection) return;
 
     const viewportWidth = pagerViewportRef.current?.clientWidth ?? 0;
+    const pageStep = getSwipePageStep(viewportWidth);
     setIsPagerDragging(false);
     setPagerAnimatingDirection(direction);
-    setPagerOffset(direction === 1 ? -viewportWidth : viewportWidth);
+    setPagerOffset(direction === 1 ? -pageStep : pageStep);
     window.setTimeout(() => {
       setIsPagerDragging(true);
       changeMonth(direction);
       setPagerAnimatingDirection(null);
       setPagerOffset(0);
       window.requestAnimationFrame(() => setIsPagerDragging(false));
-    }, 300);
+    }, PAGE_TRANSITION_MS);
   }
 
   function handleMonthSwipePointerDown(pointerEvent: ReactPointerEvent<HTMLDivElement>) {
@@ -2460,7 +2478,8 @@ function CalendarDashboard({
     suppressMonthClickRef.current = true;
     pointerEvent.preventDefault();
     const viewportWidth = pagerViewportRef.current?.clientWidth ?? pointerEvent.currentTarget.clientWidth;
-    setPagerOffset(Math.max(-viewportWidth, Math.min(viewportWidth, deltaX)));
+    const pageStep = getSwipePageStep(viewportWidth);
+    setPagerOffset(Math.max(-pageStep, Math.min(pageStep, deltaX)));
   }
 
   function handleMonthSwipePointerUp(pointerEvent: ReactPointerEvent<HTMLDivElement>) {
@@ -2470,7 +2489,7 @@ function CalendarDashboard({
     const deltaX = pointerEvent.clientX - swipeStart.x;
     const deltaY = pointerEvent.clientY - swipeStart.y;
     const viewportWidth = pagerViewportRef.current?.clientWidth ?? pointerEvent.currentTarget.clientWidth;
-    const swipeThreshold = Math.min(120, Math.max(56, viewportWidth * 0.18));
+    const swipeThreshold = getSwipeThreshold(viewportWidth);
     const isHorizontalSwipe = swipeStart.axis === "horizontal" && Math.abs(deltaX) > Math.abs(deltaY) * 1.2;
 
     monthSwipeStartRef.current = null;
@@ -2497,11 +2516,12 @@ function CalendarDashboard({
   return (
     <section ref={pagerViewportRef} className="min-h-0 flex-1 overflow-hidden">
       <div
-        className={cn(
-          "flex h-full w-full",
-          !isPagerDragging && "transition-transform duration-300 ease-out",
-        )}
-        style={{ transform: `translate3d(calc(-100% + ${pagerOffset}px), 0, 0)` }}
+        className="flex h-full w-full"
+        style={{
+          gap: PAGE_GAP,
+          transform: `translate3d(calc(-100% - ${PAGE_GAP}px + ${pagerOffset}px), 0, 0)`,
+          transition: isPagerDragging ? undefined : `transform ${PAGE_TRANSITION_MS}ms ${PAGE_TRANSITION_EASING}`,
+        }}
       >
         <CalendarMonthPage
           monthData={previousMonthData}
@@ -3033,6 +3053,8 @@ function SwipeableCalendarEventRow({
 function ProductionDetail({
   event,
   teamMembers,
+  previousEvent,
+  nextEvent,
   hasPrevious,
   hasNext,
   goPrevious,
@@ -3061,6 +3083,8 @@ function ProductionDetail({
 }: {
   event: ProductionEvent;
   teamMembers: TeamMember[];
+  previousEvent: ProductionEvent | null;
+  nextEvent: ProductionEvent | null;
   hasPrevious: boolean;
   hasNext: boolean;
   goPrevious: () => void;
@@ -3099,11 +3123,13 @@ function ProductionDetail({
   const detailScrollContainerRef = useRef<HTMLDivElement | null>(null);
   const detailBlockRef = useRef<HTMLDivElement | null>(null);
   const previousContextSelectionKeyRef = useRef<string | null>(null);
-  const eventSwipeViewportRef = useRef<HTMLElement | null>(null);
+  const eventSwipeViewportRef = useRef<HTMLDivElement | null>(null);
   const eventSwipeStartRef = useRef<{ pointerId: number; x: number; y: number; axis: "horizontal" | "vertical" | null } | null>(null);
-  const pendingEventSwipeDirectionRef = useRef<-1 | 1 | null>(null);
+  const eventSwipeResetAfterEventChangeRef = useRef(false);
   const suppressEventSwipeClickRef = useRef(false);
   const [eventSwipeOffset, setEventSwipeOffset] = useState(0);
+  const [eventSwipeIncomingOffset, setEventSwipeIncomingOffset] = useState(0);
+  const [eventSwipeIncomingEvent, setEventSwipeIncomingEvent] = useState<ProductionEvent | null>(null);
   const [isEventSwipeDragging, setIsEventSwipeDragging] = useState(false);
   const [eventSwipeAnimating, setEventSwipeAnimating] = useState(false);
 
@@ -3157,25 +3183,17 @@ function ProductionDetail({
   }, [contextSelectionKey]);
 
   useLayoutEffect(() => {
-    const direction = pendingEventSwipeDirectionRef.current;
-    if (!direction) return;
+    if (!eventSwipeResetAfterEventChangeRef.current) return;
 
-    pendingEventSwipeDirectionRef.current = null;
-    const viewportWidth = eventSwipeViewportRef.current?.clientWidth ?? window.innerWidth;
-    const enterOffset = direction === 1 ? viewportWidth : -viewportWidth;
-
+    eventSwipeResetAfterEventChangeRef.current = false;
     setIsEventSwipeDragging(true);
-    setEventSwipeOffset(enterOffset);
+    setEventSwipeOffset(0);
+    setEventSwipeIncomingOffset(0);
+    setEventSwipeIncomingEvent(null);
 
     window.requestAnimationFrame(() => {
-      window.requestAnimationFrame(() => {
-        setIsEventSwipeDragging(false);
-        setEventSwipeOffset(0);
-
-        window.setTimeout(() => {
-          setEventSwipeAnimating(false);
-        }, 280);
-      });
+      setIsEventSwipeDragging(false);
+      setEventSwipeAnimating(false);
     });
   }, [event.id]);
 
@@ -3292,21 +3310,27 @@ function ProductionDetail({
     eventSwipeStartRef.current = null;
     setIsEventSwipeDragging(false);
     setEventSwipeOffset(0);
+    setEventSwipeIncomingOffset(0);
+    setEventSwipeIncomingEvent(null);
   }
 
   function animateEventNavigation(direction: -1 | 1) {
     const canNavigate = direction === 1 ? hasNext : hasPrevious;
-    if (!canNavigate || eventSwipeAnimating) {
+    const incomingEvent = direction === 1 ? nextEvent : previousEvent;
+    if (!canNavigate || !incomingEvent || eventSwipeAnimating) {
       resetEventHeaderSwipe();
       return;
     }
 
     const viewportWidth = eventSwipeViewportRef.current?.clientWidth ?? window.innerWidth;
-    const exitOffset = direction === 1 ? -viewportWidth : viewportWidth;
-    pendingEventSwipeDirectionRef.current = direction;
+    const pageStep = getSwipePageStep(viewportWidth);
+    const exitOffset = direction === 1 ? -pageStep : pageStep;
+    eventSwipeResetAfterEventChangeRef.current = true;
+    setEventSwipeIncomingEvent(incomingEvent);
     setIsEventSwipeDragging(false);
     setEventSwipeAnimating(true);
     setEventSwipeOffset(exitOffset);
+    setEventSwipeIncomingOffset(0);
 
     window.setTimeout(() => {
       if (direction === 1) {
@@ -3314,7 +3338,7 @@ function ProductionDetail({
       } else {
         goPrevious();
       }
-    }, 230);
+    }, PAGE_TRANSITION_MS);
   }
 
   function handleEventHeaderPointerDown(pointerEvent: ReactPointerEvent<HTMLElement>) {
@@ -3355,9 +3379,21 @@ function ProductionDetail({
 
     const canNavigate = deltaX < 0 ? hasNext : hasPrevious;
     const viewportWidth = eventSwipeViewportRef.current?.clientWidth ?? pointerEvent.currentTarget.clientWidth;
+    const pageStep = getSwipePageStep(viewportWidth);
     const resistedOffset = canNavigate ? deltaX : deltaX * 0.22;
-    const boundedOffset = Math.max(-viewportWidth, Math.min(viewportWidth, resistedOffset));
+    const boundedOffset = Math.max(-pageStep, Math.min(pageStep, resistedOffset));
     setEventSwipeOffset(boundedOffset);
+
+    const direction = deltaX < 0 ? 1 : -1;
+    const incomingEvent = direction === 1 ? nextEvent : previousEvent;
+    if (canNavigate && incomingEvent) {
+      const incomingStartOffset = direction === 1 ? pageStep : -pageStep;
+      setEventSwipeIncomingEvent(incomingEvent);
+      setEventSwipeIncomingOffset(Math.max(-pageStep, Math.min(pageStep, incomingStartOffset + deltaX)));
+    } else {
+      setEventSwipeIncomingEvent(null);
+      setEventSwipeIncomingOffset(0);
+    }
   }
 
   function handleEventHeaderPointerUp(pointerEvent: ReactPointerEvent<HTMLElement>) {
@@ -3366,7 +3402,7 @@ function ProductionDetail({
 
     const deltaX = pointerEvent.clientX - swipeStart.x;
     const viewportWidth = eventSwipeViewportRef.current?.clientWidth ?? pointerEvent.currentTarget.clientWidth;
-    const swipeThreshold = Math.min(120, Math.max(58, viewportWidth * 0.18));
+    const swipeThreshold = getSwipeThreshold(viewportWidth);
     eventSwipeStartRef.current = null;
     setIsEventSwipeDragging(false);
 
@@ -3376,14 +3412,28 @@ function ProductionDetail({
     }
 
     setEventSwipeOffset(0);
+    setEventSwipeIncomingOffset(0);
+    setEventSwipeIncomingEvent(null);
   }
 
   return (
-    <section
-      ref={eventSwipeViewportRef}
-      className={cn("flex min-h-0 flex-1 flex-col gap-5 overflow-hidden", !isEventSwipeDragging && "transition-transform duration-300 ease-out")}
-      style={{ transform: `translate3d(${eventSwipeOffset}px, 0, 0)` }}
-    >
+    <div ref={eventSwipeViewportRef} className="relative flex min-h-0 flex-1 overflow-hidden">
+      {eventSwipeIncomingEvent && (
+        <EventSwipePreview
+          event={eventSwipeIncomingEvent}
+          style={{
+            transform: `translate3d(${eventSwipeIncomingOffset}px, 0, 0)`,
+            transition: isEventSwipeDragging ? undefined : `transform ${PAGE_TRANSITION_MS}ms ${PAGE_TRANSITION_EASING}`,
+          }}
+        />
+      )}
+      <section
+        className="relative z-10 flex min-h-0 w-full flex-1 flex-col gap-5 overflow-hidden"
+        style={{
+          transform: `translate3d(${eventSwipeOffset}px, 0, 0)`,
+          transition: isEventSwipeDragging ? undefined : `transform ${PAGE_TRANSITION_MS}ms ${PAGE_TRANSITION_EASING}`,
+        }}
+      >
       <Card
         className="premium-surface shrink-0 touch-pan-y p-5 sm:p-8"
         onPointerDown={handleEventHeaderPointerDown}
@@ -3677,6 +3727,80 @@ function ProductionDetail({
         </div>
       </div>
     </section>
+    </div>
+  );
+}
+
+function EventSwipePreview({ event, style }: { event: ProductionEvent; style: React.CSSProperties }) {
+  return (
+    <section aria-hidden className="pointer-events-none absolute inset-0 z-0 flex min-h-0 w-full flex-col gap-5 overflow-hidden" style={style}>
+      <Card className="premium-surface shrink-0 p-5 sm:p-8">
+        <div className="flex items-start justify-between gap-4">
+          <div className="min-w-0 flex-1">
+            <h1 className="truncate text-4xl font-semibold leading-tight text-stone-950 sm:text-6xl">{event.clientName}</h1>
+            <p className="mt-2 truncate text-base font-medium text-stone-500">{event.eventName}</p>
+          </div>
+        </div>
+        <ProductionTimeline
+          event={event}
+          onUpdateTime={async () => {}}
+          onTimelineTimeEditStart={() => {}}
+          onTimelineTimeEditEnd={() => {}}
+        />
+      </Card>
+
+      <div className="no-scrollbar min-h-0 flex-1 space-y-5 overflow-hidden pb-6">
+        <Card className="premium-surface overflow-hidden p-3 sm:p-5">
+          <div className="grid grid-cols-[repeat(3,minmax(0,1fr))] gap-1.5 sm:gap-4 lg:items-start">
+            <EventSwipePreviewColumn label="Options">
+              {event.options.slice(0, 6).map((option) => {
+                const Icon = getOptionIcon(option.label);
+                const optionTone = getOptionTone(option.status);
+                return (
+                  <div key={option.id} className={cn("flex min-h-14 min-w-0 items-center gap-2 rounded-xl border px-2.5 py-2", optionTone.surface, optionTone.border)}>
+                    <Icon className={cn("h-4 w-4 shrink-0", optionTone.icon)} />
+                    <span className={cn("min-w-0 truncate text-base font-semibold", optionTone.text)}>{option.label}</span>
+                  </div>
+                );
+              })}
+            </EventSwipePreviewColumn>
+            <EventSwipePreviewColumn label="Liens">
+              {event.links.slice(0, 6).map((link) => {
+                const Icon = getLinkIcon(link.label);
+                const linkTone = getLinkTone(getLinkState(link));
+                return (
+                  <div key={link.id} className={cn("flex min-h-14 min-w-0 items-center gap-2 rounded-xl border px-2.5 py-2", linkTone.surface, linkTone.border)}>
+                    <Icon className={cn("h-4 w-4 shrink-0", linkTone.icon)} />
+                    <span className={cn("min-w-0 truncate text-base font-semibold", linkTone.text)}>{link.label}</span>
+                  </div>
+                );
+              })}
+            </EventSwipePreviewColumn>
+            <EventSwipePreviewColumn label="Documents">
+              {event.documentGroups.slice(0, 6).map((group) => {
+                const Icon = getDocumentGroupIcon(group);
+                const documentTone = getDocumentTone(group.files.length > 0);
+                return (
+                  <div key={group.id} className={cn("flex min-h-14 min-w-0 items-center gap-2 rounded-xl border px-2.5 py-2", documentTone.surface, documentTone.border)}>
+                    <Icon className={cn("h-4 w-4 shrink-0", documentTone.icon)} />
+                    <span className={cn("min-w-0 truncate text-base font-semibold", documentTone.text)}>{group.label}</span>
+                  </div>
+                );
+              })}
+            </EventSwipePreviewColumn>
+          </div>
+        </Card>
+      </div>
+    </section>
+  );
+}
+
+function EventSwipePreviewColumn({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div className="min-w-0">
+      <div className="mb-2 px-1 text-base font-semibold uppercase tracking-[0.12em] text-stone-400">{label}</div>
+      <div className="grid grid-cols-1 gap-1.5 sm:gap-2">{children}</div>
+    </div>
   );
 }
 
