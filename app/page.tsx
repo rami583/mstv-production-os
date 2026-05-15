@@ -4961,7 +4961,7 @@ function TimelineKeyboardAccessoryBar({
           type="button"
           onPointerDown={(event) => event.preventDefault()}
           onClick={() => void onConfirm()}
-          className="rounded-full bg-stone-950 px-4 py-1.5 text-sm font-semibold text-white transition hover:bg-stone-800 active:bg-stone-800"
+          className="rounded-full bg-stone-500 px-4 py-1.5 text-sm font-semibold text-white transition hover:bg-stone-600 active:bg-stone-600"
         >
           OK
         </button>
