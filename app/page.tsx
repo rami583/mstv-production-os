@@ -28,6 +28,7 @@ import {
   Search,
   ShieldCheck,
   Timer,
+  Trash2,
   Wifi,
   Webcam,
   X,
@@ -4646,9 +4647,29 @@ function ProductionDetail({
                       <InlineGridDeleteConfirmation
                         tone="option"
                         deleting={deletingItem}
+                        contentClassName={cn(
+                          showOptionAssigneeInitials ? "flex-col items-start justify-between gap-2" : "items-center gap-1.5 sm:gap-2",
+                        )}
                         onCancel={() => setConfirmDelete(null)}
                         onConfirm={() => void deleteSelectedGridItem()}
-                      />
+                      >
+                        {showOptionAssigneeInitials ? (
+                          <>
+                            <span className="inline-flex shrink-0 rounded-full border border-emerald-300 bg-white/75 px-2 py-0.5 text-base font-bold leading-tight text-emerald-800">
+                              {optionAssigneeInitials}
+                            </span>
+                            <span className="flex w-full min-w-0 items-center gap-1.5 sm:gap-2">
+                              <Icon className={cn("h-4 w-4 shrink-0 sm:h-5 sm:w-5", optionTone.icon)} />
+                              <span className={cn("min-w-0 flex-1 truncate text-base font-semibold", optionTone.text)}>{option.label}</span>
+                            </span>
+                          </>
+                        ) : (
+                          <>
+                            <Icon className={cn("h-4 w-4 shrink-0 sm:h-5 sm:w-5", optionTone.icon)} />
+                            <span className={cn("min-w-0 flex-1 truncate text-base font-semibold", optionTone.text)}>{option.label}</span>
+                          </>
+                        )}
+                      </InlineGridDeleteConfirmation>
                     ) : (
                       <>
                         <button
@@ -4736,9 +4757,13 @@ function ProductionDetail({
                       <InlineGridDeleteConfirmation
                         tone="link"
                         deleting={deletingItem}
+                        contentClassName="items-center gap-1.5 sm:gap-2"
                         onCancel={() => setConfirmDelete(null)}
                         onConfirm={() => void deleteSelectedGridItem()}
-                      />
+                      >
+                        <Icon className={cn("h-4 w-4 shrink-0 sm:h-5 sm:w-5", linkTone.icon)} />
+                        <span className={cn("min-w-0 flex-1 truncate text-base font-semibold", linkTone.text)}>{link.label}</span>
+                      </InlineGridDeleteConfirmation>
                     ) : (
                       <>
                         <button onClick={() => selectLink(link)} className="flex min-h-[4.75rem] min-w-0 flex-1 items-center gap-1.5 px-2 py-3 text-left sm:min-h-20 sm:gap-2 sm:px-3">
@@ -4807,9 +4832,13 @@ function ProductionDetail({
                       <InlineGridDeleteConfirmation
                         tone="document"
                         deleting={deletingItem}
+                        contentClassName="items-center gap-1.5 sm:gap-2"
                         onCancel={() => setConfirmDelete(null)}
                         onConfirm={() => void deleteSelectedGridItem()}
-                      />
+                      >
+                        <Icon className={cn("h-4 w-4 shrink-0 sm:h-5 sm:w-5", documentTone.icon)} />
+                        <span className={cn("min-w-0 flex-1 truncate text-base font-semibold", documentTone.text)}>{group.label}</span>
+                      </InlineGridDeleteConfirmation>
                     ) : (
                       <>
                         <button
@@ -7113,11 +7142,15 @@ function InlineAddForm({
 function InlineGridDeleteConfirmation({
   tone,
   deleting,
+  contentClassName,
+  children,
   onCancel,
   onConfirm,
 }: {
   tone: ItemKind;
   deleting: boolean;
+  contentClassName?: string;
+  children: React.ReactNode;
   onCancel: () => void;
   onConfirm: () => void;
 }) {
@@ -7129,18 +7162,22 @@ function InlineGridDeleteConfirmation({
         : "bg-amber-50/80";
 
   return (
-    <div className={cn("flex min-h-[4.75rem] min-w-0 flex-1 items-center justify-center gap-1.5 rounded-[0.65rem] px-1.5 py-2 sm:min-h-20 sm:gap-2 sm:px-2", toneClassName)}>
-      <button
-        type="button"
-        onClick={(event) => {
-          event.stopPropagation();
-          onCancel();
-        }}
-        disabled={deleting}
-        className="min-w-0 rounded-full border border-stone-200 bg-white/80 px-2 py-1.5 text-[11px] font-semibold leading-none text-stone-600 transition hover:bg-white disabled:text-stone-300 sm:px-3 sm:text-sm"
-      >
-        Annuler
-      </button>
+    <div className={cn("flex min-h-[4.75rem] min-w-0 flex-1 items-center gap-1.5 rounded-[0.65rem] px-2 py-3 transition sm:min-h-20 sm:gap-2 sm:px-3", toneClassName)}>
+      <div className={cn("flex min-w-0 flex-1", contentClassName)}>{children}</div>
+      <div className="flex shrink-0 items-center gap-1">
+        <button
+          type="button"
+          onClick={(event) => {
+            event.stopPropagation();
+            onCancel();
+          }}
+          disabled={deleting}
+          className="flex h-7 w-7 items-center justify-center rounded-full border border-stone-200 bg-white/80 text-stone-500 transition hover:bg-white hover:text-stone-800 disabled:text-stone-300"
+          aria-label="Annuler"
+          title="Annuler"
+        >
+          <X className="h-3.5 w-3.5" />
+        </button>
       <button
         type="button"
         onClick={(event) => {
@@ -7148,10 +7185,13 @@ function InlineGridDeleteConfirmation({
           onConfirm();
         }}
         disabled={deleting}
-        className="min-w-0 rounded-full bg-[#bb2720]/90 px-2 py-1.5 text-[11px] font-semibold leading-none text-white transition hover:bg-[#a9231d] disabled:bg-stone-300 sm:px-3 sm:text-sm"
+          className="flex h-7 w-7 items-center justify-center rounded-full bg-[#bb2720]/90 text-white transition hover:bg-[#a9231d] disabled:bg-stone-300"
+          aria-label="Supprimer"
+          title="Supprimer"
       >
-        {deleting ? "..." : "Supprimer"}
+          <Trash2 className="h-3.5 w-3.5" />
       </button>
+      </div>
     </div>
   );
 }
