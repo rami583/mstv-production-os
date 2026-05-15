@@ -3388,10 +3388,15 @@ function ProductionDetail({
   }
 
   function isTouchEventSwipeTarget(target: EventTarget | null) {
-    return target instanceof HTMLElement && !target.closest("input, textarea, select, a, [contenteditable='true']");
+    return (
+      target instanceof HTMLElement &&
+      !target.closest(
+        "input, textarea, select, button, a, label, [contenteditable='true'], [role='button'], [data-no-event-swipe]",
+      )
+    );
   }
 
-  function resetEventHeaderSwipe() {
+  function resetEventSwipe() {
     eventSwipeStartRef.current = null;
     setIsEventSwipeDragging(false);
     setEventSwipeOffset(0);
@@ -3403,7 +3408,7 @@ function ProductionDetail({
     const canNavigate = direction === 1 ? hasNext : hasPrevious;
     const incomingEvent = direction === 1 ? nextEvent : previousEvent;
     if (!canNavigate || !incomingEvent || eventSwipeAnimating) {
-      resetEventHeaderSwipe();
+      resetEventSwipe();
       return;
     }
 
@@ -3426,7 +3431,7 @@ function ProductionDetail({
     }, PAGE_TRANSITION_MS);
   }
 
-  function handleEventHeaderPointerDown(pointerEvent: ReactPointerEvent<HTMLElement>) {
+  function handleEventSwipePointerDown(pointerEvent: ReactPointerEvent<HTMLDivElement>) {
     if (eventSwipeAnimating || pointerEvent.pointerType === "mouse" || !isTouchEventSwipeTarget(pointerEvent.target)) return;
     if (typeof window !== "undefined" && !window.matchMedia("(hover: none), (pointer: coarse)").matches) return;
 
@@ -3441,7 +3446,7 @@ function ProductionDetail({
     pointerEvent.currentTarget.setPointerCapture(pointerEvent.pointerId);
   }
 
-  function handleEventHeaderPointerMove(pointerEvent: ReactPointerEvent<HTMLElement>) {
+  function handleEventSwipePointerMove(pointerEvent: ReactPointerEvent<HTMLDivElement>) {
     const swipeStart = eventSwipeStartRef.current;
     if (!swipeStart || swipeStart.pointerId !== pointerEvent.pointerId || eventSwipeAnimating) return;
 
@@ -3453,7 +3458,7 @@ function ProductionDetail({
     }
 
     if (swipeStart.axis === "vertical") {
-      resetEventHeaderSwipe();
+      resetEventSwipe();
       return;
     }
 
@@ -3481,7 +3486,7 @@ function ProductionDetail({
     }
   }
 
-  function handleEventHeaderPointerUp(pointerEvent: ReactPointerEvent<HTMLElement>) {
+  function handleEventSwipePointerUp(pointerEvent: ReactPointerEvent<HTMLDivElement>) {
     const swipeStart = eventSwipeStartRef.current;
     if (!swipeStart || swipeStart.pointerId !== pointerEvent.pointerId) return;
 
@@ -3502,7 +3507,21 @@ function ProductionDetail({
   }
 
   return (
-    <div ref={eventSwipeViewportRef} className="relative flex min-h-0 flex-1 overflow-hidden">
+    <div
+      ref={eventSwipeViewportRef}
+      className="relative flex min-h-0 flex-1 overflow-hidden"
+      onPointerDown={handleEventSwipePointerDown}
+      onPointerMove={handleEventSwipePointerMove}
+      onPointerUp={handleEventSwipePointerUp}
+      onPointerCancel={resetEventSwipe}
+      onClickCapture={(clickEvent) => {
+        if (!suppressEventSwipeClickRef.current) return;
+        clickEvent.preventDefault();
+        clickEvent.stopPropagation();
+        suppressEventSwipeClickRef.current = false;
+      }}
+      style={{ touchAction: "pan-y" }}
+    >
       {eventSwipeIncomingEvent && (
         <EventSwipePreview
           event={eventSwipeIncomingEvent}
@@ -3520,17 +3539,7 @@ function ProductionDetail({
         }}
       >
       <Card
-        className="premium-surface shrink-0 touch-pan-y p-5 sm:p-8"
-        onPointerDown={handleEventHeaderPointerDown}
-        onPointerMove={handleEventHeaderPointerMove}
-        onPointerUp={handleEventHeaderPointerUp}
-        onPointerCancel={resetEventHeaderSwipe}
-        onClickCapture={(clickEvent) => {
-          if (!suppressEventSwipeClickRef.current) return;
-          clickEvent.preventDefault();
-          clickEvent.stopPropagation();
-          suppressEventSwipeClickRef.current = false;
-        }}
+        className="premium-surface shrink-0 p-5 sm:p-8"
       >
         <div className="flex items-start justify-between gap-4">
           <div className="min-w-0 flex-1">
@@ -4760,6 +4769,7 @@ function ContextDetailBlock({
             </div>
           </div>
           <div
+            data-no-event-swipe
             onDragOver={(dragEvent) => {
               dragEvent.preventDefault();
               setDraggingDocumentFiles(true);
