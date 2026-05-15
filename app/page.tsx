@@ -996,6 +996,7 @@ export default function Home() {
   const [editingEvent, setEditingEvent] = useState<ProductionEvent | null>(null);
   const [editingReturnScreen, setEditingReturnScreen] = useState<Screen>("calendar");
   const [deleteDialogEvent, setDeleteDialogEvent] = useState<ProductionEvent | null>(null);
+  const [dateEditorOpen, setDateEditorOpen] = useState(false);
   const [documentPreview, setDocumentPreview] = useState<DocumentPreview | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -1332,6 +1333,42 @@ export default function Home() {
           : item,
       ),
     );
+  }
+
+  async function updateEventDate(event: ProductionEvent, nextDate: string) {
+    if (!supabase) {
+      throw new Error("Configuration Supabase manquante.");
+    }
+
+    const normalizedDate = nextDate.trim();
+    if (!normalizedDate) {
+      throw new Error("La date est obligatoire.");
+    }
+
+    const { data, error: updateError } = await supabase
+      .from("events")
+      .update({ date: normalizedDate })
+      .eq("id", event.id)
+      .select()
+      .single();
+
+    if (updateError) throw updateError;
+
+    setEvents((current) =>
+      current.map((item) =>
+        item.id === event.id
+          ? {
+              ...item,
+              date: data.date,
+              updatedAt: data.updated_at,
+            }
+          : item,
+      ),
+    );
+    setSelectedId(event.id);
+    setSelectedDateKey(data.date);
+    setVisibleMonth(new Date(`${data.date}T12:00:00`));
+    setScreen("detail");
   }
 
   async function toggleOption(option: EventOption) {
@@ -2141,6 +2178,7 @@ export default function Home() {
           setScreen={setScreen}
           yearLabel={yearLabel}
           detailDateLabel={screen === "detail" && selectedEvent ? formatFullDate(selectedEvent.date) : null}
+          onEditDetailDate={screen === "detail" && selectedEvent ? () => setDateEditorOpen(true) : undefined}
           goToday={goToday}
           isSelectedDateToday={isSelectedDateToday}
           createMenuOpen={createMenuOpen && !yearOverviewOpen}
@@ -2153,14 +2191,6 @@ export default function Home() {
           onCreateEvent={() => {
             setEditingEvent(null);
             setEditingReturnScreen("calendar");
-            setCreateModalOpen(true);
-            setCreateMenuOpen(false);
-          }}
-          canEditEvent={screen === "detail" && Boolean(selectedEvent)}
-          onEditEvent={() => {
-            if (!selectedEvent) return;
-            setEditingEvent(selectedEvent);
-            setEditingReturnScreen("detail");
             setCreateModalOpen(true);
             setCreateMenuOpen(false);
           }}
@@ -2308,6 +2338,17 @@ export default function Home() {
         />
       )}
 
+      {dateEditorOpen && selectedEvent && (
+        <EventDateEditor
+          event={selectedEvent}
+          onClose={() => setDateEditorOpen(false)}
+          onSubmit={async (nextDate) => {
+            await updateEventDate(selectedEvent, nextDate);
+            setDateEditorOpen(false);
+          }}
+        />
+      )}
+
       {searchOpen && (
         <EventSearchOverlay
           events={chronologicalEvents}
@@ -2344,6 +2385,7 @@ function AppHeader({
   setScreen,
   yearLabel,
   detailDateLabel,
+  onEditDetailDate,
   goToday,
   isSelectedDateToday,
   createMenuOpen,
@@ -2353,8 +2395,6 @@ function AppHeader({
   onLogoClick,
   onOpenYearOverview,
   onCreateEvent,
-  canEditEvent,
-  onEditEvent,
   canDeleteEvent,
   onDeleteEvent,
 }: {
@@ -2362,6 +2402,7 @@ function AppHeader({
   setScreen: (screen: Screen) => void;
   yearLabel: string;
   detailDateLabel: string | null;
+  onEditDetailDate?: () => void;
   goToday: () => void;
   isSelectedDateToday: boolean;
   createMenuOpen: boolean;
@@ -2371,8 +2412,6 @@ function AppHeader({
   onLogoClick?: () => void;
   onOpenYearOverview: () => void;
   onCreateEvent: () => void;
-  canEditEvent: boolean;
-  onEditEvent: () => void;
   canDeleteEvent: boolean;
   onDeleteEvent: () => void;
 }) {
@@ -2409,9 +2448,13 @@ function AppHeader({
           </button>
         )}
         {screen === "detail" && detailDateLabel && (
-          <span className="rounded-full border border-stone-200 bg-white px-2.5 py-1.5 text-base font-semibold text-stone-700 sm:px-3">
+          <button
+            type="button"
+            onClick={onEditDetailDate}
+            className="rounded-full border border-stone-200 bg-white px-2.5 py-1.5 text-base font-semibold text-stone-700 transition hover:bg-stone-50 sm:px-3"
+          >
             {detailDateLabel}
-          </span>
+          </button>
         )}
       </div>
       <div className="flex shrink-0 items-center gap-1.5 sm:gap-2">
@@ -2442,8 +2485,6 @@ function AppHeader({
             <CreateMenu
               onImportQuote={onImportQuote}
               onCreateEvent={onCreateEvent}
-              canEditEvent={canEditEvent}
-              onEditEvent={onEditEvent}
               canDeleteEvent={canDeleteEvent}
               onDeleteEvent={onDeleteEvent}
             />
@@ -2457,15 +2498,11 @@ function AppHeader({
 function CreateMenu({
   onImportQuote,
   onCreateEvent,
-  canEditEvent,
-  onEditEvent,
   canDeleteEvent,
   onDeleteEvent,
 }: {
   onImportQuote: () => void;
   onCreateEvent: () => void;
-  canEditEvent: boolean;
-  onEditEvent: () => void;
   canDeleteEvent: boolean;
   onDeleteEvent: () => void;
 }) {
@@ -2483,14 +2520,6 @@ function CreateMenu({
       >
         Créer un événement
       </button>
-      {canEditEvent && (
-        <button
-          onClick={onEditEvent}
-          className="block w-full rounded-xl px-4 py-3 text-left text-base font-medium text-stone-700 transition hover:bg-[#bb2720]/[0.05] hover:text-stone-950"
-        >
-          Modifier l'événement
-        </button>
-      )}
       {canDeleteEvent && (
         <button
           onClick={onDeleteEvent}
@@ -2816,6 +2845,7 @@ function YearOverviewOverlay({
           setScreen={() => undefined}
           yearLabel={String(displayYear)}
           detailDateLabel={null}
+          onEditDetailDate={undefined}
           goToday={onGoToday}
           isSelectedDateToday={isSelectedDateToday}
           createMenuOpen={createMenuOpen}
@@ -2825,8 +2855,6 @@ function YearOverviewOverlay({
           onLogoClick={onGoToday}
           onOpenYearOverview={() => undefined}
           onCreateEvent={onCreateEvent}
-          canEditEvent={false}
-          onEditEvent={() => undefined}
           canDeleteEvent={false}
           onDeleteEvent={() => undefined}
         />
@@ -5867,6 +5895,80 @@ function DeleteEventDialog({
           </button>
         </div>
       </div>
+    </div>
+  );
+}
+
+function EventDateEditor({
+  event,
+  onClose,
+  onSubmit,
+}: {
+  event: ProductionEvent;
+  onClose: () => void;
+  onSubmit: (date: string) => Promise<void>;
+}) {
+  const [date, setDate] = useState(event.date);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const inputRef = useRef<HTMLInputElement | null>(null);
+
+  useEffect(() => {
+    const focusFrame = window.requestAnimationFrame(() => inputRef.current?.focus());
+    return () => window.cancelAnimationFrame(focusFrame);
+  }, []);
+
+  async function handleSubmit(formEvent: React.FormEvent<HTMLFormElement>) {
+    formEvent.preventDefault();
+    if (!date) {
+      setError("Choisis une date.");
+      return;
+    }
+
+    setSaving(true);
+    setError(null);
+
+    try {
+      await onSubmit(date);
+    } catch (saveError) {
+      setError(saveError instanceof Error ? saveError.message : "Impossible de modifier la date.");
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-end bg-stone-950/10 p-3 sm:items-center sm:justify-center sm:p-6">
+      <form onSubmit={handleSubmit} className="w-full rounded-3xl border border-stone-200 bg-white p-5 sm:max-w-md sm:p-6">
+        <div className="mb-5">
+          <h2 className="text-base font-semibold text-stone-950">Modifier la date</h2>
+          <p className="mt-2 truncate text-base font-medium text-stone-500">{event.clientName}</p>
+        </div>
+
+        <input
+          ref={inputRef}
+          type="date"
+          value={date}
+          onChange={(inputEvent) => setDate(inputEvent.target.value)}
+          disabled={saving}
+          className="h-12 w-full rounded-2xl border border-stone-200 bg-[#f7f9fb] px-4 text-base font-semibold text-stone-950 outline-none transition focus:border-[#bb2720]/40 disabled:text-stone-300"
+        />
+
+        {error && <div className="mt-4 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-base font-medium text-rose-700">{error}</div>}
+
+        <div className="mt-5 flex justify-end gap-2">
+          <button
+            type="button"
+            onClick={onClose}
+            disabled={saving}
+            className="rounded-full border border-stone-200 bg-white px-4 py-2 text-base font-semibold text-stone-600 disabled:text-stone-300"
+          >
+            Annuler
+          </button>
+          <button type="submit" disabled={saving} className="rounded-full bg-[#bb2720] px-4 py-2 text-base font-semibold text-white disabled:bg-stone-300">
+            {saving ? "Validation..." : "Valider"}
+          </button>
+        </div>
+      </form>
     </div>
   );
 }
