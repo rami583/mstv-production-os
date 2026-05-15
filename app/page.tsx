@@ -3851,9 +3851,22 @@ function ProductionDetail({
   }, [contextSelectionKey]);
 
   useLayoutEffect(() => {
+    const scrollContainer = detailScrollContainerRef.current;
+    if (!scrollContainer) return;
+
+    scrollContainer.scrollTop = 0;
+    scrollContainer.scrollLeft = 0;
+  }, [event.id]);
+
+  useLayoutEffect(() => {
     if (!eventSwipeResetAfterEventChangeRef.current) return;
 
     eventSwipeResetAfterEventChangeRef.current = false;
+    const scrollContainer = detailScrollContainerRef.current;
+    if (scrollContainer) {
+      scrollContainer.scrollTop = 0;
+      scrollContainer.scrollLeft = 0;
+    }
     setIsEventSwipeDragging(true);
     setEventSwipeOffset(0);
     setEventSwipeIncomingOffset(0);
