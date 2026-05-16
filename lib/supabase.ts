@@ -50,6 +50,7 @@ export type Database = {
           details: string | null;
           assigned_team_member_id: string | null;
           completed_by_profile_id: string | null;
+          completed_by_label: string | null;
           completed_by_initials: string | null;
           completed_at: string | null;
           created_at: string;
@@ -62,6 +63,7 @@ export type Database = {
           details?: string | null;
           assigned_team_member_id?: string | null;
           completed_by_profile_id?: string | null;
+          completed_by_label?: string | null;
           completed_by_initials?: string | null;
           completed_at?: string | null;
           created_at?: string;

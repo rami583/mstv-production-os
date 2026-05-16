@@ -108,6 +108,7 @@ type EventOption = {
   status: CompletionStatus;
   details: string | null;
   completedByProfileId: string | null;
+  completedByLabel: string | null;
   completedByInitials: string | null;
   completedAt: string | null;
   createdAt: string;
@@ -240,6 +241,24 @@ type QuoteExtractionResult = {
   endOfDayTime: string;
   services: string[];
 };
+
+type CompletedByOverrideValue = "rami" | "antoine" | "arthur" | "tony" | "gauthier" | "guillaume" | "externe";
+
+type CompletedByOverrideChoice = {
+  value: CompletedByOverrideValue;
+  label: string;
+  initials: string;
+};
+
+const completedByOverrideChoices: CompletedByOverrideChoice[] = [
+  { value: "rami", label: "Rami", initials: "RM" },
+  { value: "antoine", label: "Antoine", initials: "AS" },
+  { value: "arthur", label: "Arthur", initials: "AL" },
+  { value: "tony", label: "Tony", initials: "TB" },
+  { value: "gauthier", label: "Gauthier", initials: "GR" },
+  { value: "guillaume", label: "Guillaume", initials: "GG" },
+  { value: "externe", label: "Externe", initials: "EXT" },
+];
 
 const userRoleOptions: UserRole[] = ["admin", "team"];
 const realtimeTableNames = [
@@ -819,6 +838,10 @@ function getCompleterInitials(profile: UserProfile | null, email?: string | null
   return getProfileInitials(profile, email).toLocaleUpperCase("fr-FR");
 }
 
+function getCompleterLabel(profile: UserProfile | null, email?: string | null) {
+  return profile?.firstName?.trim() || getProfileDisplayName(profile) || email || null;
+}
+
 function getRoleLabel(role: UserRole) {
   const labels: Record<UserRole, string> = {
     admin: "Admin",
@@ -895,6 +918,7 @@ function mapEvent(row: EventQueryRow): ProductionEvent {
       status: option.status,
       details: option.details,
       completedByProfileId: option.completed_by_profile_id ?? null,
+      completedByLabel: option.completed_by_label ?? null,
       completedByInitials: option.completed_by_initials ?? null,
       completedAt: option.completed_at ?? null,
       createdAt: option.created_at,
@@ -1897,6 +1921,7 @@ export default function Home() {
           status: option.status,
           details: option.details,
           completed_by_profile_id: option.completedByProfileId,
+          completed_by_label: option.completedByLabel,
           completed_by_initials: option.completedByInitials,
           completed_at: option.completedAt,
         })
@@ -2106,18 +2131,21 @@ export default function Home() {
     if (!supabase) return;
     const nextStatus: CompletionStatus = option.status === "completed" ? "incomplete" : "completed";
     const completerInitials = getCompleterInitials(profile, authSession?.user.email);
+    const completerLabel = getCompleterLabel(profile, authSession?.user.email);
     const completedAt = new Date().toISOString();
     const updatePayload: Database["public"]["Tables"]["event_options"]["Update"] =
       nextStatus === "completed"
         ? {
             status: nextStatus,
             completed_by_profile_id: profile?.id ?? null,
+            completed_by_label: completerLabel,
             completed_by_initials: completerInitials,
             completed_at: completedAt,
           }
         : {
             status: nextStatus,
             completed_by_profile_id: null,
+            completed_by_label: null,
             completed_by_initials: null,
             completed_at: null,
           };
@@ -2139,6 +2167,7 @@ export default function Home() {
                       ...item,
                       status: nextStatus,
                       completedByProfileId: updatePayload.completed_by_profile_id ?? null,
+                      completedByLabel: updatePayload.completed_by_label ?? null,
                       completedByInitials: updatePayload.completed_by_initials ?? null,
                       completedAt: updatePayload.completed_at ?? null,
                     }
@@ -2163,14 +2192,88 @@ export default function Home() {
       previousValue: {
         status: option.status,
         completedByProfileId: option.completedByProfileId,
+        completedByLabel: option.completedByLabel,
         completedByInitials: option.completedByInitials,
         completedAt: option.completedAt,
       },
       newValue: {
         status: nextStatus,
         completedByProfileId: updatePayload.completed_by_profile_id ?? null,
+        completedByLabel: updatePayload.completed_by_label ?? null,
         completedByInitials: updatePayload.completed_by_initials ?? null,
         completedAt: updatePayload.completed_at ?? null,
+      },
+    });
+  }
+
+  async function updateOptionCompletedBy(option: EventOption, choice: CompletedByOverrideChoice) {
+    assertCanManageEvents();
+    if (!supabase) return;
+    if (option.status !== "completed") return;
+
+    let completedByProfileId: string | null = null;
+
+    if (choice.value !== "externe") {
+      try {
+        const profiles = await fetchProfiles();
+        const matchingProfile = profiles.find((userProfile) => userProfile.firstName?.trim().toLocaleLowerCase("fr-FR") === choice.label.toLocaleLowerCase("fr-FR"));
+        completedByProfileId = matchingProfile?.id ?? null;
+      } catch (profileLookupError) {
+        console.warn("Unable to resolve completed_by profile id for override.", {
+          choice,
+          error: profileLookupError,
+        });
+      }
+    }
+
+    const updatePayload: Database["public"]["Tables"]["event_options"]["Update"] = {
+      completed_by_profile_id: completedByProfileId,
+      completed_by_label: choice.label,
+      completed_by_initials: choice.initials,
+    };
+
+    const { error: updateError } = await supabase.from("event_options").update(updatePayload).eq("id", option.id);
+
+    if (updateError) {
+      setError(updateError.message);
+      throw updateError;
+    }
+
+    setEvents((current) =>
+      current.map((event) =>
+        event.id === option.eventId
+          ? {
+              ...event,
+              options: event.options.map((item) =>
+                item.id === option.id
+                  ? {
+                      ...item,
+                      completedByProfileId,
+                      completedByLabel: choice.label,
+                      completedByInitials: choice.initials,
+                    }
+                  : item,
+              ),
+            }
+          : event,
+      ),
+    );
+
+    await logEventActivity({
+      eventId: option.eventId,
+      actionType: "option_completed_by_changed",
+      entityType: "option",
+      entityId: option.id,
+      description: `Fait par modifié : ${choice.initials}`,
+      previousValue: {
+        completedByProfileId: option.completedByProfileId,
+        completedByLabel: option.completedByLabel,
+        completedByInitials: option.completedByInitials,
+      },
+      newValue: {
+        completedByProfileId,
+        completedByLabel: choice.label,
+        completedByInitials: choice.initials,
       },
     });
   }
@@ -2321,6 +2424,7 @@ export default function Home() {
       status: data.status,
       details: data.details,
       completedByProfileId: data.completed_by_profile_id ?? null,
+      completedByLabel: data.completed_by_label ?? null,
       completedByInitials: data.completed_by_initials ?? null,
       completedAt: data.completed_at ?? null,
       createdAt: data.created_at,
@@ -3289,6 +3393,7 @@ export default function Home() {
               goNext={() => navigateEvent(1)}
               onUpdateEventTime={updateEventTime}
               onToggleOption={toggleOption}
+              onChangeOptionCompletedBy={updateOptionCompletedBy}
               onCreateOption={createEventOption}
               onDeleteOption={deleteEventOption}
               onRenameOption={renameEventOption}
@@ -5003,6 +5108,7 @@ function ProductionDetail({
   goNext,
   onUpdateEventTime,
   onToggleOption,
+  onChangeOptionCompletedBy,
   onCreateOption,
   onDeleteOption,
   onRenameOption,
@@ -5032,6 +5138,7 @@ function ProductionDetail({
   goNext: () => void;
   onUpdateEventTime: (event: ProductionEvent, field: EventTimeField, value: string) => Promise<void>;
   onToggleOption: (option: EventOption) => Promise<void>;
+  onChangeOptionCompletedBy: (option: EventOption, choice: CompletedByOverrideChoice) => Promise<void>;
   onCreateOption: (eventId: string, label: string) => Promise<EventOption>;
   onDeleteOption: (option: EventOption) => Promise<void>;
   onRenameOption: (option: EventOption, label: string) => Promise<EventOption>;
@@ -5721,6 +5828,7 @@ function ProductionDetail({
             event={event}
             selection={contextSelection}
             onToggleOption={onToggleOption}
+            onChangeOptionCompletedBy={onChangeOptionCompletedBy}
             onRenameOption={onRenameOption}
             onCreateOptionItem={onCreateOptionItem}
             onDeleteOptionItem={onDeleteOptionItem}
@@ -6366,6 +6474,7 @@ function ContextDetailBlock({
   event,
   selection,
   onToggleOption,
+  onChangeOptionCompletedBy,
   onRenameOption,
   onCreateOptionItem,
   onDeleteOptionItem,
@@ -6381,6 +6490,7 @@ function ContextDetailBlock({
   event: ProductionEvent;
   selection: ContextSelection;
   onToggleOption: (option: EventOption) => Promise<void>;
+  onChangeOptionCompletedBy: (option: EventOption, choice: CompletedByOverrideChoice) => Promise<void>;
   onRenameOption: (option: EventOption, label: string) => Promise<EventOption>;
   onCreateOptionItem: (option: EventOption, label: string) => Promise<EventOptionItem>;
   onDeleteOptionItem: (option: EventOption, item: EventOptionItem) => Promise<void>;
@@ -6410,6 +6520,8 @@ function ContextDetailBlock({
   const [optionItemInput, setOptionItemInput] = useState("");
   const [savingOptionItem, setSavingOptionItem] = useState(false);
   const [optionItemError, setOptionItemError] = useState<string | null>(null);
+  const [savingCompletedByOverride, setSavingCompletedByOverride] = useState(false);
+  const [completedByOverrideError, setCompletedByOverrideError] = useState<string | null>(null);
   const [titleRenameError, setTitleRenameError] = useState<string | null>(null);
   const [draggingDocumentFiles, setDraggingDocumentFiles] = useState(false);
   const [uploadingDocumentFiles, setUploadingDocumentFiles] = useState(false);
@@ -6463,6 +6575,8 @@ function ContextDetailBlock({
     setOptionItemInput("");
     setSavingOptionItem(false);
     setOptionItemError(null);
+    setSavingCompletedByOverride(false);
+    setCompletedByOverrideError(null);
     setTitleRenameError(null);
     setDraggingDocumentFiles(false);
     setUploadingDocumentFiles(false);
@@ -6585,6 +6699,23 @@ function ContextDetailBlock({
     } catch (renameError) {
       setTitleRenameError(renameError instanceof Error ? renameError.message : "Impossible de renommer l'option.");
       throw renameError;
+    }
+  }
+
+  async function changeSelectedOptionCompletedBy(value: string) {
+    if (!selectedOption) return;
+    const choice = completedByOverrideChoices.find((item) => item.value === value);
+    if (!choice) return;
+
+    setSavingCompletedByOverride(true);
+    setCompletedByOverrideError(null);
+
+    try {
+      await onChangeOptionCompletedBy(selectedOption, choice);
+    } catch (overrideError) {
+      setCompletedByOverrideError(overrideError instanceof Error ? overrideError.message : "Impossible de modifier le champ Fait par.");
+    } finally {
+      setSavingCompletedByOverride(false);
     }
   }
 
@@ -6789,6 +6920,10 @@ function ContextDetailBlock({
   if (!selectedOption) return null;
 
   const optionTone = getOptionTone(selectedOption.status);
+  const completedByChoiceValue =
+    completedByOverrideChoices.find((choice) => choice.initials === selectedOption.completedByInitials || choice.label === selectedOption.completedByLabel)?.value ?? "";
+  const completedByDisplay = selectedOption.completedByLabel ?? selectedOption.completedByInitials ?? "Non renseigné";
+  const canOverrideCompletedBy = permissions.canManageEvents && selectedOption.status === "completed";
 
   return (
     <Card className="border-emerald-200 bg-white p-4 sm:p-5">
@@ -6819,6 +6954,31 @@ function ContextDetailBlock({
         )}
       </div>
       {titleRenameError && <div className="mt-2 text-base font-medium text-rose-700">{titleRenameError}</div>}
+      {canOverrideCompletedBy && (
+        <div className="mt-3 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-emerald-200 bg-emerald-50/70 px-3 py-2">
+          <span className="text-base font-semibold text-emerald-800">Fait par</span>
+          <div className="flex min-w-0 items-center gap-2">
+            <span className="max-w-28 truncate text-base font-semibold text-emerald-900">{completedByDisplay}</span>
+            <select
+              value={completedByChoiceValue}
+              disabled={savingCompletedByOverride}
+              onChange={(event) => void changeSelectedOptionCompletedBy(event.target.value)}
+              className="h-8 rounded-full border border-emerald-200 bg-white px-3 text-base font-semibold text-emerald-800 outline-none transition focus:border-emerald-500 disabled:text-emerald-400"
+              aria-label="Modifier le champ Fait par"
+            >
+              <option value="" disabled>
+                Choisir
+              </option>
+              {completedByOverrideChoices.map((choice) => (
+                <option key={choice.value} value={choice.value}>
+                  {choice.label}
+                </option>
+              ))}
+            </select>
+          </div>
+        </div>
+      )}
+      {completedByOverrideError && <div className="mt-2 text-base font-medium text-rose-700">{completedByOverrideError}</div>}
       <div className="mt-3">
         <div className="flex flex-col gap-2">
           {canEdit && !addingOptionItem ? (
