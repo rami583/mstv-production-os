@@ -47,6 +47,7 @@ import {
   type WheelEvent as ReactWheelEvent,
 } from "react";
 import { Card } from "@/components/ui/card";
+import type { Session } from "@supabase/supabase-js";
 import {
   publicHolidays,
   schoolHolidaysZoneC,
@@ -72,7 +73,10 @@ type EventLinkEntryRow = Database["public"]["Tables"]["event_link_entries"]["Row
 type EventDocumentRow = Database["public"]["Tables"]["event_documents"]["Row"];
 type EventDocumentGroupRow = Database["public"]["Tables"]["event_document_groups"]["Row"];
 type EventActivityLogRow = Database["public"]["Tables"]["event_activity_log"]["Row"];
+type ProfileRow = Database["public"]["Tables"]["profiles"]["Row"];
 type TeamMemberRow = Database["public"]["Tables"]["team_members"]["Row"];
+
+type UserRole = "admin" | "production" | "technical" | "readonly";
 
 type EventQueryRow = EventRow & {
   event_options: EventOptionRow[] | null;
@@ -84,6 +88,22 @@ type TeamMember = {
   id: string;
   firstName: string;
   role: string | null;
+};
+
+type UserProfile = {
+  id: string;
+  firstName: string | null;
+  lastName: string | null;
+  role: UserRole;
+  createdAt: string;
+};
+
+type AppPermissions = {
+  canManageEvents: boolean;
+  canManageOperational: boolean;
+  canSoftDeleteEvents: boolean;
+  canRestoreEvents: boolean;
+  canPermanentDeleteEvents: boolean;
 };
 
 type EventOption = {
@@ -767,6 +787,55 @@ function mapTeamMember(row: TeamMemberRow): TeamMember {
   };
 }
 
+function normalizeUserRole(role: string | null | undefined): UserRole {
+  if (role === "admin" || role === "production" || role === "technical" || role === "readonly") return role;
+  return "readonly";
+}
+
+function mapUserProfile(row: ProfileRow): UserProfile {
+  return {
+    id: row.id,
+    firstName: row.first_name,
+    lastName: row.last_name,
+    role: normalizeUserRole(row.role),
+    createdAt: row.created_at,
+  };
+}
+
+function getProfileDisplayName(profile: UserProfile | null) {
+  if (!profile) return null;
+  const fullName = [profile.firstName, profile.lastName].filter(Boolean).join(" ").trim();
+  return fullName || "Utilisateur";
+}
+
+function getProfileInitials(profile: UserProfile | null, email?: string | null) {
+  const names = [profile?.firstName, profile?.lastName].filter(Boolean);
+  if (names.length > 0) {
+    return names.map((name) => name?.trim().charAt(0).toUpperCase()).join("").slice(0, 2);
+  }
+  return (email?.trim().charAt(0).toUpperCase() || "U");
+}
+
+function getRoleLabel(role: UserRole) {
+  const labels: Record<UserRole, string> = {
+    admin: "Admin",
+    production: "Production",
+    technical: "Technique",
+    readonly: "Lecture seule",
+  };
+  return labels[role];
+}
+
+function getPermissionsForRole(role: UserRole): AppPermissions {
+  return {
+    canManageEvents: role === "admin" || role === "production",
+    canManageOperational: role === "admin" || role === "production" || role === "technical",
+    canSoftDeleteEvents: role === "admin" || role === "production",
+    canRestoreEvents: role === "admin" || role === "production",
+    canPermanentDeleteEvents: role === "admin",
+  };
+}
+
 function mapEventActivityLog(row: EventActivityLogRow): EventActivityLog {
   return {
     id: row.id,
@@ -1049,8 +1118,43 @@ async function fetchTeamMembers() {
   return (data ?? []).map(mapTeamMember);
 }
 
+async function fetchOrCreateProfile(session: Session) {
+  if (!supabase) {
+    throw new Error("Configuration Supabase manquante.");
+  }
+
+  const { data, error } = await supabase
+    .from("profiles")
+    .select("*")
+    .eq("id", session.user.id)
+    .maybeSingle();
+
+  if (error) throw error;
+  if (data) return mapUserProfile(data);
+
+  const emailName = session.user.email?.split("@")[0]?.replace(/[._-]+/g, " ") ?? "Utilisateur";
+  const firstName = formatTitleCase(emailName).split(" ")[0] || "Utilisateur";
+  const { data: insertedProfile, error: insertError } = await supabase
+    .from("profiles")
+    .insert({
+      id: session.user.id,
+      first_name: firstName,
+      last_name: null,
+      role: "readonly",
+    })
+    .select()
+    .single();
+
+  if (insertError) throw insertError;
+  return mapUserProfile(insertedProfile);
+}
+
 export default function Home() {
   const today = useMemo(() => new Date(), []);
+  const [authSession, setAuthSession] = useState<Session | null>(null);
+  const [profile, setProfile] = useState<UserProfile | null>(null);
+  const [authLoading, setAuthLoading] = useState(true);
+  const [authError, setAuthError] = useState<string | null>(null);
   const [screen, setScreen] = useState<Screen>("calendar");
   const [events, setEvents] = useState<ProductionEvent[]>([]);
   const [teamMembers, setTeamMembers] = useState<TeamMember[]>([]);
@@ -1097,10 +1201,68 @@ export default function Home() {
   const hasNextEvent = selectedEventIndex >= 0 && selectedEventIndex < chronologicalEvents.length - 1;
   const isSelectedDateToday = selectedDateKey === todayKey;
   const yearLabel = String(visibleMonth.getFullYear());
+  const permissions = useMemo(() => getPermissionsForRole(profile?.role ?? "readonly"), [profile?.role]);
+  const actorName = getProfileDisplayName(profile);
 
   useEffect(() => {
-    void reloadData();
+    let cancelled = false;
+
+    async function loadAuthenticatedProfile(session: Session | null) {
+      setAuthSession(session);
+      setAuthError(null);
+
+      if (!session) {
+        setProfile(null);
+        setEvents([]);
+        setTeamMembers([]);
+        setSelectedId(null);
+        setLoading(false);
+        return;
+      }
+
+      try {
+        const nextProfile = await fetchOrCreateProfile(session);
+        if (!cancelled) setProfile(nextProfile);
+      } catch (profileError) {
+        console.error("Failed to load authenticated profile. Apply supabase/migrations/013_auth_profiles.sql if needed.", profileError);
+        if (!cancelled) {
+          setProfile(null);
+          setAuthError("Impossible de charger le profil utilisateur.");
+        }
+      }
+    }
+
+    async function initializeAuth() {
+      if (!supabase) {
+        setAuthLoading(false);
+        setAuthError("Configuration Supabase manquante.");
+        return;
+      }
+
+      const { data, error } = await supabase.auth.getSession();
+      if (error) {
+        setAuthError(error.message);
+      }
+      await loadAuthenticatedProfile(data.session);
+      if (!cancelled) setAuthLoading(false);
+    }
+
+    const { data: authListener } = supabase?.auth.onAuthStateChange((_event, session) => {
+      void loadAuthenticatedProfile(session);
+    }) ?? { data: { subscription: null } };
+
+    void initializeAuth();
+
+    return () => {
+      cancelled = true;
+      void authListener.subscription?.unsubscribe();
+    };
   }, []);
+
+  useEffect(() => {
+    if (!authSession || !profile) return;
+    void reloadData();
+  }, [authSession?.user.id, profile?.id]);
 
   useEffect(() => {
     if (!historyOpen || !selectedEvent) return;
@@ -1255,6 +1417,8 @@ export default function Home() {
   }) {
     if (!supabase) return;
 
+    const description = actorName ? `${input.description} par ${actorName}` : input.description;
+
     const { data, error: logError } = await supabase
       .from("event_activity_log")
       .insert({
@@ -1262,10 +1426,10 @@ export default function Home() {
         action_type: input.actionType,
         entity_type: input.entityType ?? null,
         entity_id: input.entityId ?? null,
-        description: input.description,
+        description,
         previous_value: input.previousValue ?? null,
         new_value: input.newValue ?? null,
-        created_by: null,
+        created_by: actorName,
       })
       .select()
       .single();
@@ -1286,12 +1450,43 @@ export default function Home() {
     }
   }
 
+  function assertCanManageEvents() {
+    if (!permissions.canManageEvents) {
+      throw new Error("Action réservée aux rôles admin ou production.");
+    }
+  }
+
+  function assertCanManageOperational() {
+    if (!permissions.canManageOperational) {
+      throw new Error("Action non autorisée avec ce rôle.");
+    }
+  }
+
+  function assertCanSoftDeleteEvents() {
+    if (!permissions.canSoftDeleteEvents) {
+      throw new Error("Suppression d'événement non autorisée avec ce rôle.");
+    }
+  }
+
+  function assertCanRestoreEvents() {
+    if (!permissions.canRestoreEvents) {
+      throw new Error("Restauration non autorisée avec ce rôle.");
+    }
+  }
+
+  function assertCanPermanentDeleteEvents() {
+    if (!permissions.canPermanentDeleteEvents) {
+      throw new Error("Suppression définitive réservée aux admins.");
+    }
+  }
+
   function openHistory() {
     if (!selectedEvent) return;
     setHistoryOpen(true);
   }
 
   async function restoreActivityEntry(entry: EventActivityLog) {
+    assertCanManageEvents();
     const eventToRestore = chronologicalEvents.find((item) => item.id === entry.eventId);
     if (!eventToRestore) {
       setActivityError("Événement introuvable.");
@@ -1395,6 +1590,7 @@ export default function Home() {
   }
 
   async function createEvent(input: CreateEventInput) {
+    assertCanManageEvents();
     if (!supabase) {
       throw new Error("Configuration Supabase manquante.");
     }
@@ -1483,6 +1679,7 @@ export default function Home() {
   }
 
   async function updateEvent(event: ProductionEvent, input: CreateEventInput, nextScreen: Screen = "calendar") {
+    assertCanManageEvents();
     if (!supabase) {
       throw new Error("Configuration Supabase manquante.");
     }
@@ -1558,6 +1755,7 @@ export default function Home() {
   }
 
   async function duplicateEventToDate(sourceEvent: ProductionEvent, nextDate: string) {
+    assertCanManageEvents();
     if (!supabase) {
       throw new Error("Configuration Supabase manquante.");
     }
@@ -1693,6 +1891,7 @@ export default function Home() {
   }
 
   async function updateEventTime(event: ProductionEvent, field: EventTimeField, value: string, activityDescription = "Horaire modifié") {
+    assertCanManageEvents();
     if (!supabase) {
       throw new Error("Configuration Supabase manquante.");
     }
@@ -1750,6 +1949,7 @@ export default function Home() {
   }
 
   async function updateEventDate(event: ProductionEvent, nextDate: string, activityDescription = "Date modifiée") {
+    assertCanManageEvents();
     if (!supabase) {
       throw new Error("Configuration Supabase manquante.");
     }
@@ -1798,6 +1998,7 @@ export default function Home() {
   }
 
   async function toggleOption(option: EventOption) {
+    assertCanManageOperational();
     if (!supabase) return;
     const nextStatus: CompletionStatus = option.status === "completed" ? "incomplete" : "completed";
     const { error: updateError } = await supabase.from("event_options").update({ status: nextStatus }).eq("id", option.id);
@@ -1830,6 +2031,7 @@ export default function Home() {
   }
 
   async function syncEventLinkEntries(link: EventLink, drafts: LinkEntryDraft[]) {
+    assertCanManageOperational();
     if (!supabase) {
       throw new Error("Configuration Supabase manquante.");
     }
@@ -1944,6 +2146,7 @@ export default function Home() {
   }
 
   async function createEventOption(eventId: string, label: string) {
+    assertCanManageOperational();
     if (!supabase) {
       throw new Error("Configuration Supabase manquante.");
     }
@@ -2002,6 +2205,7 @@ export default function Home() {
   }
 
   async function deleteEventOption(option: EventOption) {
+    assertCanManageOperational();
     if (!supabase) {
       throw new Error("Configuration Supabase manquante.");
     }
@@ -2032,6 +2236,7 @@ export default function Home() {
   }
 
   async function renameEventOption(option: EventOption, label: string) {
+    assertCanManageOperational();
     if (!supabase) {
       throw new Error("Configuration Supabase manquante.");
     }
@@ -2072,6 +2277,7 @@ export default function Home() {
   }
 
   async function createEventOptionItem(option: EventOption, label: string) {
+    assertCanManageOperational();
     if (!supabase) {
       throw new Error("Configuration Supabase manquante.");
     }
@@ -2126,6 +2332,7 @@ export default function Home() {
   }
 
   async function deleteEventOptionItem(option: EventOption, optionItem: EventOptionItem) {
+    assertCanManageOperational();
     if (!supabase) {
       throw new Error("Configuration Supabase manquante.");
     }
@@ -2165,6 +2372,7 @@ export default function Home() {
   }
 
   async function toggleOptionAssignee(option: EventOption, member: TeamMember) {
+    assertCanManageOperational();
     if (!supabase) {
       throw new Error("Configuration Supabase manquante.");
     }
@@ -2227,6 +2435,7 @@ export default function Home() {
   }
 
   async function createEventLink(eventId: string, input: { label: string; url: string }) {
+    assertCanManageOperational();
     if (!supabase) {
       throw new Error("Configuration Supabase manquante.");
     }
@@ -2285,6 +2494,7 @@ export default function Home() {
   }
 
   async function deleteEventLink(link: EventLink) {
+    assertCanManageOperational();
     if (!supabase) {
       throw new Error("Configuration Supabase manquante.");
     }
@@ -2315,6 +2525,7 @@ export default function Home() {
   }
 
   async function renameEventLink(link: EventLink, label: string) {
+    assertCanManageOperational();
     if (!supabase) {
       throw new Error("Configuration Supabase manquante.");
     }
@@ -2355,6 +2566,7 @@ export default function Home() {
   }
 
   async function createEventDocumentGroup(eventId: string, label: string) {
+    assertCanManageOperational();
     if (!supabase) {
       throw new Error("Configuration Supabase manquante.");
     }
@@ -2416,6 +2628,7 @@ export default function Home() {
   }
 
   async function renameEventDocumentGroup(group: EventDocumentGroup, label: string) {
+    assertCanManageOperational();
     if (!supabase) {
       throw new Error("Configuration Supabase manquante.");
     }
@@ -2456,6 +2669,7 @@ export default function Home() {
   }
 
   async function uploadEventDocument(group: EventDocumentGroup, file: globalThis.File) {
+    assertCanManageOperational();
     if (!supabase) {
       throw new Error("Configuration Supabase manquante.");
     }
@@ -2522,6 +2736,7 @@ export default function Home() {
   }
 
   async function deleteEventDocumentGroup(group: EventDocumentGroup) {
+    assertCanManageOperational();
     if (!supabase) {
       throw new Error("Configuration Supabase manquante.");
     }
@@ -2557,6 +2772,7 @@ export default function Home() {
   }
 
   async function deleteEventDocument(document: EventDocument) {
+    assertCanManageOperational();
     if (!supabase) {
       throw new Error("Configuration Supabase manquante.");
     }
@@ -2641,6 +2857,7 @@ export default function Home() {
   }
 
   async function deleteCurrentEvent(eventToDelete: ProductionEvent) {
+    assertCanSoftDeleteEvents();
     if (!supabase) {
       throw new Error("Configuration Supabase manquante.");
     }
@@ -2660,7 +2877,7 @@ export default function Home() {
     const deletedAt = new Date().toISOString();
     const { data: deletedEvent, error: softDeleteError } = await supabase
       .from("events")
-      .update({ deleted_at: deletedAt, deleted_by: "Utilisateur" })
+      .update({ deleted_at: deletedAt, deleted_by: actorName ?? "Utilisateur" })
       .eq("id", eventId)
       .select()
       .single();
@@ -2692,7 +2909,7 @@ export default function Home() {
     });
 
     setEvents((current) => current.filter((event) => event.id !== eventId));
-    setDeletedEvents((current) => [{ ...eventToDelete, deletedAt, deletedBy: "Utilisateur", updatedAt: deletedEvent.updated_at }, ...current]);
+    setDeletedEvents((current) => [{ ...eventToDelete, deletedAt, deletedBy: actorName ?? "Utilisateur", updatedAt: deletedEvent.updated_at }, ...current]);
     setSelectedId(null);
     setScreen("calendar");
     setCreateMenuOpen(false);
@@ -2701,6 +2918,7 @@ export default function Home() {
   }
 
   async function restoreDeletedEvent(eventToRestore: ProductionEvent) {
+    assertCanRestoreEvents();
     if (!supabase) {
       throw new Error("Configuration Supabase manquante.");
     }
@@ -2744,6 +2962,7 @@ export default function Home() {
   }
 
   async function permanentlyDeleteEvent(eventToDelete: ProductionEvent) {
+    assertCanPermanentDeleteEvents();
     if (!supabase) {
       throw new Error("Configuration Supabase manquante.");
     }
@@ -2774,15 +2993,41 @@ export default function Home() {
     setPermanentDeleteDialogEvent(null);
   }
 
+  async function signOut() {
+    if (!supabase) return;
+    await supabase.auth.signOut();
+    setAuthSession(null);
+    setProfile(null);
+    setEvents([]);
+    setTeamMembers([]);
+    setSelectedId(null);
+    setScreen("calendar");
+    setCreateMenuOpen(false);
+  }
+
+  if (authLoading) {
+    return <FullScreenStatus>Chargement...</FullScreenStatus>;
+  }
+
+  if (!authSession) {
+    return <LoginScreen error={authError} />;
+  }
+
+  if (authError && !profile) {
+    return <FullScreenStatus tone="error">{authError}</FullScreenStatus>;
+  }
+
   return (
     <main className="relative h-screen h-[100svh] overflow-hidden bg-[#f7f9fb] text-stone-950">
       <div
         onDragEnter={(event) => {
+          if (!permissions.canManageEvents) return;
           if (!hasPdfDragItem(event.dataTransfer)) return;
           event.preventDefault();
           setGlobalQuoteDragActive(true);
         }}
         onDragOver={(event) => {
+          if (!permissions.canManageEvents) return;
           if (!hasPdfDragItem(event.dataTransfer)) return;
           event.preventDefault();
           event.dataTransfer.dropEffect = "copy";
@@ -2793,6 +3038,7 @@ export default function Home() {
           setGlobalQuoteDragActive(false);
         }}
         onDrop={(event) => {
+          if (!permissions.canManageEvents) return;
           const pdfFile = getPdfFileFromTransfer(event.dataTransfer);
           if (!pdfFile) {
             setGlobalQuoteDragActive(false);
@@ -2809,36 +3055,44 @@ export default function Home() {
           setScreen={setScreen}
           yearLabel={yearLabel}
           detailDateLabel={screen === "detail" && selectedEvent ? formatFullDate(selectedEvent.date) : null}
-          onEditDetailDate={screen === "detail" && selectedEvent ? () => setDateEditorOpen(true) : undefined}
+          onEditDetailDate={screen === "detail" && selectedEvent && permissions.canManageEvents ? () => setDateEditorOpen(true) : undefined}
           goToday={goToday}
           isSelectedDateToday={isSelectedDateToday}
           createMenuOpen={createMenuOpen && !yearOverviewOpen}
           setCreateMenuOpen={setCreateMenuOpen}
+          profile={profile}
+          email={authSession.user.email}
+          onLogout={signOut}
           onImportQuote={() => {
+            if (!permissions.canManageEvents) return;
             openQuoteImport();
           }}
           onSearch={() => setSearchOpen(true)}
           canOpenHistory={screen === "detail" && Boolean(selectedEvent)}
           onOpenHistory={openHistory}
+          canOpenTrash={profile?.role !== "readonly"}
           onOpenTrash={() => {
             setTrashOpen(true);
             setCreateMenuOpen(false);
           }}
           onOpenYearOverview={() => setYearOverviewOpen(true)}
           onCreateEvent={() => {
+            if (!permissions.canManageEvents) return;
             setEditingEvent(null);
             setEditingReturnScreen("calendar");
             setCreateModalOpen(true);
             setCreateMenuOpen(false);
           }}
-          canDuplicateEvent={screen === "detail" && Boolean(selectedEvent)}
+          canCreateEvent={permissions.canManageEvents}
+          canImportQuote={permissions.canManageEvents}
+          canDuplicateEvent={permissions.canManageEvents && screen === "detail" && Boolean(selectedEvent)}
           onDuplicateEvent={() => {
             if (selectedEvent && !selectedEvent.deletedAt) {
               setDuplicateDatePickerEvent(selectedEvent);
             }
             setCreateMenuOpen(false);
           }}
-          canDeleteEvent={screen === "detail" && Boolean(selectedEvent)}
+          canDeleteEvent={permissions.canSoftDeleteEvents && screen === "detail" && Boolean(selectedEvent)}
           onDeleteEvent={() => {
             console.log("Delete event menu action clicked", {
               eventId: selectedEvent?.id ?? null,
@@ -2862,7 +3116,11 @@ export default function Home() {
               onOpen={openEvent}
               visibleMonth={visibleMonth}
               selectedDateKey={selectedDateKey}
-              onDeleteRequest={setDeleteDialogEvent}
+              onDeleteRequest={(event) => {
+                if (permissions.canSoftDeleteEvents) {
+                  setDeleteDialogEvent(event);
+                }
+              }}
               setSelectedDateKey={setSelectedDateKey}
               changeMonth={changeMonth}
             />
@@ -2899,6 +3157,7 @@ export default function Home() {
               onDownloadDocument={downloadEventDocument}
               onTimelineTimeEditStart={startTimelineTimeEditing}
               onTimelineTimeEditEnd={endTimelineTimeEditing}
+              permissions={permissions}
             />
           )}
 
@@ -2926,15 +3185,20 @@ export default function Home() {
           isSelectedDateToday={isSelectedDateToday}
           createMenuOpen={createMenuOpen}
           setCreateMenuOpen={setCreateMenuOpen}
+          profile={profile}
+          email={authSession.user.email}
+          onLogout={signOut}
           onGoToday={() => {
             goToday();
             setYearOverviewOpen(false);
           }}
           onImportQuote={() => {
+            if (!permissions.canManageEvents) return;
             openQuoteImport();
           }}
           onSearch={() => setSearchOpen(true)}
           onCreateEvent={() => {
+            if (!permissions.canManageEvents) return;
             setEditingEvent(null);
             setEditingReturnScreen("calendar");
             setCreateModalOpen(true);
@@ -2944,6 +3208,9 @@ export default function Home() {
             setTrashOpen(true);
             setCreateMenuOpen(false);
           }}
+          canCreateEvent={permissions.canManageEvents}
+          canImportQuote={permissions.canManageEvents}
+          canOpenTrash={profile?.role !== "readonly"}
           onSelectMonth={selectYearOverviewMonth}
         />
       )}
@@ -3045,6 +3312,8 @@ export default function Home() {
           onClose={() => setTrashOpen(false)}
           onRestore={restoreDeletedEvent}
           onPermanentDeleteRequest={setPermanentDeleteDialogEvent}
+          canRestore={permissions.canRestoreEvents}
+          canPermanentDelete={permissions.canPermanentDeleteEvents}
         />
       )}
 
@@ -3073,6 +3342,7 @@ export default function Home() {
           restoringActivityId={restoringActivityId}
           onClose={() => setHistoryOpen(false)}
           onRestore={restoreActivityEntry}
+          canRestore={permissions.canManageEvents}
         />
       )}
 
@@ -3093,14 +3363,20 @@ function AppHeader({
   isSelectedDateToday,
   createMenuOpen,
   setCreateMenuOpen,
+  profile,
+  email,
+  onLogout,
   onImportQuote,
   onSearch,
   canOpenHistory,
   onOpenHistory,
+  canOpenTrash,
   onOpenTrash,
   onLogoClick,
   onOpenYearOverview,
   onCreateEvent,
+  canCreateEvent,
+  canImportQuote,
   canDuplicateEvent,
   onDuplicateEvent,
   canDeleteEvent,
@@ -3115,20 +3391,27 @@ function AppHeader({
   isSelectedDateToday: boolean;
   createMenuOpen: boolean;
   setCreateMenuOpen: (open: boolean | ((current: boolean) => boolean)) => void;
+  profile: UserProfile | null;
+  email: string | undefined;
+  onLogout: () => void;
   onImportQuote: () => void;
   onSearch: () => void;
   canOpenHistory: boolean;
   onOpenHistory: () => void;
+  canOpenTrash: boolean;
   onOpenTrash: () => void;
   onLogoClick?: () => void;
   onOpenYearOverview: () => void;
   onCreateEvent: () => void;
+  canCreateEvent: boolean;
+  canImportQuote: boolean;
   canDuplicateEvent: boolean;
   onDuplicateEvent: () => void;
   canDeleteEvent: boolean;
   onDeleteEvent: () => void;
 }) {
   const menuWrapperRef = useRef<HTMLDivElement | null>(null);
+  const canOpenCreateMenu = canImportQuote || canCreateEvent || canDuplicateEvent || canDeleteEvent || canOpenTrash;
 
   useEffect(() => {
     if (!createMenuOpen) return;
@@ -3187,26 +3470,32 @@ function AppHeader({
         )}
         {canOpenHistory && <HeaderIcon label="Historique" icon={History} onClick={onOpenHistory} />}
         <HeaderIcon label="Rechercher" icon={Search} onClick={onSearch} />
-        <div ref={menuWrapperRef} className="relative">
-          <button
-            onClick={() => setCreateMenuOpen((current) => !current)}
-            className="flex h-10 w-10 items-center justify-center rounded-full bg-[#bb2720] text-base font-semibold leading-none text-white transition hover:bg-[#a7211b]"
-            aria-label="Créer"
-          >
-            +
-          </button>
-          {createMenuOpen && (
-            <CreateMenu
-              onImportQuote={onImportQuote}
-              onCreateEvent={onCreateEvent}
-              onOpenTrash={onOpenTrash}
-              canDuplicateEvent={canDuplicateEvent}
-              onDuplicateEvent={onDuplicateEvent}
-              canDeleteEvent={canDeleteEvent}
-              onDeleteEvent={onDeleteEvent}
-            />
-          )}
-        </div>
+        {canOpenCreateMenu && (
+          <div ref={menuWrapperRef} className="relative">
+            <button
+              onClick={() => setCreateMenuOpen((current) => !current)}
+              className="flex h-10 w-10 items-center justify-center rounded-full bg-[#bb2720] text-base font-semibold leading-none text-white transition hover:bg-[#a7211b]"
+              aria-label="Créer"
+            >
+              +
+            </button>
+            {createMenuOpen && (
+              <CreateMenu
+                onImportQuote={onImportQuote}
+                onCreateEvent={onCreateEvent}
+                onOpenTrash={onOpenTrash}
+                canImportQuote={canImportQuote}
+                canCreateEvent={canCreateEvent}
+                canOpenTrash={canOpenTrash}
+                canDuplicateEvent={canDuplicateEvent}
+                onDuplicateEvent={onDuplicateEvent}
+                canDeleteEvent={canDeleteEvent}
+                onDeleteEvent={onDeleteEvent}
+              />
+            )}
+          </div>
+        )}
+        <AccountMenu profile={profile} email={email} onLogout={onLogout} />
       </div>
     </header>
   );
@@ -3216,6 +3505,9 @@ function CreateMenu({
   onImportQuote,
   onCreateEvent,
   onOpenTrash,
+  canImportQuote,
+  canCreateEvent,
+  canOpenTrash,
   canDuplicateEvent,
   onDuplicateEvent,
   canDeleteEvent,
@@ -3224,6 +3516,9 @@ function CreateMenu({
   onImportQuote: () => void;
   onCreateEvent: () => void;
   onOpenTrash: () => void;
+  canImportQuote: boolean;
+  canCreateEvent: boolean;
+  canOpenTrash: boolean;
   canDuplicateEvent: boolean;
   onDuplicateEvent: () => void;
   canDeleteEvent: boolean;
@@ -3231,18 +3526,22 @@ function CreateMenu({
 }) {
   return (
     <div className="absolute right-1 top-14 z-40 w-56 rounded-2xl border border-stone-200 bg-white/95 p-1.5 backdrop-blur-xl">
-      <button
-        onClick={onImportQuote}
-        className="block w-full rounded-xl px-4 py-3 text-right text-base font-medium text-stone-700 transition hover:bg-[#bb2720]/[0.05] hover:text-stone-950"
-      >
-        Importer un devis
-      </button>
-      <button
-        onClick={onCreateEvent}
-        className="block w-full rounded-xl px-4 py-3 text-right text-base font-medium text-stone-700 transition hover:bg-[#bb2720]/[0.05] hover:text-stone-950"
-      >
-        Créer un événement
-      </button>
+      {canImportQuote && (
+        <button
+          onClick={onImportQuote}
+          className="block w-full rounded-xl px-4 py-3 text-right text-base font-medium text-stone-700 transition hover:bg-[#bb2720]/[0.05] hover:text-stone-950"
+        >
+          Importer un devis
+        </button>
+      )}
+      {canCreateEvent && (
+        <button
+          onClick={onCreateEvent}
+          className="block w-full rounded-xl px-4 py-3 text-right text-base font-medium text-stone-700 transition hover:bg-[#bb2720]/[0.05] hover:text-stone-950"
+        >
+          Créer un événement
+        </button>
+      )}
       {canDuplicateEvent && (
         <button
           onClick={onDuplicateEvent}
@@ -3259,14 +3558,16 @@ function CreateMenu({
           Supprimer l'événement
         </button>
       )}
-      <button
-        onClick={onOpenTrash}
-        aria-label="Corbeille"
-        title="Corbeille"
-        className="flex w-full items-center justify-end rounded-xl px-4 py-3 text-stone-500 transition hover:bg-[#bb2720]/[0.05] hover:text-stone-800"
-      >
-        <Trash2 className="h-4 w-4" aria-hidden="true" />
-      </button>
+      {canOpenTrash && (
+        <button
+          onClick={onOpenTrash}
+          aria-label="Corbeille"
+          title="Corbeille"
+          className="flex w-full items-center justify-end rounded-xl px-4 py-3 text-stone-500 transition hover:bg-[#bb2720]/[0.05] hover:text-stone-800"
+        >
+          <Trash2 className="h-4 w-4" aria-hidden="true" />
+        </button>
+      )}
     </div>
   );
 }
@@ -3390,12 +3691,18 @@ function YearOverviewOverlay({
   isSelectedDateToday,
   createMenuOpen,
   setCreateMenuOpen,
+  profile,
+  email,
+  onLogout,
   onGoToday,
   onImportQuote,
   onSearch,
   onCreateEvent,
   onOpenTrash,
   onSelectMonth,
+  canCreateEvent,
+  canImportQuote,
+  canOpenTrash,
 }: {
   initialYear: number;
   events: ProductionEvent[];
@@ -3404,12 +3711,18 @@ function YearOverviewOverlay({
   isSelectedDateToday: boolean;
   createMenuOpen: boolean;
   setCreateMenuOpen: (open: boolean | ((current: boolean) => boolean)) => void;
+  profile: UserProfile | null;
+  email: string | undefined;
+  onLogout: () => void;
   onGoToday: () => void;
   onImportQuote: () => void;
   onSearch: () => void;
   onCreateEvent: () => void;
   onOpenTrash: () => void;
   onSelectMonth: (year: number, monthIndex: number) => void;
+  canCreateEvent: boolean;
+  canImportQuote: boolean;
+  canOpenTrash: boolean;
 }) {
   const [displayYear, setDisplayYear] = useState(initialYear);
   const swipeStartRef = useRef<{ pointerId: number; x: number; y: number } | null>(null);
@@ -3591,14 +3904,20 @@ function YearOverviewOverlay({
           isSelectedDateToday={isSelectedDateToday}
           createMenuOpen={createMenuOpen}
           setCreateMenuOpen={setCreateMenuOpen}
+          profile={profile}
+          email={email}
+          onLogout={onLogout}
           onImportQuote={onImportQuote}
           onSearch={onSearch}
           canOpenHistory={false}
           onOpenHistory={() => undefined}
+          canOpenTrash={canOpenTrash}
           onOpenTrash={onOpenTrash}
           onLogoClick={onGoToday}
           onOpenYearOverview={() => undefined}
           onCreateEvent={onCreateEvent}
+          canCreateEvent={canCreateEvent}
+          canImportQuote={canImportQuote}
           canDuplicateEvent={false}
           onDuplicateEvent={() => undefined}
           canDeleteEvent={false}
@@ -4494,6 +4813,7 @@ function ProductionDetail({
   onDownloadDocument,
   onTimelineTimeEditStart,
   onTimelineTimeEditEnd,
+  permissions,
 }: {
   event: ProductionEvent;
   teamMembers: TeamMember[];
@@ -4524,6 +4844,7 @@ function ProductionDetail({
   onDownloadDocument: (document: EventDocument) => Promise<void>;
   onTimelineTimeEditStart: (saveTime: () => Promise<void>) => void;
   onTimelineTimeEditEnd: () => void;
+  permissions: AppPermissions;
 }) {
   const [contextSelection, setContextSelection] = useState<ContextSelection>(null);
   const [addForm, setAddForm] = useState<ItemKind | null>(null);
@@ -4937,6 +5258,7 @@ function ProductionDetail({
           onUpdateTime={onUpdateEventTime}
           onTimelineTimeEditStart={onTimelineTimeEditStart}
           onTimelineTimeEditEnd={onTimelineTimeEditEnd}
+          editable={permissions.canManageEvents}
         />
       </Card>
 
@@ -4948,9 +5270,9 @@ function ProductionDetail({
               label="Options"
               tone="option"
               addLabel="Ajouter une option"
-              onAdd={() => setAddForm((current) => (current === "option" ? null : "option"))}
+              onAdd={permissions.canManageOperational ? () => setAddForm((current) => (current === "option" ? null : "option")) : undefined}
             />
-            {addForm === "option" && (
+            {permissions.canManageOperational && addForm === "option" && (
               <InlineAddForm onSubmit={addOption} eventId={event.id}>
                 <input
                   required
@@ -5018,16 +5340,18 @@ function ProductionDetail({
                             </>
                           )}
                         </button>
-                        <button
-                          onClick={(event) => {
-                            event.stopPropagation();
-                            setConfirmDelete({ type: "option", optionId: option.id });
-                          }}
-                          className="absolute right-1.5 top-1.5 flex h-6 w-6 items-center justify-center rounded-full text-emerald-500 opacity-100 transition hover:bg-white/70 hover:text-emerald-800 focus:opacity-100 [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover:opacity-100"
-                          aria-label="Supprimer cette option"
-                        >
-                          <X className="h-3.5 w-3.5" />
-                        </button>
+                        {permissions.canManageOperational && (
+                          <button
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              setConfirmDelete({ type: "option", optionId: option.id });
+                            }}
+                            className="absolute right-1.5 top-1.5 flex h-6 w-6 items-center justify-center rounded-full text-emerald-500 opacity-100 transition hover:bg-white/70 hover:text-emerald-800 focus:opacity-100 [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover:opacity-100"
+                            aria-label="Supprimer cette option"
+                          >
+                            <X className="h-3.5 w-3.5" />
+                          </button>
+                        )}
                       </>
                     )}
                   </div>
@@ -5041,9 +5365,9 @@ function ProductionDetail({
               label="Liens"
               tone="link"
               addLabel="Ajouter un lien"
-              onAdd={() => setAddForm((current) => (current === "link" ? null : "link"))}
+              onAdd={permissions.canManageOperational ? () => setAddForm((current) => (current === "link" ? null : "link")) : undefined}
             />
-            {addForm === "link" && (
+            {permissions.canManageOperational && addForm === "link" && (
               <InlineAddForm onSubmit={addLink} eventId={event.id}>
                 <input
                   required
@@ -5089,16 +5413,18 @@ function ProductionDetail({
                           <span className={cn("min-w-0 flex-1 truncate pr-5 text-base font-semibold", linkTone.text)}>{link.label}</span>
                         </button>
                         <ExternalLink className="mr-8 hidden h-4 w-4 shrink-0 text-sky-400 sm:block" />
-                        <button
-                          onClick={(event) => {
-                            event.stopPropagation();
-                            setConfirmDelete({ type: "link", linkId: link.id });
-                          }}
-                          className="absolute right-1.5 top-1.5 flex h-6 w-6 items-center justify-center rounded-full text-sky-500 opacity-100 transition hover:bg-white/70 hover:text-sky-800 focus:opacity-100 [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover:opacity-100"
-                          aria-label="Supprimer ce lien"
-                        >
-                          <X className="h-3.5 w-3.5" />
-                        </button>
+                        {permissions.canManageOperational && (
+                          <button
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              setConfirmDelete({ type: "link", linkId: link.id });
+                            }}
+                            className="absolute right-1.5 top-1.5 flex h-6 w-6 items-center justify-center rounded-full text-sky-500 opacity-100 transition hover:bg-white/70 hover:text-sky-800 focus:opacity-100 [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover:opacity-100"
+                            aria-label="Supprimer ce lien"
+                          >
+                            <X className="h-3.5 w-3.5" />
+                          </button>
+                        )}
                       </>
                     )}
                   </div>
@@ -5112,9 +5438,9 @@ function ProductionDetail({
               label="Documents"
               tone="document"
               addLabel="Ajouter un document"
-              onAdd={() => setAddForm((current) => (current === "document" ? null : "document"))}
+              onAdd={permissions.canManageOperational ? () => setAddForm((current) => (current === "document" ? null : "document")) : undefined}
             />
-            {addForm === "document" && (
+            {permissions.canManageOperational && addForm === "document" && (
               <InlineAddForm onSubmit={addDocumentGroup} eventId={event.id}>
                 <input
                   required
@@ -5162,16 +5488,18 @@ function ProductionDetail({
                           <Icon className={cn("h-4 w-4 shrink-0 sm:h-5 sm:w-5", documentTone.icon)} />
                           <span className={cn("min-w-0 flex-1 truncate pr-5 text-base font-semibold", documentTone.text)}>{group.label}</span>
                         </button>
-                        <button
-                          onClick={(buttonEvent) => {
-                            buttonEvent.stopPropagation();
-                            setConfirmDelete({ type: "document", groupId: group.id });
-                          }}
-                          className="absolute right-1.5 top-1.5 flex h-6 w-6 items-center justify-center rounded-full text-amber-500 opacity-100 transition hover:bg-white/70 hover:text-amber-800 focus:opacity-100 [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover:opacity-100"
-                          aria-label="Supprimer ce document"
-                        >
-                          <X className="h-3.5 w-3.5" />
-                        </button>
+                        {permissions.canManageOperational && (
+                          <button
+                            onClick={(buttonEvent) => {
+                              buttonEvent.stopPropagation();
+                              setConfirmDelete({ type: "document", groupId: group.id });
+                            }}
+                            className="absolute right-1.5 top-1.5 flex h-6 w-6 items-center justify-center rounded-full text-amber-500 opacity-100 transition hover:bg-white/70 hover:text-amber-800 focus:opacity-100 [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover:opacity-100"
+                            aria-label="Supprimer ce document"
+                          >
+                            <X className="h-3.5 w-3.5" />
+                          </button>
+                        )}
                       </>
                     )}
                   </div>
@@ -5200,6 +5528,7 @@ function ProductionDetail({
             onDeleteDocumentFile={onDeleteDocumentFile}
             onOpenDocument={onOpenDocument}
             onDownloadDocument={onDownloadDocument}
+            permissions={permissions}
           />
         </div>
       </div>
@@ -5457,11 +5786,13 @@ function ProductionTimeline({
   onUpdateTime,
   onTimelineTimeEditStart,
   onTimelineTimeEditEnd,
+  editable = true,
 }: {
   event: ProductionEvent;
   onUpdateTime: (event: ProductionEvent, field: EventTimeField, value: string) => Promise<void>;
   onTimelineTimeEditStart: (saveTime: () => Promise<void>) => void;
   onTimelineTimeEditEnd: () => void;
+  editable?: boolean;
 }) {
   const moments = [
     { label: "Arrivée client", field: "clientArrivalTime" as const, value: event.clientArrivalTime },
@@ -5489,6 +5820,7 @@ function ProductionTimeline({
                 onSave={(value) => onUpdateTime(event, moment.field, value)}
                 onEditingStart={onTimelineTimeEditStart}
                 onEditingEnd={onTimelineTimeEditEnd}
+                editable={editable}
               />
             </div>
           </div>
@@ -5503,11 +5835,13 @@ function TimelineTimeCapsule({
   onSave,
   onEditingStart,
   onEditingEnd,
+  editable = true,
 }: {
   value: string | null;
   onSave: (value: string) => Promise<void>;
   onEditingStart: (saveTime: () => Promise<void>) => void;
   onEditingEnd: () => void;
+  editable?: boolean;
 }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(toTimeInputValue(value));
@@ -5605,10 +5939,13 @@ function TimelineTimeCapsule({
   return (
     <button
       type="button"
-      onClick={() => setEditing(true)}
+      onClick={() => {
+        if (editable) setEditing(true);
+      }}
       className={cn(
         "inline-flex rounded-full bg-slate-100 px-2.5 py-1 text-base font-semibold leading-none ring-1 ring-slate-200/70 transition hover:bg-slate-200/70",
         displayedTime ? "text-slate-600" : "text-slate-400",
+        !editable && "cursor-default hover:bg-slate-100",
       )}
     >
       {displayedTime || "--:--"}
@@ -5621,11 +5958,13 @@ function InlineEditableTitle({
   onSave,
   className,
   inputClassName,
+  editable = true,
 }: {
   value: string;
   onSave: (value: string) => Promise<void>;
   className?: string;
   inputClassName?: string;
+  editable?: boolean;
 }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(value);
@@ -5692,8 +6031,10 @@ function InlineEditableTitle({
   return (
     <button
       type="button"
-      onClick={() => setEditing(true)}
-      className={cn("min-w-0 truncate text-left", className)}
+      onClick={() => {
+        if (editable) setEditing(true);
+      }}
+      className={cn("min-w-0 truncate text-left", !editable && "cursor-default", className)}
     >
       {value}
     </button>
@@ -5710,6 +6051,7 @@ function LinkValueRow({
   onChange,
   onCopy,
   openable = false,
+  editable = true,
 }: {
   value: string;
   placeholder: string;
@@ -5720,6 +6062,7 @@ function LinkValueRow({
   onChange: (value: string) => void;
   onCopy: () => void;
   openable?: boolean;
+  editable?: boolean;
 }) {
   const trimmedValue = value.trim();
   const canOpen = openable && Boolean(getValidUrl(trimmedValue));
@@ -5741,6 +6084,7 @@ function LinkValueRow({
   }
 
   function editUrlFromRow() {
+    if (!editable) return;
     if (openTimerRef.current) {
       window.clearTimeout(openTimerRef.current);
       openTimerRef.current = null;
@@ -5761,7 +6105,7 @@ function LinkValueRow({
           >
             {value}
           </button>
-        ) : (
+        ) : editable ? (
           <input
             value={value}
             onChange={(event) => onChange(event.target.value)}
@@ -5770,6 +6114,10 @@ function LinkValueRow({
             placeholder={placeholder}
             className={cn("min-w-0 flex-1 bg-transparent text-base font-semibold outline-none placeholder:text-sky-300", rowTone.text)}
           />
+        ) : (
+          <span className={cn("min-w-0 flex-1 truncate text-base font-semibold", rowTone.text)}>
+            {value || placeholder}
+          </span>
         )}
       </div>
       <button
@@ -5828,6 +6176,7 @@ function ContextDetailBlock({
   onDeleteDocumentFile,
   onOpenDocument,
   onDownloadDocument,
+  permissions,
 }: {
   event: ProductionEvent;
   selection: ContextSelection;
@@ -5844,6 +6193,7 @@ function ContextDetailBlock({
   onDeleteDocumentFile: (document: EventDocument) => Promise<void>;
   onOpenDocument: (document: EventDocument) => Promise<void>;
   onDownloadDocument: (document: EventDocument) => Promise<void>;
+  permissions: AppPermissions;
 }) {
   const selectedOption = selection?.type === "option" ? event.options.find((option) => option.id === selection.optionId) ?? null : null;
   const selectedLink = selection?.type === "link" ? event.links.find((link) => link.id === selection.linkId) ?? null : null;
@@ -5852,6 +6202,7 @@ function ContextDetailBlock({
   const selectedLinkId = selectedLink?.id ?? "";
   const selectedDocumentGroupId = selectedDocumentGroup?.id ?? "";
   const selectedLinkIsPlatform = selectedLink ? isPlatformLink(selectedLink) : false;
+  const canEdit = permissions.canManageOperational;
   const [linkEntryDrafts, setLinkEntryDrafts] = useState<LinkEntryDraft[]>(() => selectedLink ? createLinkEntryDrafts(selectedLink, selectedLinkIsPlatform) : []);
   const [lastSavedLinkEntrySignature, setLastSavedLinkEntrySignature] = useState(() => selectedLink ? serializeLinkEntries(selectedLink.entries, selectedLinkIsPlatform) : "[]");
   const [savingLink, setSavingLink] = useState(false);
@@ -5878,7 +6229,7 @@ function ContextDetailBlock({
   }, [selectedLinkId]);
 
   useEffect(() => {
-    if (!selectedLink || !hasUnsavedLinkChanges) return;
+    if (!selectedLink || !canEdit || !hasUnsavedLinkChanges) return;
 
     const saveTimer = window.setTimeout(() => {
       setSavingLink(true);
@@ -5898,7 +6249,7 @@ function ContextDetailBlock({
     }, 500);
 
     return () => window.clearTimeout(saveTimer);
-  }, [hasUnsavedLinkChanges, linkEntryDrafts, onSaveLinkEntries, selectedLink, selectedLinkIsPlatform]);
+  }, [canEdit, hasUnsavedLinkChanges, linkEntryDrafts, onSaveLinkEntries, selectedLink, selectedLinkIsPlatform]);
 
   useEffect(() => {
     if (!copiedLinkField) return;
@@ -6093,6 +6444,7 @@ function ContextDetailBlock({
                 onSave={renameSelectedLink}
                 className="truncate"
                 inputClassName="border-sky-200 text-sky-950 focus:border-sky-400"
+                editable={canEdit}
               />
             </div>
           </div>
@@ -6112,6 +6464,7 @@ function ContextDetailBlock({
                     onChange={(value) => updateLinkEntryDraft(index, "url", value)}
                     onCopy={() => void copyLinkValue(draft.url, getCopiedLinkField(index, "url"))}
                     openable
+                    editable={canEdit}
                   />
                   {selectedLinkIsPlatform && (
                     <LinkValueRow
@@ -6123,6 +6476,7 @@ function ContextDetailBlock({
                       completed={entryCompleted}
                       onChange={(value) => updateLinkEntryDraft(index, "streamKey", value)}
                       onCopy={() => void copyLinkValue(draft.streamKey, getCopiedLinkField(index, "streamKey"))}
+                      editable={canEdit}
                     />
                   )}
                 </div>
@@ -6155,41 +6509,44 @@ function ContextDetailBlock({
                 onSave={renameSelectedDocumentGroup}
                 className="truncate"
                 inputClassName="border-amber-200 text-amber-950 focus:border-amber-400"
+                editable={canEdit}
               />
             </div>
           </div>
-          <div
-            data-no-event-swipe
-            onDragOver={(dragEvent) => {
-              dragEvent.preventDefault();
-              setDraggingDocumentFiles(true);
-            }}
-            onDragLeave={() => setDraggingDocumentFiles(false)}
-            onDrop={(dropEvent) => {
-              dropEvent.preventDefault();
-              setDraggingDocumentFiles(false);
-              void uploadFilesToSelectedGroup(dropEvent.dataTransfer.files);
-            }}
-            className={cn(
-              "rounded-xl border border-amber-200 bg-white p-2 transition",
-              draggingDocumentFiles && "border-amber-300 bg-amber-50",
-            )}
-          >
-            <label className="flex min-h-16 cursor-pointer items-center justify-center rounded-lg border border-dashed border-amber-200 bg-amber-50/60 px-3 text-center text-base font-semibold text-amber-800 transition hover:bg-amber-100">
-              {uploadingDocumentFiles ? "Upload..." : "Déposer ou choisir"}
-              <input
-                type="file"
-                multiple
-                className="sr-only"
-                onChange={(inputEvent) => {
-                  if (inputEvent.target.files) {
-                    void uploadFilesToSelectedGroup(inputEvent.target.files);
-                    inputEvent.target.value = "";
-                  }
-                }}
-              />
-            </label>
-          </div>
+          {canEdit && (
+            <div
+              data-no-event-swipe
+              onDragOver={(dragEvent) => {
+                dragEvent.preventDefault();
+                setDraggingDocumentFiles(true);
+              }}
+              onDragLeave={() => setDraggingDocumentFiles(false)}
+              onDrop={(dropEvent) => {
+                dropEvent.preventDefault();
+                setDraggingDocumentFiles(false);
+                void uploadFilesToSelectedGroup(dropEvent.dataTransfer.files);
+              }}
+              className={cn(
+                "rounded-xl border border-amber-200 bg-white p-2 transition",
+                draggingDocumentFiles && "border-amber-300 bg-amber-50",
+              )}
+            >
+              <label className="flex min-h-16 cursor-pointer items-center justify-center rounded-lg border border-dashed border-amber-200 bg-amber-50/60 px-3 text-center text-base font-semibold text-amber-800 transition hover:bg-amber-100">
+                {uploadingDocumentFiles ? "Upload..." : "Déposer ou choisir"}
+                <input
+                  type="file"
+                  multiple
+                  className="sr-only"
+                  onChange={(inputEvent) => {
+                    if (inputEvent.target.files) {
+                      void uploadFilesToSelectedGroup(inputEvent.target.files);
+                      inputEvent.target.value = "";
+                    }
+                  }}
+                />
+              </label>
+            </div>
+          )}
           {selectedDocumentGroup.files.length > 0 && (
             <div className="flex flex-col gap-2">
               {selectedDocumentGroup.files.map((file) => {
@@ -6207,13 +6564,15 @@ function ContextDetailBlock({
                         <span className={cn("min-w-0 truncate text-base font-semibold", documentTone.text)}>{file.fileName}</span>
                         <span className="shrink-0 text-base font-medium text-amber-700/70">{formatFileSize(file.fileSize)}</span>
                       </button>
-                      <button
-                        onClick={() => void removeDocumentFile(file)}
-                        className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-amber-500 opacity-100 transition hover:bg-white/70 hover:text-amber-800 focus:opacity-100 [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover:opacity-100"
-                        aria-label="Supprimer ce fichier"
-                      >
-                        <X className="h-3.5 w-3.5" />
-                      </button>
+                      {canEdit && (
+                        <button
+                          onClick={() => void removeDocumentFile(file)}
+                          className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-amber-500 opacity-100 transition hover:bg-white/70 hover:text-amber-800 focus:opacity-100 [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover:opacity-100"
+                          aria-label="Supprimer ce fichier"
+                        >
+                          <X className="h-3.5 w-3.5" />
+                        </button>
+                      )}
                     </div>
                     <button
                       onClick={() => void downloadDocumentFile(file)}
@@ -6263,26 +6622,29 @@ function ContextDetailBlock({
             onSave={renameSelectedOption}
             className="truncate"
             inputClassName="border-emerald-200 text-emerald-950 focus:border-emerald-400"
+            editable={canEdit}
           />
         </div>
-        <button
-          onClick={() => void onToggleOption(selectedOption)}
-          className={cn(
-            "shrink-0 rounded-full border px-3 py-1.5 text-base font-semibold transition",
-            optionTone.surface,
-            optionTone.border,
-            optionTone.text,
-            selectedOption.status === "completed" ? "hover:bg-emerald-100" : "hover:bg-emerald-50",
-          )}
-          aria-label={selectedOption.status === "completed" ? "Marquer incomplet" : "Marquer terminé"}
-        >
-          {selectedOption.status === "completed" ? "Fait" : "À faire"}
-        </button>
+        {canEdit && (
+          <button
+            onClick={() => void onToggleOption(selectedOption)}
+            className={cn(
+              "shrink-0 rounded-full border px-3 py-1.5 text-base font-semibold transition",
+              optionTone.surface,
+              optionTone.border,
+              optionTone.text,
+              selectedOption.status === "completed" ? "hover:bg-emerald-100" : "hover:bg-emerald-50",
+            )}
+            aria-label={selectedOption.status === "completed" ? "Marquer incomplet" : "Marquer terminé"}
+          >
+            {selectedOption.status === "completed" ? "Fait" : "À faire"}
+          </button>
+        )}
       </div>
       {titleRenameError && <div className="mt-2 text-base font-medium text-rose-700">{titleRenameError}</div>}
       <div className="mt-3">
         <div className="flex flex-col gap-2">
-          {!addingOptionItem ? (
+          {canEdit && !addingOptionItem ? (
             <button
               onClick={() => setAddingOptionItem(true)}
               className="flex h-8 w-fit shrink-0 items-center gap-2 rounded-full border border-emerald-200 bg-emerald-50 px-3 text-base font-semibold leading-none text-emerald-700 transition hover:bg-emerald-100"
@@ -6292,7 +6654,7 @@ function ContextDetailBlock({
               <span className="text-base leading-none">+</span>
               <span>Ajouter une note</span>
             </button>
-          ) : (
+          ) : canEdit ? (
             <form onSubmit={addOptionItem} className="flex min-w-0 flex-col gap-2">
               <textarea
                 required
@@ -6306,22 +6668,25 @@ function ContextDetailBlock({
                 Ajouter
               </button>
             </form>
-          )}
+          ) : null}
         {selectedOption.items.map((item) => (
           <div key={item.id} className={cn("group flex min-h-12 w-full items-start gap-3 rounded-xl border px-3 py-2.5", optionTone.surface, optionTone.border)}>
             <p className={cn("min-w-0 flex-1 whitespace-pre-wrap text-base font-medium leading-relaxed", optionTone.text)}>{item.label}</p>
-            <button
-              onClick={() => void removeOptionItem(item)}
-              className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-emerald-500 opacity-100 transition hover:bg-white/70 hover:text-emerald-800 focus:opacity-100 [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover:opacity-100"
-              aria-label="Supprimer cette note"
-            >
-              <X className="h-3.5 w-3.5" />
-            </button>
+            {canEdit && (
+              <button
+                onClick={() => void removeOptionItem(item)}
+                className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-emerald-500 opacity-100 transition hover:bg-white/70 hover:text-emerald-800 focus:opacity-100 [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover:opacity-100"
+                aria-label="Supprimer cette note"
+              >
+                <X className="h-3.5 w-3.5" />
+              </button>
+            )}
           </div>
         ))}
         </div>
         {optionItemError && <div className="text-base font-medium text-rose-700">{optionItemError}</div>}
       </div>
+      {canEdit && (
       <div className="mt-4">
         <div className="mb-2 text-base font-semibold uppercase tracking-[0.16em] text-stone-500">Collaborateurs</div>
         <div className="flex flex-wrap gap-2">
@@ -6345,6 +6710,7 @@ function ContextDetailBlock({
         </div>
         {optionAssigneeError && <div className="mt-2 text-base font-medium text-rose-700">{optionAssigneeError}</div>}
       </div>
+      )}
     </Card>
   );
 }
@@ -6705,6 +7071,7 @@ function EventHistorySheet({
   restoringActivityId,
   onClose,
   onRestore,
+  canRestore,
 }: {
   event: ProductionEvent;
   entries: EventActivityLog[];
@@ -6713,6 +7080,7 @@ function EventHistorySheet({
   restoringActivityId: string | null;
   onClose: () => void;
   onRestore: (entry: EventActivityLog) => Promise<void>;
+  canRestore: boolean;
 }) {
   return (
     <div className="fixed inset-0 z-50 flex items-end bg-stone-950/10 p-3 sm:items-center sm:justify-center sm:p-6">
@@ -6740,7 +7108,7 @@ function EventHistorySheet({
             {entries.map((entry) => {
               const previousLabel = getActivityValueLabel(entry.previousValue);
               const nextLabel = getActivityValueLabel(entry.newValue);
-              const isRestorable = canRestoreActivity(entry);
+              const isRestorable = canRestore && canRestoreActivity(entry);
               const isRestoring = restoringActivityId === entry.id;
 
               return (
@@ -6786,6 +7154,8 @@ function TrashEventsSheet({
   onClose,
   onRestore,
   onPermanentDeleteRequest,
+  canRestore,
+  canPermanentDelete,
 }: {
   events: ProductionEvent[];
   loading: boolean;
@@ -6794,6 +7164,8 @@ function TrashEventsSheet({
   onClose: () => void;
   onRestore: (event: ProductionEvent) => Promise<void>;
   onPermanentDeleteRequest: (event: ProductionEvent) => void;
+  canRestore: boolean;
+  canPermanentDelete: boolean;
 }) {
   return (
     <div className="fixed inset-0 z-50 flex items-end bg-stone-950/10 p-3 sm:items-center sm:justify-center sm:p-6">
@@ -6831,22 +7203,26 @@ function TrashEventsSheet({
                     </div>
                   </div>
                   <div className="mt-3 flex flex-wrap justify-end gap-2">
-                    <button
-                      type="button"
-                      onClick={() => void onRestore(event)}
-                      disabled={isRestoring}
-                      className="rounded-full border border-stone-200 bg-white px-3 py-1.5 text-base font-semibold text-stone-600 transition hover:bg-stone-100 disabled:text-stone-300"
-                    >
-                      {isRestoring ? "Restauration..." : "Restaurer"}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => onPermanentDeleteRequest(event)}
-                      disabled={isRestoring}
-                      className="rounded-full border border-[#bb2720]/20 bg-white px-3 py-1.5 text-base font-semibold text-[#bb2720] transition hover:bg-[#bb2720]/[0.05] disabled:text-stone-300"
-                    >
-                      Supprimer définitivement
-                    </button>
+                    {canRestore && (
+                      <button
+                        type="button"
+                        onClick={() => void onRestore(event)}
+                        disabled={isRestoring}
+                        className="rounded-full border border-stone-200 bg-white px-3 py-1.5 text-base font-semibold text-stone-600 transition hover:bg-stone-100 disabled:text-stone-300"
+                      >
+                        {isRestoring ? "Restauration..." : "Restaurer"}
+                      </button>
+                    )}
+                    {canPermanentDelete && (
+                      <button
+                        type="button"
+                        onClick={() => onPermanentDeleteRequest(event)}
+                        disabled={isRestoring}
+                        className="rounded-full border border-[#bb2720]/20 bg-white px-3 py-1.5 text-base font-semibold text-[#bb2720] transition hover:bg-[#bb2720]/[0.05] disabled:text-stone-300"
+                      >
+                        Supprimer définitivement
+                      </button>
+                    )}
                   </div>
                 </div>
               );
@@ -7573,6 +7949,59 @@ function HeaderIcon({ label, icon: Icon, onClick }: { label: string; icon: Lucid
   );
 }
 
+function AccountMenu({ profile, email, onLogout }: { profile: UserProfile | null; email?: string; onLogout: () => void }) {
+  const [open, setOpen] = useState(false);
+  const wrapperRef = useRef<HTMLDivElement | null>(null);
+  const displayName = getProfileDisplayName(profile) ?? email ?? "Utilisateur";
+  const initials = getProfileInitials(profile, email);
+
+  useEffect(() => {
+    if (!open) return;
+
+    function handlePointerDown(event: PointerEvent) {
+      const target = event.target;
+      if (!(target instanceof Node)) return;
+      if (wrapperRef.current?.contains(target)) return;
+      setOpen(false);
+    }
+
+    document.addEventListener("pointerdown", handlePointerDown);
+    return () => document.removeEventListener("pointerdown", handlePointerDown);
+  }, [open]);
+
+  return (
+    <div ref={wrapperRef} className="relative">
+      <button
+        type="button"
+        onClick={() => setOpen((current) => !current)}
+        className="flex h-10 w-10 items-center justify-center rounded-full border border-stone-200 bg-white text-sm font-semibold text-stone-700 transition hover:bg-stone-50"
+        aria-label="Compte"
+        title={displayName}
+      >
+        {initials}
+      </button>
+      {open && (
+        <div className="absolute right-0 top-14 z-40 w-56 rounded-2xl border border-stone-200 bg-white/95 p-1.5 text-right backdrop-blur-xl">
+          <div className="px-4 py-3">
+            <p className="truncate text-base font-semibold text-stone-950">{displayName}</p>
+            <p className="mt-1 truncate text-sm font-medium text-stone-500">{profile ? getRoleLabel(profile.role) : email}</p>
+          </div>
+          <button
+            type="button"
+            onClick={() => {
+              setOpen(false);
+              void onLogout();
+            }}
+            className="block w-full rounded-xl px-4 py-3 text-right text-base font-medium text-stone-700 transition hover:bg-[#bb2720]/[0.05] hover:text-stone-950"
+          >
+            Déconnexion
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 const inlineAddInputClassName =
   "h-9 min-w-0 rounded-xl border border-stone-200 bg-white px-3 text-base font-medium text-stone-950 outline-none transition placeholder:text-stone-300 focus:border-[#bb2720]/40";
 
@@ -7587,7 +8016,7 @@ function SectionHeader({
   align?: "left" | "right";
   tone: ItemKind;
   addLabel: string;
-  onAdd: () => void;
+  onAdd?: () => void;
 }) {
   const addTone =
     tone === "option"
@@ -7606,14 +8035,16 @@ function SectionHeader({
       >
         {label}
       </h2>
-      <button
-        onClick={onAdd}
-        className={cn("flex h-5 w-5 shrink-0 items-center justify-center rounded-full border text-base font-semibold leading-none transition sm:h-6 sm:w-6", addTone)}
-        aria-label={addLabel}
-        title={addLabel}
-      >
-        +
-      </button>
+      {onAdd && (
+        <button
+          onClick={onAdd}
+          className={cn("flex h-5 w-5 shrink-0 items-center justify-center rounded-full border text-base font-semibold leading-none transition sm:h-6 sm:w-6", addTone)}
+          aria-label={addLabel}
+          title={addLabel}
+        >
+          +
+        </button>
+      )}
     </div>
   );
 }
@@ -7776,5 +8207,97 @@ function StatusMessage({ children, tone = "neutral" }: { children: React.ReactNo
         {children}
       </span>
     </div>
+  );
+}
+
+function FullScreenStatus({ children, tone = "neutral" }: { children: React.ReactNode; tone?: "neutral" | "error" }) {
+  return (
+    <main className="flex h-screen h-[100svh] items-center justify-center bg-[#f7f9fb] p-4 text-stone-950">
+      <div
+        className={cn(
+          "rounded-3xl border bg-white px-5 py-4 text-base font-semibold",
+          tone === "error" ? "border-rose-200 text-rose-700" : "border-stone-200 text-stone-600",
+        )}
+      >
+        {children}
+      </div>
+    </main>
+  );
+}
+
+function LoginScreen({ error }: { error: string | null }) {
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [loginError, setLoginError] = useState<string | null>(null);
+
+  async function submitLogin(formEvent: React.FormEvent<HTMLFormElement>) {
+    formEvent.preventDefault();
+    if (!supabase) {
+      setLoginError("Configuration Supabase manquante.");
+      return;
+    }
+
+    setSubmitting(true);
+    setLoginError(null);
+
+    const { error: signInError } = await supabase.auth.signInWithPassword({
+      email: email.trim(),
+      password,
+    });
+
+    if (signInError) {
+      setLoginError(signInError.message);
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <main className="flex h-screen h-[100svh] items-center justify-center bg-[#f7f9fb] p-4 text-stone-950">
+      <form onSubmit={submitLogin} className="w-full max-w-sm rounded-3xl border border-stone-200 bg-white p-5 sm:p-6">
+        <div className="mb-6 flex items-center gap-3">
+          <img src="/brand/mon-studio-tv-icon.png" alt="Mon Studio TV" className="h-11 w-auto" />
+          <div>
+            <h1 className="text-base font-semibold text-stone-950">MSTV Production OS</h1>
+            <p className="mt-1 text-base font-medium text-stone-500">Connexion</p>
+          </div>
+        </div>
+
+        <div className="space-y-3">
+          <input
+            type="email"
+            required
+            autoComplete="email"
+            value={email}
+            onChange={(event) => setEmail(event.target.value)}
+            placeholder="Email"
+            className={formInputClassName}
+          />
+          <input
+            type="password"
+            required
+            autoComplete="current-password"
+            value={password}
+            onChange={(event) => setPassword(event.target.value)}
+            placeholder="Mot de passe"
+            className={formInputClassName}
+          />
+        </div>
+
+        {(loginError || error) && (
+          <div className="mt-4 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-base font-medium text-rose-700">
+            {loginError ?? error}
+          </div>
+        )}
+
+        <button
+          type="submit"
+          disabled={submitting}
+          className="mt-5 h-11 w-full rounded-full bg-[#bb2720] text-base font-semibold text-white transition hover:bg-[#a7211b] disabled:bg-stone-300"
+        >
+          {submitting ? "Connexion..." : "Se connecter"}
+        </button>
+      </form>
+    </main>
   );
 }
