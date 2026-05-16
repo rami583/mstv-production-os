@@ -202,6 +202,10 @@ type ProductionEvent = {
   status: EventStatus;
   deletedAt: string | null;
   deletedBy: string | null;
+  quoteReference: string | null;
+  quoteVersion: string | null;
+  sourceQuoteText: string | null;
+  lastQuoteImportedAt: string | null;
   createdAt: string;
   updatedAt: string;
   options: EventOption[];
@@ -229,6 +233,9 @@ type CreateEventInput = {
   endTime: string;
   endOfDayTime: string;
   optionLabels?: string[];
+  quoteReference?: string | null;
+  quoteVersion?: string | null;
+  sourceQuoteText?: string | null;
 };
 
 type QuoteExtractionResult = {
@@ -240,6 +247,21 @@ type QuoteExtractionResult = {
   endTime: string;
   endOfDayTime: string;
   services: string[];
+  quoteReference: string;
+  quoteVersion: string;
+  sourceQuoteText: string;
+};
+
+type QuoteImportResolution = {
+  existingEvent: ProductionEvent;
+  input: CreateEventInput;
+  differences: QuoteImportDifference[];
+};
+
+type QuoteImportDifference = {
+  label: string;
+  previousValue: string;
+  nextValue: string;
 };
 
 type CompletedByOverrideValue = "rami" | "antoine" | "arthur" | "tony" | "gauthier" | "guillaume" | "externe";
@@ -594,6 +616,28 @@ function extractQuoteServices(text: string) {
   return uniqueLabels(serviceRules.filter((rule) => rule.keywords.some((keyword) => normalizedText.includes(normalizeLabel(keyword)))).map((rule) => rule.label));
 }
 
+function normalizeQuoteText(text: string) {
+  return text
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function extractQuoteReference(text: string, fileName: string) {
+  const candidates = `${fileName}\n${text}`;
+  const referenceMatch =
+    candidates.match(/\b(DE\d{6}-\d{3,})\b/i) ||
+    candidates.match(/\b(?:devis|quote)\s*(?:n[°o.]?|#|:)?\s*([A-Z]{1,4}\d{4,8}-\d{2,6})\b/i);
+  return referenceMatch?.[1]?.toLocaleUpperCase("fr-FR") ?? "";
+}
+
+function extractQuoteVersion(text: string) {
+  const normalizedText = normalizeQuoteText(text);
+  const versionMatch = normalizedText.match(/\b(?:version|v)\s*[:#-]?\s*(\d+(?:\.\d+)?)\b/i);
+  if (versionMatch?.[1]) return `v${versionMatch[1]}`;
+  if (/\bannule\s+et\s+remplace\b/i.test(normalizedText)) return "annule-et-remplace";
+  return "";
+}
+
 function extractQuoteFields(text: string, fallbackDate: string, fileName: string): QuoteExtractionResult {
   const lines = text
     .split(/\n+/)
@@ -639,6 +683,9 @@ function extractQuoteFields(text: string, fallbackDate: string, fileName: string
     endTime: productionTimeRange.endTime,
     endOfDayTime: "",
     services: extractQuoteServices(text),
+    quoteReference: extractQuoteReference(text, fileName),
+    quoteVersion: extractQuoteVersion(text),
+    sourceQuoteText: normalizeQuoteText(text),
   };
 }
 
@@ -677,6 +724,23 @@ function normalizeLabel(label: string) {
     .trim();
 }
 
+function getTokenSet(value: string) {
+  return new Set(normalizeLabel(value).split(/[^a-z0-9]+/).filter((token) => token.length > 1));
+}
+
+function getTextSimilarity(left: string, right: string) {
+  const leftTokens = getTokenSet(left);
+  const rightTokens = getTokenSet(right);
+  if (leftTokens.size === 0 || rightTokens.size === 0) return 0;
+
+  let shared = 0;
+  leftTokens.forEach((token) => {
+    if (rightTokens.has(token)) shared += 1;
+  });
+
+  return shared / Math.max(leftTokens.size, rightTokens.size);
+}
+
 function formatTitleCase(label: string) {
   return label
     .trim()
@@ -684,6 +748,61 @@ function formatTitleCase(label: string) {
     .replace(/(^|[^\p{L}\p{N}])([\p{L}])/gu, (_, separator: string, letter: string) => {
       return `${separator}${letter.toLocaleUpperCase("fr-FR")}`;
     });
+}
+
+function findMatchingQuoteEvent(events: ProductionEvent[], input: CreateEventInput) {
+  const quoteReference = input.quoteReference?.trim();
+  const activeEvents = events.filter((event) => !event.deletedAt);
+
+  if (quoteReference) {
+    const exactReferenceMatch = activeEvents.find((event) => event.quoteReference?.trim().toLocaleUpperCase("fr-FR") === quoteReference.toLocaleUpperCase("fr-FR"));
+    if (exactReferenceMatch) return exactReferenceMatch;
+  }
+
+  const scoredMatches = activeEvents
+    .map((event) => {
+      const clientSimilarity = getTextSimilarity(event.clientName, input.clientName);
+      const eventNameSimilarity = getTextSimilarity(event.eventName, input.eventName);
+      const sameDate = event.date === input.date;
+      const score = (sameDate ? 0.45 : 0) + clientSimilarity * 0.35 + eventNameSimilarity * 0.2;
+      return { event, score };
+    })
+    .filter((match) => match.score >= 0.64)
+    .sort((a, b) => b.score - a.score);
+
+  return scoredMatches[0]?.event ?? null;
+}
+
+function getQuoteImportDifferences(existingEvent: ProductionEvent, input: CreateEventInput): QuoteImportDifference[] {
+  const differences: QuoteImportDifference[] = [];
+  const addDifference = (label: string, previousValue: string | null | undefined, nextValue: string | null | undefined) => {
+    const previousDisplay = previousValue || "--";
+    const nextDisplay = nextValue || "--";
+    if (previousDisplay === nextDisplay) return;
+    differences.push({ label, previousValue: previousDisplay, nextValue: nextDisplay });
+  };
+
+  addDifference("Client", existingEvent.clientName, input.clientName);
+  addDifference("Événement", existingEvent.eventName, input.eventName);
+  addDifference("Date", formatFullDate(existingEvent.date), formatFullDate(input.date));
+  addDifference("Arrivée client", toTimeInputValue(existingEvent.clientArrivalTime), input.clientArrivalTime);
+  addDifference("Début", toTimeInputValue(existingEvent.startTime), input.startTime);
+  addDifference("Fin", toTimeInputValue(existingEvent.endTime), input.endTime);
+  addDifference("Fin journée", toTimeInputValue(existingEvent.endOfDayTime), input.endOfDayTime);
+
+  const existingOptionKeys = new Set(existingEvent.options.map((option) => normalizeLabel(option.label)));
+  const importedOptionKeys = new Set((input.optionLabels ?? []).map(normalizeLabel));
+  const addedOptions = (input.optionLabels ?? []).filter((label) => !existingOptionKeys.has(normalizeLabel(label)));
+  const removedOptions = existingEvent.options.filter((option) => importedOptionKeys.size > 0 && !importedOptionKeys.has(normalizeLabel(option.label))).map((option) => option.label);
+
+  if (addedOptions.length > 0) {
+    differences.push({ label: "Options ajoutées", previousValue: "--", nextValue: addedOptions.join(", ") });
+  }
+  if (removedOptions.length > 0) {
+    differences.push({ label: "Options absentes du devis", previousValue: removedOptions.join(", "), nextValue: "Conservées" });
+  }
+
+  return differences;
 }
 
 function sanitizeStorageFileName(fileName: string) {
@@ -973,6 +1092,10 @@ function mapEvent(row: EventQueryRow): ProductionEvent {
     status: row.status,
     deletedAt: row.deleted_at ?? null,
     deletedBy: row.deleted_by ?? null,
+    quoteReference: row.quote_reference ?? null,
+    quoteVersion: row.quote_version ?? null,
+    sourceQuoteText: row.source_quote_text ?? null,
+    lastQuoteImportedAt: row.last_quote_imported_at ?? null,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     options,
@@ -1756,6 +1879,10 @@ export default function Home() {
         start_time: normalizedInput.startTime || null,
         end_time: normalizedInput.endTime || null,
         end_of_day_time: normalizedInput.endOfDayTime || null,
+        quote_reference: normalizedInput.quoteReference?.trim() || null,
+        quote_version: normalizedInput.quoteVersion?.trim() || null,
+        source_quote_text: normalizedInput.sourceQuoteText?.trim() || null,
+        last_quote_imported_at: normalizedInput.sourceQuoteText || normalizedInput.quoteReference ? new Date().toISOString() : null,
       })
       .select()
       .single();
@@ -1821,6 +1948,20 @@ export default function Home() {
       },
     });
 
+    if (normalizedInput.sourceQuoteText || normalizedInput.quoteReference) {
+      await logEventActivity({
+        eventId: event.id,
+        actionType: "quote_imported",
+        entityType: "event",
+        entityId: event.id,
+        description: "Devis importé",
+        newValue: {
+          quoteReference: normalizedInput.quoteReference ?? null,
+          quoteVersion: normalizedInput.quoteVersion ?? null,
+        },
+      });
+    }
+
     await reloadData(event.id);
     setSelectedDateKey(event.date);
     setVisibleMonth(new Date(`${event.date}T12:00:00`));
@@ -1865,6 +2006,10 @@ export default function Home() {
       status: data.status,
       deletedAt: data.deleted_at ?? null,
       deletedBy: data.deleted_by ?? null,
+      quoteReference: data.quote_reference ?? null,
+      quoteVersion: data.quote_version ?? null,
+      sourceQuoteText: data.source_quote_text ?? null,
+      lastQuoteImportedAt: data.last_quote_imported_at ?? null,
       updatedAt: data.updated_at,
     };
 
@@ -1901,6 +2046,127 @@ export default function Home() {
         newValue: { field, value: nextValue },
       });
     }
+  }
+
+  async function updateEventFromQuote(event: ProductionEvent, input: CreateEventInput) {
+    assertCanManageEvents();
+    if (!supabase) {
+      throw new Error("Configuration Supabase manquante.");
+    }
+
+    const normalizedInput = normalizeEventTimeInput(input);
+    const importTimestamp = new Date().toISOString();
+    const updatePayload: Database["public"]["Tables"]["events"]["Update"] = {
+      client_name: normalizedInput.clientName,
+      event_name: normalizedInput.eventName,
+      date: normalizedInput.date,
+      client_arrival_time: normalizedInput.clientArrivalTime || null,
+      start_time: normalizedInput.startTime || null,
+      end_time: normalizedInput.endTime || null,
+      end_of_day_time: normalizedInput.endOfDayTime || null,
+      quote_reference: normalizedInput.quoteReference?.trim() || event.quoteReference,
+      quote_version: normalizedInput.quoteVersion?.trim() || event.quoteVersion,
+      source_quote_text: normalizedInput.sourceQuoteText?.trim() || event.sourceQuoteText,
+      last_quote_imported_at: importTimestamp,
+    };
+
+    const { error: updateError } = await supabase.from("events").update(updatePayload).eq("id", event.id);
+    if (updateError) throw updateError;
+
+    const existingOptionKeys = new Set(event.options.map((option) => normalizeLabel(option.label)));
+    const optionLabelsToAdd = uniqueLabels(normalizedInput.optionLabels ?? []).filter((label) => !existingOptionKeys.has(normalizeLabel(label)));
+
+    if (optionLabelsToAdd.length > 0) {
+      const { data: insertedOptions, error: optionError } = await supabase
+        .from("event_options")
+        .insert(
+          optionLabelsToAdd.map((label) => {
+            const defaultOption = defaultOptions.find((option) => normalizeLabel(option.label) === normalizeLabel(label));
+            return {
+              event_id: event.id,
+              label,
+              status: "incomplete" as CompletionStatus,
+              details: defaultOption?.details ?? "",
+            };
+          }),
+        )
+        .select();
+
+      if (optionError) throw optionError;
+
+      const defaultOptionItems = (insertedOptions ?? []).flatMap((option) => {
+        const defaultOption = defaultOptions.find((item) => normalizeLabel(item.label) === normalizeLabel(option.label));
+        return splitStoredDetails(defaultOption?.details ?? "").map((label) => ({
+          option_id: option.id,
+          label,
+        }));
+      });
+
+      if (defaultOptionItems.length > 0) {
+        const { error: optionItemError } = await supabase.from("event_option_items").insert(defaultOptionItems);
+        if (optionItemError) throw optionItemError;
+      }
+
+      for (const label of optionLabelsToAdd) {
+        await logEventActivity({
+          eventId: event.id,
+          actionType: "option_added_from_quote",
+          entityType: "option",
+          entityId: null,
+          description: `Option ${label} ajoutée via devis`,
+          newValue: { label },
+        });
+      }
+    }
+
+    await logEventActivity({
+      eventId: event.id,
+      actionType: "quote_event_updated",
+      entityType: "event",
+      entityId: event.id,
+      description: "Événement mis à jour depuis un nouveau devis",
+      previousValue: {
+        clientName: event.clientName,
+        eventName: event.eventName,
+        date: event.date,
+        clientArrivalTime: event.clientArrivalTime,
+        startTime: event.startTime,
+        endTime: event.endTime,
+        endOfDayTime: event.endOfDayTime,
+        quoteReference: event.quoteReference,
+        quoteVersion: event.quoteVersion,
+      },
+      newValue: {
+        clientName: normalizedInput.clientName,
+        eventName: normalizedInput.eventName,
+        date: normalizedInput.date,
+        clientArrivalTime: normalizedInput.clientArrivalTime || null,
+        startTime: normalizedInput.startTime || null,
+        endTime: normalizedInput.endTime || null,
+        endOfDayTime: normalizedInput.endOfDayTime || null,
+        quoteReference: updatePayload.quote_reference ?? null,
+        quoteVersion: updatePayload.quote_version ?? null,
+        addedOptions: optionLabelsToAdd,
+      },
+    });
+
+    await logEventActivity({
+      eventId: event.id,
+      actionType: "quote_imported",
+      entityType: "event",
+      entityId: event.id,
+      description: "Devis importé",
+      newValue: {
+        quoteReference: updatePayload.quote_reference ?? null,
+        quoteVersion: updatePayload.quote_version ?? null,
+      },
+    });
+
+    await reloadData(event.id);
+    setSelectedDateKey(normalizedInput.date);
+    setVisibleMonth(new Date(`${normalizedInput.date}T12:00:00`));
+    setSelectedId(event.id);
+    setScreen("detail");
   }
 
   async function duplicateEventToDate(sourceEvent: ProductionEvent, nextDate: string) {
@@ -3521,12 +3787,18 @@ export default function Home() {
         <QuoteImportModal
           initialFile={quoteImportFile}
           selectedDateKey={selectedDateKey}
+          events={events}
           onClose={() => {
             setQuoteImportOpen(false);
             setQuoteImportFile(null);
           }}
-          onConfirm={async (input) => {
+          onCreateEvent={async (input) => {
             await createEvent(input);
+            setQuoteImportOpen(false);
+            setQuoteImportFile(null);
+          }}
+          onUpdateEvent={async (event, input) => {
+            await updateEventFromQuote(event, input);
             setQuoteImportOpen(false);
             setQuoteImportFile(null);
           }}
@@ -7171,13 +7443,17 @@ function CreateEventModal({
 function QuoteImportModal({
   initialFile,
   selectedDateKey,
+  events,
   onClose,
-  onConfirm,
+  onCreateEvent,
+  onUpdateEvent,
 }: {
   initialFile?: File | null;
   selectedDateKey: string;
+  events: ProductionEvent[];
   onClose: () => void;
-  onConfirm: (input: CreateEventInput) => Promise<void>;
+  onCreateEvent: (input: CreateEventInput) => Promise<void>;
+  onUpdateEvent: (event: ProductionEvent, input: CreateEventInput) => Promise<void>;
 }) {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [fileName, setFileName] = useState("");
@@ -7192,7 +7468,8 @@ function QuoteImportModal({
     optionLabels: [],
   });
   const [serviceText, setServiceText] = useState("");
-  const [step, setStep] = useState<"upload" | "review">("upload");
+  const [step, setStep] = useState<"upload" | "review" | "resolve">("upload");
+  const [resolution, setResolution] = useState<QuoteImportResolution | null>(null);
   const [extracting, setExtracting] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -7226,8 +7503,12 @@ function QuoteImportModal({
         endTime: extracted.endTime,
         endOfDayTime: extracted.endOfDayTime,
         optionLabels: extracted.services,
+        quoteReference: extracted.quoteReference || null,
+        quoteVersion: extracted.quoteVersion || null,
+        sourceQuoteText: extracted.sourceQuoteText || null,
       });
       setServiceText(extracted.services.join("\n"));
+      setResolution(null);
       setStep("review");
     } catch (extractError) {
       console.error("Failed to extract quote PDF text", extractError);
@@ -7253,9 +7534,48 @@ function QuoteImportModal({
         ...form,
         optionLabels: uniqueLabels(serviceText.split(/\n|,/).map((service) => service.trim()).filter(Boolean)),
       });
-      await onConfirm(normalizedForm);
+      const existingEvent = findMatchingQuoteEvent(events, normalizedForm);
+      if (existingEvent) {
+        setResolution({
+          existingEvent,
+          input: normalizedForm,
+          differences: getQuoteImportDifferences(existingEvent, normalizedForm),
+        });
+        setStep("resolve");
+        return;
+      }
+
+      await onCreateEvent(normalizedForm);
     } catch (submitError) {
       setError(submitError instanceof Error ? submitError.message : "Impossible de créer l'événement depuis ce devis.");
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  async function createNewEventFromResolution() {
+    if (!resolution) return;
+    setSubmitting(true);
+    setError(null);
+
+    try {
+      await onCreateEvent(resolution.input);
+    } catch (submitError) {
+      setError(submitError instanceof Error ? submitError.message : "Impossible de créer l'événement depuis ce devis.");
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  async function updateExistingEventFromResolution() {
+    if (!resolution) return;
+    setSubmitting(true);
+    setError(null);
+
+    try {
+      await onUpdateEvent(resolution.existingEvent, resolution.input);
+    } catch (submitError) {
+      setError(submitError instanceof Error ? submitError.message : "Impossible de mettre à jour l'événement depuis ce devis.");
     } finally {
       setSubmitting(false);
     }
@@ -7266,7 +7586,9 @@ function QuoteImportModal({
       <form onSubmit={handleSubmit} className="w-full rounded-3xl border border-stone-200 bg-white p-5 sm:max-w-2xl sm:p-6">
         <div className="mb-5 flex items-center justify-between gap-4">
           <div>
-            <h2 className="text-base font-semibold text-stone-950">{step === "upload" ? "Importer un devis" : "Voici ce que j'ai compris du devis"}</h2>
+            <h2 className="text-base font-semibold text-stone-950">
+              {step === "upload" ? "Importer un devis" : step === "resolve" ? "Un événement existant semble correspondre à ce devis." : "Voici ce que j'ai compris du devis"}
+            </h2>
             {fileName && <p className="mt-1 truncate text-base font-medium text-stone-500">{fileName}</p>}
           </div>
           <button type="button" onClick={onClose} className="rounded-full border border-stone-200 px-3 py-1.5 text-base font-semibold text-stone-600">
@@ -7295,6 +7617,40 @@ function QuoteImportModal({
               className="hidden"
             />
           </label>
+        ) : step === "resolve" && resolution ? (
+          <div className="flex flex-col gap-3">
+            <div className="grid gap-2 sm:grid-cols-2">
+              <div className="rounded-2xl border border-stone-200 bg-stone-50 px-3 py-3">
+                <p className="text-base font-semibold text-stone-500">Événement existant</p>
+                <p className="mt-1 text-base font-semibold text-stone-950">{resolution.existingEvent.clientName}</p>
+                <p className="text-base font-medium text-stone-600">{resolution.existingEvent.eventName}</p>
+                <p className="mt-1 text-base font-medium text-stone-500">{formatFullDate(resolution.existingEvent.date)}</p>
+              </div>
+              <div className="rounded-2xl border border-[#bb2720]/20 bg-[#bb2720]/[0.04] px-3 py-3">
+                <p className="text-base font-semibold text-[#bb2720]">Nouveau devis</p>
+                <p className="mt-1 text-base font-semibold text-stone-950">{resolution.input.clientName}</p>
+                <p className="text-base font-medium text-stone-600">{resolution.input.eventName}</p>
+                <p className="mt-1 text-base font-medium text-stone-500">{formatFullDate(resolution.input.date)}</p>
+              </div>
+            </div>
+
+            <div className="rounded-2xl border border-stone-200 bg-white px-3 py-2">
+              <p className="mb-2 text-base font-semibold text-stone-600">Différences détectées</p>
+              {resolution.differences.length > 0 ? (
+                <div className="flex flex-col divide-y divide-stone-100">
+                  {resolution.differences.map((difference) => (
+                    <div key={`${difference.label}-${difference.previousValue}-${difference.nextValue}`} className="grid gap-1 py-2 sm:grid-cols-[7rem_1fr_1fr] sm:items-center">
+                      <span className="text-base font-semibold text-stone-500">{difference.label}</span>
+                      <span className="text-base font-medium text-stone-500">{difference.previousValue}</span>
+                      <span className="text-base font-semibold text-stone-950">{difference.nextValue}</span>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="text-base font-medium text-stone-500">Aucune différence majeure détectée.</p>
+              )}
+            </div>
+          </div>
         ) : (
           <>
             <div className="grid gap-3 sm:grid-cols-2">
@@ -7359,6 +7715,11 @@ function QuoteImportModal({
               Remplacer le PDF
             </button>
           )}
+          {step === "resolve" && (
+            <button type="button" onClick={() => setStep("review")} disabled={submitting} className="rounded-full border border-stone-200 bg-white px-4 py-2 text-base font-semibold text-stone-600 disabled:text-stone-300">
+              Retour
+            </button>
+          )}
           <button type="button" onClick={onClose} disabled={submitting || extracting} className="rounded-full border border-stone-200 bg-white px-4 py-2 text-base font-semibold text-stone-600 disabled:text-stone-300">
             Annuler
           </button>
@@ -7366,6 +7727,16 @@ function QuoteImportModal({
             <button disabled={submitting} className="rounded-full bg-[#bb2720] px-4 py-2 text-base font-semibold text-white disabled:bg-stone-300">
               {submitting ? "Création..." : "Créer l'événement"}
             </button>
+          )}
+          {step === "resolve" && (
+            <>
+              <button type="button" onClick={() => void createNewEventFromResolution()} disabled={submitting} className="rounded-full border border-stone-200 bg-white px-4 py-2 text-base font-semibold text-stone-700 disabled:text-stone-300">
+                Créer un nouvel événement
+              </button>
+              <button type="button" onClick={() => void updateExistingEventFromResolution()} disabled={submitting} className="rounded-full bg-[#bb2720] px-4 py-2 text-base font-semibold text-white disabled:bg-stone-300">
+                {submitting ? "Mise à jour..." : "Mettre à jour l'événement existant"}
+              </button>
+            </>
           )}
         </div>
       </form>

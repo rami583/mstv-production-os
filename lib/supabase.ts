@@ -20,6 +20,10 @@ export type Database = {
           status: EventStatus;
           deleted_at: string | null;
           deleted_by: string | null;
+          quote_reference: string | null;
+          quote_version: string | null;
+          source_quote_text: string | null;
+          last_quote_imported_at: string | null;
           created_at: string;
           updated_at: string;
         };
@@ -35,6 +39,10 @@ export type Database = {
           status?: EventStatus;
           deleted_at?: string | null;
           deleted_by?: string | null;
+          quote_reference?: string | null;
+          quote_version?: string | null;
+          source_quote_text?: string | null;
+          last_quote_imported_at?: string | null;
           created_at?: string;
           updated_at?: string;
         };
