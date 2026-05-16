@@ -5481,8 +5481,7 @@ function SwipeableCalendarEventRow({
         tabIndex={0}
         style={{ transform: `translateX(${canSwipe ? visibleOffset : 0}px)`, touchAction: "pan-y" }}
         className={cn(
-          "relative z-10 grid min-h-20 w-full cursor-pointer grid-cols-[3px_1fr_auto] items-center gap-4 rounded-xl bg-white/70 px-4 py-4 text-left hover:bg-white lg:gap-5 lg:px-5",
-          (deleteActionVisible || duplicateActionVisible) && "bg-white",
+          "relative z-10 grid min-h-20 w-full cursor-pointer grid-cols-[3px_1fr_auto] items-center gap-4 rounded-xl bg-white px-4 py-4 text-left hover:bg-white lg:gap-5 lg:px-5",
           !isDragging && "transition-transform duration-200 ease-out",
         )}
       >
