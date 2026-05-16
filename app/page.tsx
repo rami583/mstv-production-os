@@ -5526,7 +5526,7 @@ function ProductionDetail({
           onUpdateTime={onUpdateEventTime}
           onTimelineTimeEditStart={onTimelineTimeEditStart}
           onTimelineTimeEditEnd={onTimelineTimeEditEnd}
-          editable={permissions.canManageOperational}
+          editable={permissions.canManageEvents}
         />
       </Card>
 
