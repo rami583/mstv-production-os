@@ -3411,7 +3411,6 @@ function AppHeader({
   onDeleteEvent: () => void;
 }) {
   const menuWrapperRef = useRef<HTMLDivElement | null>(null);
-  const canOpenCreateMenu = canImportQuote || canCreateEvent || canDuplicateEvent || canDeleteEvent || canOpenTrash;
 
   useEffect(() => {
     if (!createMenuOpen) return;
@@ -3470,31 +3469,29 @@ function AppHeader({
         )}
         {canOpenHistory && <HeaderIcon label="Historique" icon={History} onClick={onOpenHistory} />}
         <HeaderIcon label="Rechercher" icon={Search} onClick={onSearch} />
-        {canOpenCreateMenu && (
-          <div ref={menuWrapperRef} className="relative">
-            <button
-              onClick={() => setCreateMenuOpen((current) => !current)}
-              className="flex h-10 w-10 items-center justify-center rounded-full bg-[#bb2720] text-base font-semibold leading-none text-white transition hover:bg-[#a7211b]"
-              aria-label="Créer"
-            >
-              +
-            </button>
-            {createMenuOpen && (
-              <CreateMenu
-                onImportQuote={onImportQuote}
-                onCreateEvent={onCreateEvent}
-                onOpenTrash={onOpenTrash}
-                canImportQuote={canImportQuote}
-                canCreateEvent={canCreateEvent}
-                canOpenTrash={canOpenTrash}
-                canDuplicateEvent={canDuplicateEvent}
-                onDuplicateEvent={onDuplicateEvent}
-                canDeleteEvent={canDeleteEvent}
-                onDeleteEvent={onDeleteEvent}
-              />
-            )}
-          </div>
-        )}
+        <div ref={menuWrapperRef} className="relative">
+          <button
+            onClick={() => setCreateMenuOpen((current) => !current)}
+            className="flex h-10 w-10 items-center justify-center rounded-full bg-[#bb2720] text-base font-semibold leading-none text-white transition hover:bg-[#a7211b]"
+            aria-label="Créer"
+          >
+            +
+          </button>
+          {createMenuOpen && (
+            <CreateMenu
+              onImportQuote={onImportQuote}
+              onCreateEvent={onCreateEvent}
+              onOpenTrash={onOpenTrash}
+              canImportQuote={canImportQuote}
+              canCreateEvent={canCreateEvent}
+              canOpenTrash={canOpenTrash}
+              canDuplicateEvent={canDuplicateEvent}
+              onDuplicateEvent={onDuplicateEvent}
+              canDeleteEvent={canDeleteEvent}
+              onDeleteEvent={onDeleteEvent}
+            />
+          )}
+        </div>
         <AccountMenu profile={profile} email={email} onLogout={onLogout} />
       </div>
     </header>
@@ -3524,8 +3521,15 @@ function CreateMenu({
   canDeleteEvent: boolean;
   onDeleteEvent: () => void;
 }) {
+  const hasActions = canImportQuote || canCreateEvent || canDuplicateEvent || canDeleteEvent || canOpenTrash;
+
   return (
     <div className="absolute right-1 top-14 z-40 w-56 rounded-2xl border border-stone-200 bg-white/95 p-1.5 backdrop-blur-xl">
+      {!hasActions && (
+        <div className="px-4 py-3 text-right text-base font-medium text-stone-400">
+          Lecture seule
+        </div>
+      )}
       {canImportQuote && (
         <button
           onClick={onImportQuote}
