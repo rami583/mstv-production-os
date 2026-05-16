@@ -3690,7 +3690,13 @@ export default function Home() {
                   setDeleteDialogEvent(event);
                 }
               }}
+              onDuplicateRequest={(event) => {
+                if (permissions.canManageEvents && !event.deletedAt) {
+                  setDuplicateDatePickerEvent(event);
+                }
+              }}
               canDeleteEvents={permissions.canSoftDeleteEvents}
+              canDuplicateEvents={permissions.canManageEvents}
               setSelectedDateKey={setSelectedDateKey}
               changeMonth={changeMonth}
             />
@@ -4697,7 +4703,9 @@ function CalendarDashboard({
   events,
   onOpen,
   onDeleteRequest,
+  onDuplicateRequest,
   canDeleteEvents,
+  canDuplicateEvents,
   visibleMonth,
   selectedDateKey,
   setSelectedDateKey,
@@ -4706,7 +4714,9 @@ function CalendarDashboard({
   events: ProductionEvent[];
   onOpen: (id: string) => void;
   onDeleteRequest: (event: ProductionEvent) => void;
+  onDuplicateRequest: (event: ProductionEvent) => void;
   canDeleteEvents: boolean;
+  canDuplicateEvents: boolean;
   visibleMonth: Date;
   selectedDateKey: string;
   setSelectedDateKey: (dateKey: string) => void;
@@ -4878,7 +4888,9 @@ function CalendarDashboard({
           onSelectDate={setSelectedDateKey}
           onOpen={onOpen}
           onDeleteRequest={onDeleteRequest}
+          onDuplicateRequest={onDuplicateRequest}
           canDeleteEvents={canDeleteEvents}
+          canDuplicateEvents={canDuplicateEvents}
           onPreviousMonth={() => animateMonthChange(-1)}
           onNextMonth={() => animateMonthChange(1)}
           interactive={false}
@@ -4891,7 +4903,9 @@ function CalendarDashboard({
           onSelectDate={setSelectedDateKey}
           onOpen={onOpen}
           onDeleteRequest={onDeleteRequest}
+          onDuplicateRequest={onDuplicateRequest}
           canDeleteEvents={canDeleteEvents}
+          canDuplicateEvents={canDuplicateEvents}
           onPreviousMonth={() => animateMonthChange(-1)}
           onNextMonth={() => animateMonthChange(1)}
           onCalendarPointerDown={handleMonthSwipePointerDown}
@@ -4914,7 +4928,9 @@ function CalendarDashboard({
           onSelectDate={setSelectedDateKey}
           onOpen={onOpen}
           onDeleteRequest={onDeleteRequest}
+          onDuplicateRequest={onDuplicateRequest}
           canDeleteEvents={canDeleteEvents}
+          canDuplicateEvents={canDuplicateEvents}
           onPreviousMonth={() => animateMonthChange(-1)}
           onNextMonth={() => animateMonthChange(1)}
           interactive={false}
@@ -4932,7 +4948,9 @@ function CalendarMonthPage({
   onSelectDate,
   onOpen,
   onDeleteRequest,
+  onDuplicateRequest,
   canDeleteEvents,
+  canDuplicateEvents,
   onPreviousMonth,
   onNextMonth,
   onCalendarPointerDown,
@@ -4949,7 +4967,9 @@ function CalendarMonthPage({
   onSelectDate: (dateKey: string) => void;
   onOpen: (id: string) => void;
   onDeleteRequest: (event: ProductionEvent) => void;
+  onDuplicateRequest: (event: ProductionEvent) => void;
   canDeleteEvents: boolean;
+  canDuplicateEvents: boolean;
   onPreviousMonth: () => void;
   onNextMonth: () => void;
   onCalendarPointerDown?: (event: ReactPointerEvent<HTMLDivElement>) => void;
@@ -5003,7 +5023,15 @@ function CalendarMonthPage({
         </div>
       </div>
       <div className="no-scrollbar min-h-0 flex-1 overflow-y-auto overscroll-contain pb-5">
-        <SelectedDayEvents markers={selectedMarkers} events={selectedEvents} onOpen={onOpen} onDeleteRequest={onDeleteRequest} canDeleteEvents={canDeleteEvents} />
+        <SelectedDayEvents
+          markers={selectedMarkers}
+          events={selectedEvents}
+          onOpen={onOpen}
+          onDeleteRequest={onDeleteRequest}
+          onDuplicateRequest={onDuplicateRequest}
+          canDeleteEvents={canDeleteEvents}
+          canDuplicateEvents={canDuplicateEvents}
+        />
       </div>
     </div>
   );
@@ -5164,35 +5192,39 @@ function SelectedDayEvents({
   events,
   onOpen,
   onDeleteRequest,
+  onDuplicateRequest,
   canDeleteEvents,
+  canDuplicateEvents,
 }: {
   markers: CalendarMarker[];
   events: ProductionEvent[];
   onOpen: (id: string) => void;
   onDeleteRequest: (event: ProductionEvent) => void;
+  onDuplicateRequest: (event: ProductionEvent) => void;
   canDeleteEvents: boolean;
+  canDuplicateEvents: boolean;
 }) {
-  const [openDeleteEventId, setOpenDeleteEventId] = useState<string | null>(null);
+  const [openSwipeAction, setOpenSwipeAction] = useState<{ eventId: string; type: "delete" | "duplicate" } | null>(null);
   const sectionRef = useRef<HTMLElement | null>(null);
 
   useEffect(() => {
-    if (!openDeleteEventId) return;
+    if (!openSwipeAction) return;
 
     function handlePointerDown(event: PointerEvent) {
       if (!sectionRef.current?.contains(event.target as Node)) {
-        setOpenDeleteEventId(null);
+        setOpenSwipeAction(null);
       }
     }
 
     document.addEventListener("pointerdown", handlePointerDown);
     return () => document.removeEventListener("pointerdown", handlePointerDown);
-  }, [openDeleteEventId]);
+  }, [openSwipeAction]);
 
   useEffect(() => {
-    if (!canDeleteEvents) {
-      setOpenDeleteEventId(null);
+    if ((!canDeleteEvents && openSwipeAction?.type === "delete") || (!canDuplicateEvents && openSwipeAction?.type === "duplicate")) {
+      setOpenSwipeAction(null);
     }
-  }, [canDeleteEvents]);
+  }, [canDeleteEvents, canDuplicateEvents, openSwipeAction]);
 
   if (markers.length === 0 && events.length === 0) return null;
   const orderedMarkers = [...markers].sort((a, b) => {
@@ -5204,8 +5236,8 @@ function SelectedDayEvents({
     <section
       ref={sectionRef}
       onPointerDown={(pointerEvent) => {
-        if (openDeleteEventId && !(pointerEvent.target as HTMLElement).closest("[data-calendar-swipe-row]")) {
-          setOpenDeleteEventId(null);
+        if (openSwipeAction && !(pointerEvent.target as HTMLElement).closest("[data-calendar-swipe-row]")) {
+          setOpenSwipeAction(null);
         }
       }}
       className="space-y-1.5 lg:space-y-2"
@@ -5215,14 +5247,21 @@ function SelectedDayEvents({
           key={event.id}
           event={event}
           canDelete={canDeleteEvents}
-          isDeleteOpen={openDeleteEventId === event.id}
-          hasOpenDelete={Boolean(openDeleteEventId)}
-          onOpenDelete={() => setOpenDeleteEventId(event.id)}
-          onCloseDelete={() => setOpenDeleteEventId(null)}
+          canDuplicate={canDuplicateEvents}
+          isDeleteOpen={openSwipeAction?.eventId === event.id && openSwipeAction.type === "delete"}
+          isDuplicateOpen={openSwipeAction?.eventId === event.id && openSwipeAction.type === "duplicate"}
+          hasOpenAction={Boolean(openSwipeAction)}
+          onOpenDelete={() => setOpenSwipeAction({ eventId: event.id, type: "delete" })}
+          onOpenDuplicate={() => setOpenSwipeAction({ eventId: event.id, type: "duplicate" })}
+          onCloseAction={() => setOpenSwipeAction(null)}
           onOpenEvent={onOpen}
           onDeleteRequest={(eventToDelete) => {
-            setOpenDeleteEventId(null);
+            setOpenSwipeAction(null);
             onDeleteRequest(eventToDelete);
+          }}
+          onDuplicateRequest={(eventToDuplicate) => {
+            setOpenSwipeAction(null);
+            onDuplicateRequest(eventToDuplicate);
           }}
         />
       ))}
@@ -5250,40 +5289,50 @@ function SelectedDayEvents({
   );
 }
 
-const calendarEventDeleteActionWidth = 104;
+const calendarEventSwipeActionWidth = 112;
 const calendarEventFullSwipeRatio = 0.65;
 
 function SwipeableCalendarEventRow({
   event,
   canDelete,
+  canDuplicate,
   isDeleteOpen,
-  hasOpenDelete,
+  isDuplicateOpen,
+  hasOpenAction,
   onOpenDelete,
-  onCloseDelete,
+  onOpenDuplicate,
+  onCloseAction,
   onOpenEvent,
   onDeleteRequest,
+  onDuplicateRequest,
 }: {
   event: ProductionEvent;
   canDelete: boolean;
+  canDuplicate: boolean;
   isDeleteOpen: boolean;
-  hasOpenDelete: boolean;
+  isDuplicateOpen: boolean;
+  hasOpenAction: boolean;
   onOpenDelete: () => void;
-  onCloseDelete: () => void;
+  onOpenDuplicate: () => void;
+  onCloseAction: () => void;
   onOpenEvent: (id: string) => void;
   onDeleteRequest: (event: ProductionEvent) => void;
+  onDuplicateRequest: (event: ProductionEvent) => void;
 }) {
   const [dragOffset, setDragOffset] = useState(0);
   const [isDragging, setIsDragging] = useState(false);
   const rowRef = useRef<HTMLDivElement | null>(null);
   const pointerStartRef = useRef<{ pointerId: number; x: number; y: number } | null>(null);
   const suppressClickRef = useRef(false);
-  const baseOffset = canDelete && isDeleteOpen ? -calendarEventDeleteActionWidth : 0;
+  const canSwipe = canDelete || canDuplicate;
+  const baseOffset = canDelete && isDeleteOpen ? -calendarEventSwipeActionWidth : canDuplicate && isDuplicateOpen ? calendarEventSwipeActionWidth : 0;
   const visibleOffset = isDragging ? dragOffset : baseOffset;
   const deleteActionVisible = canDelete && visibleOffset < -1;
+  const duplicateActionVisible = canDuplicate && visibleOffset > 1;
   const timeRange = formatTimeRange(event.startTime, event.endTime);
 
   function handlePointerDown(pointerEvent: ReactPointerEvent<HTMLDivElement>) {
-    if (!canDelete) return;
+    if (!canSwipe) return;
     if ((pointerEvent.target as HTMLElement).closest("[data-swipe-action]")) return;
 
     pointerStartRef.current = {
@@ -5297,7 +5346,7 @@ function SwipeableCalendarEventRow({
   }
 
   function handlePointerMove(pointerEvent: ReactPointerEvent<HTMLDivElement>) {
-    if (!canDelete) return;
+    if (!canSwipe) return;
     const pointerStart = pointerStartRef.current;
     if (!pointerStart) return;
 
@@ -5309,8 +5358,10 @@ function SwipeableCalendarEventRow({
       return;
     }
 
-    const rowWidth = rowRef.current?.offsetWidth ?? calendarEventDeleteActionWidth;
-    const nextOffset = Math.max(-rowWidth, Math.min(0, baseOffset + deltaX));
+    const rowWidth = rowRef.current?.offsetWidth ?? calendarEventSwipeActionWidth;
+    const minOffset = canDelete ? -rowWidth : 0;
+    const maxOffset = canDuplicate ? rowWidth : 0;
+    const nextOffset = Math.max(minOffset, Math.min(maxOffset, baseOffset + deltaX));
     if (Math.abs(deltaX) > 6) {
       suppressClickRef.current = true;
       pointerEvent.preventDefault();
@@ -5319,29 +5370,41 @@ function SwipeableCalendarEventRow({
   }
 
   function handlePointerUp(pointerEvent: ReactPointerEvent<HTMLDivElement>) {
-    if (!canDelete) return;
+    if (!canSwipe) return;
     const pointerStart = pointerStartRef.current;
     if (!pointerStart) return;
 
     const deltaX = pointerEvent.clientX - pointerStart.x;
-    const rowWidth = rowRef.current?.offsetWidth ?? calendarEventDeleteActionWidth;
-    const finalOffset = Math.max(-rowWidth, Math.min(0, baseOffset + deltaX));
+    const rowWidth = rowRef.current?.offsetWidth ?? calendarEventSwipeActionWidth;
+    const minOffset = canDelete ? -rowWidth : 0;
+    const maxOffset = canDuplicate ? rowWidth : 0;
+    const finalOffset = Math.max(minOffset, Math.min(maxOffset, baseOffset + deltaX));
     const fullSwipeThreshold = rowWidth * calendarEventFullSwipeRatio;
-    const shouldRequestDelete = Math.abs(finalOffset) >= fullSwipeThreshold;
-    const shouldOpen = finalOffset < -calendarEventDeleteActionWidth / 2;
-    const shouldClose = isDeleteOpen && deltaX > calendarEventDeleteActionWidth / 3;
+    const shouldRequestDelete = canDelete && finalOffset <= -fullSwipeThreshold;
+    const shouldRequestDuplicate = canDuplicate && finalOffset >= fullSwipeThreshold;
+    const shouldOpenDelete = canDelete && finalOffset < -calendarEventSwipeActionWidth / 2;
+    const shouldOpenDuplicate = canDuplicate && finalOffset > calendarEventSwipeActionWidth / 2;
+    const shouldCloseDelete = isDeleteOpen && deltaX > calendarEventSwipeActionWidth / 3;
+    const shouldCloseDuplicate = isDuplicateOpen && deltaX < -calendarEventSwipeActionWidth / 3;
 
     pointerStartRef.current = null;
     setIsDragging(false);
     setDragOffset(0);
 
     if (shouldRequestDelete) {
-      onCloseDelete();
+      onCloseAction();
       onDeleteRequest(event);
-    } else if (shouldClose || !shouldOpen) {
-      onCloseDelete();
-    } else {
+    } else if (shouldRequestDuplicate) {
+      onCloseAction();
+      onDuplicateRequest(event);
+    } else if (shouldOpenDelete) {
       onOpenDelete();
+    } else if (shouldOpenDuplicate) {
+      onOpenDuplicate();
+    } else if (shouldCloseDelete || shouldCloseDuplicate) {
+      onCloseAction();
+    } else {
+      onCloseAction();
     }
   }
 
@@ -5351,8 +5414,8 @@ function SwipeableCalendarEventRow({
       return;
     }
 
-    if (hasOpenDelete) {
-      onCloseDelete();
+    if (hasOpenAction) {
+      onCloseAction();
       return;
     }
 
@@ -5361,6 +5424,22 @@ function SwipeableCalendarEventRow({
 
   return (
     <div data-calendar-swipe-row className="relative overflow-hidden rounded-xl">
+      {canDuplicate && (
+        <button
+          type="button"
+          data-swipe-action
+          onClick={(clickEvent) => {
+            clickEvent.stopPropagation();
+            onDuplicateRequest(event);
+          }}
+          className={cn(
+            "absolute inset-y-0 left-0 z-0 flex w-full items-center justify-start rounded-l-xl bg-sky-600 pl-5 text-base font-semibold text-white transition hover:bg-sky-700",
+            duplicateActionVisible ? "opacity-100" : "pointer-events-none opacity-0",
+          )}
+        >
+          Dupliquer
+        </button>
+      )}
       {canDelete && (
         <button
           type="button"
@@ -5388,11 +5467,11 @@ function SwipeableCalendarEventRow({
           setDragOffset(0);
         }}
         onClick={handleRowClick}
-        onKeyDown={(keyEvent) => {
+            onKeyDown={(keyEvent) => {
           if (keyEvent.key === "Enter" || keyEvent.key === " ") {
             keyEvent.preventDefault();
-            if (hasOpenDelete) {
-              onCloseDelete();
+            if (hasOpenAction) {
+              onCloseAction();
             } else {
               onOpenEvent(event.id);
             }
@@ -5400,10 +5479,10 @@ function SwipeableCalendarEventRow({
         }}
         role="button"
         tabIndex={0}
-        style={{ transform: `translateX(${canDelete ? visibleOffset : 0}px)`, touchAction: "pan-y" }}
+        style={{ transform: `translateX(${canSwipe ? visibleOffset : 0}px)`, touchAction: "pan-y" }}
         className={cn(
           "relative z-10 grid min-h-20 w-full cursor-pointer grid-cols-[3px_1fr_auto] items-center gap-4 rounded-xl bg-white/70 px-4 py-4 text-left hover:bg-white lg:gap-5 lg:px-5",
-          deleteActionVisible && "bg-white",
+          (deleteActionVisible || duplicateActionVisible) && "bg-white",
           !isDragging && "transition-transform duration-200 ease-out",
         )}
       >
