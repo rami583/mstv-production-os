@@ -8185,8 +8185,6 @@ function HeaderIcon({ label, icon: Icon, onClick }: { label: string; icon: Lucid
 function AccountMenu({
   profile,
   email,
-  canManageUsers,
-  onOpenUserManagement,
   onLogout,
 }: {
   profile: UserProfile | null;
@@ -8231,18 +8229,6 @@ function AccountMenu({
             <p className="truncate text-base font-semibold text-stone-950">{displayName}</p>
             <p className="mt-1 truncate text-sm font-medium text-stone-500">{profile ? getRoleLabel(profile.role) : email}</p>
           </div>
-          {canManageUsers && (
-            <button
-              type="button"
-              onClick={() => {
-                setOpen(false);
-                onOpenUserManagement();
-              }}
-              className="block w-full rounded-xl px-4 py-3 text-right text-base font-medium text-stone-700 transition hover:bg-[#bb2720]/[0.05] hover:text-stone-950"
-            >
-              Gestion utilisateurs
-            </button>
-          )}
           <button
             type="button"
             onClick={() => {
