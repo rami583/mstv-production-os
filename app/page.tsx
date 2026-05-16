@@ -74,7 +74,6 @@ type EventDocumentRow = Database["public"]["Tables"]["event_documents"]["Row"];
 type EventDocumentGroupRow = Database["public"]["Tables"]["event_document_groups"]["Row"];
 type EventActivityLogRow = Database["public"]["Tables"]["event_activity_log"]["Row"];
 type ProfileRow = Database["public"]["Tables"]["profiles"]["Row"];
-type TeamMemberRow = Database["public"]["Tables"]["team_members"]["Row"];
 
 type UserRole = "admin" | "team";
 
@@ -82,16 +81,6 @@ type EventQueryRow = EventRow & {
   event_options: EventOptionRow[] | null;
   event_links: EventLinkRow[] | null;
   event_documents?: EventDocumentRow[] | null;
-};
-
-type TeamMember = {
-  id: string;
-  firstName: string;
-  lastName: string | null;
-  initials: string;
-  isAssignable: boolean;
-  visibility: "admin" | "team";
-  role: string | null;
 };
 
 type UserProfile = {
@@ -118,10 +107,11 @@ type EventOption = {
   label: string;
   status: CompletionStatus;
   details: string | null;
-  assignedTeamMemberId: string | null;
+  completedByProfileId: string | null;
+  completedByInitials: string | null;
+  completedAt: string | null;
   createdAt: string;
   items: EventOptionItem[];
-  assignees: TeamMember[];
 };
 
 type EventOptionItem = {
@@ -327,16 +317,6 @@ const defaultLinks = ["Drive client", "Habillage Guillaume", "Événement LiveMa
 
 const platformLinkLabels = new Set(["plateforme", "plateforme de diffusion", "evenement plateforme", "event plateforme"]);
 const eventDocumentsBucket = "event-documents";
-const optionCollaboratorProfiles = [
-  { firstName: "Rami", lastName: "Mustakim", displayName: "Rami Mustakim", initials: "RM", visibility: "admin" },
-  { firstName: "Antoine", lastName: "Santi", displayName: "Antoine Santi", initials: "AS", visibility: "admin" },
-  { firstName: "Guillaume", lastName: "Gallot", displayName: "Guillaume Gallot", initials: "GG", visibility: "admin" },
-  { firstName: "Arthur", lastName: "Legrand", displayName: "Arthur Legrand", initials: "AL", visibility: "team" },
-  { firstName: "Tony", lastName: "Bouilly", displayName: "Tony Bouilly", initials: "TB", visibility: "team" },
-  { firstName: "Gauthier", lastName: "Renard", displayName: "Gauthier Renard", initials: "GR", visibility: "team" },
-] as const;
-const optionCollaboratorOrder: Map<string, number> = new Map(optionCollaboratorProfiles.map((profile, index) => [profile.firstName, index]));
-
 const calendarArrowClassName =
   "flex h-9 w-9 items-center justify-center rounded-full text-base text-[#bb2720] transition hover:bg-[#bb2720]/[0.08] disabled:cursor-not-allowed disabled:text-stone-300 disabled:hover:bg-transparent";
 
@@ -800,24 +780,6 @@ function serializeLinkEntries(entries: EventLinkEntry[], isPlatform: boolean) {
   );
 }
 
-function mapTeamMember(row: TeamMemberRow): TeamMember {
-  const fallbackProfile = optionCollaboratorProfiles.find((profile) => profile.firstName === row.first_name);
-  const firstName = row.first_name;
-  const lastName = row.last_name ?? fallbackProfile?.lastName ?? null;
-  const initials = row.initials ?? fallbackProfile?.initials ?? getInitialsFromName(firstName, lastName);
-  const visibility = row.visibility === "team" || fallbackProfile?.visibility === "team" ? "team" : "admin";
-
-  return {
-    id: row.id,
-    firstName,
-    lastName,
-    initials,
-    isAssignable: row.is_assignable ?? true,
-    visibility,
-    role: row.role,
-  };
-}
-
 function getInitialsFromName(firstName: string, lastName?: string | null) {
   const firstInitial = firstName.trim().charAt(0).toLocaleUpperCase("fr-FR");
   const lastInitial = lastName?.trim().charAt(0).toLocaleUpperCase("fr-FR") ?? "";
@@ -853,6 +815,10 @@ function getProfileInitials(profile: UserProfile | null, email?: string | null) 
   return (email?.trim().charAt(0).toUpperCase() || "U");
 }
 
+function getCompleterInitials(profile: UserProfile | null, email?: string | null) {
+  return getProfileInitials(profile, email).toLocaleUpperCase("fr-FR");
+}
+
 function getRoleLabel(role: UserRole) {
   const labels: Record<UserRole, string> = {
     admin: "Admin",
@@ -885,36 +851,6 @@ function mapEventActivityLog(row: EventActivityLogRow): EventActivityLog {
     createdBy: row.created_by,
     createdAt: row.created_at,
   };
-}
-
-function getOptionCollaboratorProfile(member: TeamMember) {
-  const fallbackProfile = optionCollaboratorProfiles.find((profile) => profile.firstName === member.firstName);
-  return {
-    firstName: member.firstName,
-    displayName: [member.firstName, member.lastName].filter(Boolean).join(" ") || fallbackProfile?.displayName || member.firstName,
-    initials: member.initials || fallbackProfile?.initials || getInitialsFromName(member.firstName, member.lastName),
-  };
-}
-
-function getOptionAssignee(option: EventOption) {
-  return option.assignees[0] ?? null;
-}
-
-function canRoleAssignOptionToMember(role: UserRole, member: TeamMember) {
-  if (!member.isAssignable) return false;
-  if (role === "admin") return true;
-  return member.visibility === "team";
-}
-
-function getVisibleOptionCollaborators(teamMembers: TeamMember[], role: UserRole) {
-  return teamMembers
-    .filter((member) => canRoleAssignOptionToMember(role, member))
-    .sort((first, second) => {
-      const firstOrder = optionCollaboratorOrder.get(first.firstName) ?? 999;
-      const secondOrder = optionCollaboratorOrder.get(second.firstName) ?? 999;
-      if (firstOrder !== secondOrder) return firstOrder - secondOrder;
-      return first.firstName.localeCompare(second.firstName, "fr");
-    });
 }
 
 function mapEventOptionItem(row: EventOptionItemRow): EventOptionItem {
@@ -958,10 +894,11 @@ function mapEvent(row: EventQueryRow): ProductionEvent {
       label: option.label,
       status: option.status,
       details: option.details,
-      assignedTeamMemberId: option.assigned_team_member_id ?? null,
+      completedByProfileId: option.completed_by_profile_id ?? null,
+      completedByInitials: option.completed_by_initials ?? null,
+      completedAt: option.completed_at ?? null,
       createdAt: option.created_at,
       items: [],
-      assignees: [],
     }));
 
   const links = [...(row.event_links ?? [])]
@@ -1041,18 +978,6 @@ function withLinkEntries(events: ProductionEvent[], entries: EventLinkEntry[]) {
       ...link,
       entries: (entriesByLinkId.get(link.id) ?? []).sort((a, b) => a.position - b.position || a.createdAt.localeCompare(b.createdAt)),
     })),
-  }));
-}
-
-function withOptionAssignees(events: ProductionEvent[], teamMembers: TeamMember[]) {
-  return events.map((event) => ({
-    ...event,
-      options: event.options.map((option) => ({
-        ...option,
-        assignees: option.assignedTeamMemberId
-        ? teamMembers.filter((member) => member.id === option.assignedTeamMemberId && member.isAssignable).slice(0, 1)
-          : [],
-      })),
   }));
 }
 
@@ -1165,17 +1090,6 @@ async function fetchEvents(filter: "active" | "deleted" = "active") {
   return withOptionItems(events, (itemData ?? []).map(mapEventOptionItem));
 }
 
-async function fetchTeamMembers() {
-  if (!supabase) {
-    throw new Error("Configuration Supabase manquante.");
-  }
-
-  const { data, error } = await supabase.from("team_members").select("*").order("first_name", { ascending: true });
-
-  if (error) throw error;
-  return (data ?? []).map(mapTeamMember);
-}
-
 async function fetchOrCreateProfile(session: Session) {
   if (!supabase) {
     throw new Error("Configuration Supabase manquante.");
@@ -1245,7 +1159,6 @@ export default function Home() {
   const [authError, setAuthError] = useState<string | null>(null);
   const [screen, setScreen] = useState<Screen>("calendar");
   const [events, setEvents] = useState<ProductionEvent[]>([]);
-  const [teamMembers, setTeamMembers] = useState<TeamMember[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [visibleMonth, setVisibleMonth] = useState(() => new Date(today.getFullYear(), today.getMonth(), 1));
   const [selectedDateKey, setSelectedDateKey] = useState(formatDateKey(today));
@@ -1307,7 +1220,6 @@ export default function Home() {
       if (!session) {
         setProfile(null);
         setEvents([]);
-        setTeamMembers([]);
         setSelectedId(null);
         setLoading(false);
         return;
@@ -1512,9 +1424,8 @@ export default function Home() {
     setError(null);
 
     try {
-      const [nextEvents, nextTeamMembers] = await Promise.all([fetchEvents(), fetchTeamMembers()]);
-      setEvents(withOptionAssignees(nextEvents, nextTeamMembers));
-      setTeamMembers(nextTeamMembers);
+      const nextEvents = await fetchEvents();
+      setEvents(nextEvents);
       setSelectedId((current) => {
         if (nextSelectedId !== undefined) return nextSelectedId;
         if (current && nextEvents.some((event) => event.id === current)) return current;
@@ -1532,11 +1443,7 @@ export default function Home() {
     setTrashError(null);
 
     try {
-      const [nextDeletedEvents, nextTeamMembers] = await Promise.all([fetchEvents("deleted"), teamMembers.length > 0 ? Promise.resolve(teamMembers) : fetchTeamMembers()]);
-      setDeletedEvents(withOptionAssignees(nextDeletedEvents, nextTeamMembers));
-      if (teamMembers.length === 0) {
-        setTeamMembers(nextTeamMembers);
-      }
+      setDeletedEvents(await fetchEvents("deleted"));
     } catch (trashLoadError) {
       console.error("Failed to load deleted events. Apply supabase/migrations/012_soft_delete_events.sql if columns are missing.", trashLoadError);
       setTrashError("Impossible de charger la corbeille. Vérifiez la migration 012_soft_delete_events.sql.");
@@ -1985,7 +1892,9 @@ export default function Home() {
           label: option.label,
           status: option.status,
           details: option.details,
-          assigned_team_member_id: option.assignedTeamMemberId,
+          completed_by_profile_id: option.completedByProfileId,
+          completed_by_initials: option.completedByInitials,
+          completed_at: option.completedAt,
         })
         .select()
         .single();
@@ -2192,7 +2101,23 @@ export default function Home() {
     assertCanManageOperational();
     if (!supabase) return;
     const nextStatus: CompletionStatus = option.status === "completed" ? "incomplete" : "completed";
-    const { error: updateError } = await supabase.from("event_options").update({ status: nextStatus }).eq("id", option.id);
+    const completerInitials = getCompleterInitials(profile, authSession?.user.email);
+    const completedAt = new Date().toISOString();
+    const updatePayload: Database["public"]["Tables"]["event_options"]["Update"] =
+      nextStatus === "completed"
+        ? {
+            status: nextStatus,
+            completed_by_profile_id: profile?.id ?? null,
+            completed_by_initials: completerInitials,
+            completed_at: completedAt,
+          }
+        : {
+            status: nextStatus,
+            completed_by_profile_id: null,
+            completed_by_initials: null,
+            completed_at: null,
+          };
+    const { error: updateError } = await supabase.from("event_options").update(updatePayload).eq("id", option.id);
 
     if (updateError) {
       setError(updateError.message);
@@ -2204,20 +2129,45 @@ export default function Home() {
         event.id === option.eventId
           ? {
               ...event,
-              options: event.options.map((item) => (item.id === option.id ? { ...item, status: nextStatus } : item)),
+              options: event.options.map((item) =>
+                item.id === option.id
+                  ? {
+                      ...item,
+                      status: nextStatus,
+                      completedByProfileId: updatePayload.completed_by_profile_id ?? null,
+                      completedByInitials: updatePayload.completed_by_initials ?? null,
+                      completedAt: updatePayload.completed_at ?? null,
+                    }
+                  : item,
+              ),
             }
         : event,
       ),
     );
+
+    const description =
+      nextStatus === "completed"
+        ? `Option ${option.label} marquée comme Fait par ${completerInitials}`
+        : `Option ${option.label} repassée À faire`;
 
     await logEventActivity({
       eventId: option.eventId,
       actionType: "option_status_changed",
       entityType: "option",
       entityId: option.id,
-      description: `Option ${option.label} marquée comme ${nextStatus === "completed" ? "Fait" : "À faire"}`,
-      previousValue: { status: option.status },
-      newValue: { status: nextStatus },
+      description,
+      previousValue: {
+        status: option.status,
+        completedByProfileId: option.completedByProfileId,
+        completedByInitials: option.completedByInitials,
+        completedAt: option.completedAt,
+      },
+      newValue: {
+        status: nextStatus,
+        completedByProfileId: updatePayload.completed_by_profile_id ?? null,
+        completedByInitials: updatePayload.completed_by_initials ?? null,
+        completedAt: updatePayload.completed_at ?? null,
+      },
     });
   }
 
@@ -2366,10 +2316,11 @@ export default function Home() {
       label: data.label,
       status: data.status,
       details: data.details,
-      assignedTeamMemberId: data.assigned_team_member_id ?? null,
+      completedByProfileId: data.completed_by_profile_id ?? null,
+      completedByInitials: data.completed_by_initials ?? null,
+      completedAt: data.completed_at ?? null,
       createdAt: data.created_at,
       items: [],
-      assignees: [],
     };
 
     setEvents((current) =>
@@ -2560,103 +2511,6 @@ export default function Home() {
       ),
     );
 
-  }
-
-  async function toggleOptionAssignee(option: EventOption, member: TeamMember) {
-    assertCanManageOperational();
-    if (!supabase) {
-      throw new Error("Configuration Supabase manquante.");
-    }
-    if (!canRoleAssignOptionToMember(profile?.role ?? "team", member)) {
-      throw new Error("Vous ne pouvez pas assigner cette option à ce collaborateur.");
-    }
-
-    const currentAssignee = getOptionAssignee(option);
-    const isAssigned = currentAssignee?.id === member.id;
-    const nextAssignedTeamMemberId = isAssigned ? null : member.id;
-    const updatePayload = {
-      assigned_team_member_id: nextAssignedTeamMemberId,
-    };
-
-    const { error: updateError } = await supabase
-      .from("event_options")
-      .update(updatePayload)
-      .eq("id", option.id);
-
-    if (updateError) {
-      console.error("Failed to update option collaborator assignment", {
-        table: "event_options",
-        column: "assigned_team_member_id",
-        optionId: option.id,
-        teamMemberId: member.id,
-        payload: updatePayload,
-        errorMessage: updateError.message,
-        errorCode: updateError.code,
-        errorDetails: updateError.details,
-        errorHint: updateError.hint,
-      });
-      throw updateError;
-    }
-
-    setEvents((current) =>
-      current.map((event) =>
-        event.id === option.eventId
-          ? {
-              ...event,
-              options: event.options.map((item) =>
-                item.id === option.id
-                  ? {
-                      ...item,
-                      assignedTeamMemberId: nextAssignedTeamMemberId,
-                      assignees: isAssigned ? [] : [member],
-                    }
-                  : item,
-              ),
-            }
-          : event,
-      ),
-    );
-
-    await logEventActivity({
-      eventId: option.eventId,
-      actionType: isAssigned ? "option_assignee_removed" : "option_assignee_changed",
-      entityType: "option",
-      entityId: option.id,
-      description: isAssigned ? `Collaborateur retiré de ${option.label}` : `${member.firstName} assigné à ${option.label}`,
-      previousValue: { assignedTeamMemberId: currentAssignee?.id ?? null, name: currentAssignee?.firstName ?? null },
-      newValue: { assignedTeamMemberId: nextAssignedTeamMemberId, name: isAssigned ? null : member.firstName },
-    });
-  }
-
-  async function createTeamMember(input: { firstName: string; lastName: string }) {
-    assertCanManageUsers();
-    if (!supabase) {
-      throw new Error("Configuration Supabase manquante.");
-    }
-
-    const firstName = formatTitleCase(input.firstName);
-    const lastName = formatTitleCase(input.lastName);
-    const initials = getInitialsFromName(firstName, lastName);
-    const payload: Database["public"]["Tables"]["team_members"]["Insert"] = {
-      first_name: firstName,
-      last_name: lastName,
-      initials,
-      is_assignable: true,
-      visibility: "admin",
-      role: "Collaborateur",
-    };
-
-    const { data, error: insertError } = await supabase
-      .from("team_members")
-      .insert(payload)
-      .select()
-      .single();
-
-    if (insertError) throw insertError;
-
-    const nextMember = mapTeamMember(data);
-    setTeamMembers((current) => [...current, nextMember].sort((a, b) => a.firstName.localeCompare(b.firstName, "fr")));
-    return nextMember;
   }
 
   async function createEventLink(eventId: string, input: { label: string; url: string }) {
@@ -3291,7 +3145,6 @@ export default function Home() {
     setAuthSession(null);
     setProfile(null);
     setEvents([]);
-    setTeamMembers([]);
     setSelectedId(null);
     setScreen("calendar");
     setCreateMenuOpen(false);
@@ -3424,7 +3277,6 @@ export default function Home() {
           {!loading && screen === "detail" && selectedEvent && (
             <ProductionDetail
               event={selectedEvent}
-              teamMembers={teamMembers}
               previousEvent={chronologicalEvents[selectedEventIndex - 1] ?? null}
               nextEvent={chronologicalEvents[selectedEventIndex + 1] ?? null}
               hasPrevious={hasPreviousEvent}
@@ -3438,8 +3290,6 @@ export default function Home() {
               onRenameOption={renameEventOption}
               onCreateOptionItem={createEventOptionItem}
               onDeleteOptionItem={deleteEventOptionItem}
-              onToggleOptionAssignee={toggleOptionAssignee}
-              onCreateTeamMember={createTeamMember}
               onCreateLink={createEventLink}
               onDeleteLink={deleteEventLink}
               onRenameLink={renameEventLink}
@@ -5132,7 +4982,6 @@ function SwipeableCalendarEventRow({
 
 function ProductionDetail({
   event,
-  teamMembers,
   previousEvent,
   nextEvent,
   hasPrevious,
@@ -5146,8 +4995,6 @@ function ProductionDetail({
   onRenameOption,
   onCreateOptionItem,
   onDeleteOptionItem,
-  onToggleOptionAssignee,
-  onCreateTeamMember,
   onCreateLink,
   onDeleteLink,
   onRenameLink,
@@ -5164,7 +5011,6 @@ function ProductionDetail({
   permissions,
 }: {
   event: ProductionEvent;
-  teamMembers: TeamMember[];
   previousEvent: ProductionEvent | null;
   nextEvent: ProductionEvent | null;
   hasPrevious: boolean;
@@ -5178,8 +5024,6 @@ function ProductionDetail({
   onRenameOption: (option: EventOption, label: string) => Promise<EventOption>;
   onCreateOptionItem: (option: EventOption, label: string) => Promise<EventOptionItem>;
   onDeleteOptionItem: (option: EventOption, item: EventOptionItem) => Promise<void>;
-  onToggleOptionAssignee: (option: EventOption, member: TeamMember) => Promise<void>;
-  onCreateTeamMember: (input: { firstName: string; lastName: string }) => Promise<TeamMember>;
   onCreateLink: (eventId: string, input: { label: string; url: string }) => Promise<EventLink>;
   onDeleteLink: (link: EventLink) => Promise<void>;
   onRenameLink: (link: EventLink, label: string) => Promise<EventLink>;
@@ -5639,9 +5483,8 @@ function ProductionDetail({
               {event.options.map((option) => {
                 const Icon = getOptionIcon(option.label);
                 const optionTone = getOptionTone(option.status);
-                const optionAssignee = getOptionAssignee(option);
-                const optionAssigneeInitials = optionAssignee ? getOptionCollaboratorProfile(optionAssignee)?.initials : null;
-                const showOptionAssigneeInitials = option.status === "incomplete" && Boolean(optionAssigneeInitials);
+                const optionCompletedInitials = option.status === "completed" ? option.completedByInitials : null;
+                const showOptionCompletedInitials = Boolean(optionCompletedInitials);
                 const isSelectedOption = contextSelection?.type === "option" && contextSelection.optionId === option.id;
                 const isConfirmingDelete = confirmDelete?.type === "option" && confirmDelete.optionId === option.id;
                 return (
@@ -5669,14 +5512,14 @@ function ProductionDetail({
                           onClick={() => selectOption(option)}
                           className={cn(
                             "flex min-h-[4.75rem] min-w-0 flex-1 px-2 py-3 text-left sm:min-h-20 sm:px-3",
-                            showOptionAssigneeInitials ? "flex-col items-start justify-between gap-2" : "items-center gap-1.5 sm:gap-2",
-                          )}
-                        >
-                          {showOptionAssigneeInitials ? (
-                            <>
-                              <span className="inline-flex shrink-0 rounded-full border border-emerald-300 bg-white/75 px-2 py-0.5 text-base font-bold leading-tight text-emerald-800">
-                                {optionAssigneeInitials}
-                              </span>
+                        showOptionCompletedInitials ? "flex-col items-start justify-between gap-2" : "items-center gap-1.5 sm:gap-2",
+                      )}
+                    >
+                      {showOptionCompletedInitials ? (
+                        <>
+                          <span className="inline-flex shrink-0 rounded-full border border-emerald-300 bg-white/75 px-2 py-0.5 text-base font-bold leading-tight text-emerald-800">
+                                {optionCompletedInitials}
+                          </span>
                               <span className="flex w-full min-w-0 items-center gap-1.5 pr-5 sm:gap-2">
                                 <Icon className={cn("h-4 w-4 shrink-0 sm:h-5 sm:w-5", optionTone.icon)} />
                                 <span className={cn("min-w-0 flex-1 truncate text-base font-semibold", optionTone.text)}>{option.label}</span>
@@ -5868,9 +5711,6 @@ function ProductionDetail({
             onRenameOption={onRenameOption}
             onCreateOptionItem={onCreateOptionItem}
             onDeleteOptionItem={onDeleteOptionItem}
-            onToggleOptionAssignee={onToggleOptionAssignee}
-            onCreateTeamMember={onCreateTeamMember}
-            teamMembers={teamMembers}
             onRenameLink={onRenameLink}
             onSaveLinkEntries={onSaveLinkEntries}
             onRenameDocumentGroup={onRenameDocumentGroup}
@@ -5921,9 +5761,8 @@ function EventSwipePreview({ event, style }: { event: ProductionEvent; style: Re
                 {event.options.map((option) => {
                 const Icon = getOptionIcon(option.label);
                 const optionTone = getOptionTone(option.status);
-                const optionAssignee = getOptionAssignee(option);
-                const optionAssigneeInitials = optionAssignee ? getOptionCollaboratorProfile(optionAssignee)?.initials : null;
-                const showOptionAssigneeInitials = option.status === "incomplete" && Boolean(optionAssigneeInitials);
+                const optionCompletedInitials = option.status === "completed" ? option.completedByInitials : null;
+                const showOptionCompletedInitials = Boolean(optionCompletedInitials);
                 return (
                   <div
                     key={option.id}
@@ -5937,13 +5776,13 @@ function EventSwipePreview({ event, style }: { event: ProductionEvent; style: Re
                     <div
                       className={cn(
                         "flex min-h-[4.75rem] min-w-0 flex-1 px-2 py-3 text-left sm:min-h-20 sm:px-3",
-                        showOptionAssigneeInitials ? "flex-col items-start justify-between gap-2" : "items-center gap-1.5 sm:gap-2",
+                        showOptionCompletedInitials ? "flex-col items-start justify-between gap-2" : "items-center gap-1.5 sm:gap-2",
                       )}
                     >
-                      {showOptionAssigneeInitials ? (
+                      {showOptionCompletedInitials ? (
                         <>
                           <span className="inline-flex shrink-0 rounded-full border border-emerald-300 bg-white/75 px-2 py-0.5 text-base font-bold leading-tight text-emerald-800">
-                            {optionAssigneeInitials}
+                            {optionCompletedInitials}
                           </span>
                           <span className="flex w-full min-w-0 items-center gap-1.5 pr-5 sm:gap-2">
                             <Icon className={cn("h-4 w-4 shrink-0 sm:h-5 sm:w-5", optionTone.icon)} />
@@ -6517,9 +6356,6 @@ function ContextDetailBlock({
   onRenameOption,
   onCreateOptionItem,
   onDeleteOptionItem,
-  onToggleOptionAssignee,
-  onCreateTeamMember,
-  teamMembers,
   onRenameLink,
   onSaveLinkEntries,
   onRenameDocumentGroup,
@@ -6535,9 +6371,6 @@ function ContextDetailBlock({
   onRenameOption: (option: EventOption, label: string) => Promise<EventOption>;
   onCreateOptionItem: (option: EventOption, label: string) => Promise<EventOptionItem>;
   onDeleteOptionItem: (option: EventOption, item: EventOptionItem) => Promise<void>;
-  onToggleOptionAssignee: (option: EventOption, member: TeamMember) => Promise<void>;
-  onCreateTeamMember: (input: { firstName: string; lastName: string }) => Promise<TeamMember>;
-  teamMembers: TeamMember[];
   onRenameLink: (link: EventLink, label: string) => Promise<EventLink>;
   onSaveLinkEntries: (link: EventLink, drafts: LinkEntryDraft[]) => Promise<EventLink>;
   onRenameDocumentGroup: (group: EventDocumentGroup, label: string) => Promise<EventDocumentGroup>;
@@ -6564,12 +6397,6 @@ function ContextDetailBlock({
   const [optionItemInput, setOptionItemInput] = useState("");
   const [savingOptionItem, setSavingOptionItem] = useState(false);
   const [optionItemError, setOptionItemError] = useState<string | null>(null);
-  const [optionAssigneeError, setOptionAssigneeError] = useState<string | null>(null);
-  const [addingCollaborator, setAddingCollaborator] = useState(false);
-  const [collaboratorFirstName, setCollaboratorFirstName] = useState("");
-  const [collaboratorLastName, setCollaboratorLastName] = useState("");
-  const [savingCollaborator, setSavingCollaborator] = useState(false);
-  const [collaboratorError, setCollaboratorError] = useState<string | null>(null);
   const [titleRenameError, setTitleRenameError] = useState<string | null>(null);
   const [draggingDocumentFiles, setDraggingDocumentFiles] = useState(false);
   const [uploadingDocumentFiles, setUploadingDocumentFiles] = useState(false);
@@ -6623,12 +6450,6 @@ function ContextDetailBlock({
     setOptionItemInput("");
     setSavingOptionItem(false);
     setOptionItemError(null);
-    setOptionAssigneeError(null);
-    setAddingCollaborator(false);
-    setCollaboratorFirstName("");
-    setCollaboratorLastName("");
-    setSavingCollaborator(false);
-    setCollaboratorError(null);
     setTitleRenameError(null);
     setDraggingDocumentFiles(false);
     setUploadingDocumentFiles(false);
@@ -6739,37 +6560,6 @@ function ContextDetailBlock({
     } catch (deleteError) {
       console.error("Unable to delete option detail item", deleteError);
       setOptionItemError(deleteError instanceof Error ? deleteError.message : "Impossible de supprimer cette note.");
-    }
-  }
-
-  async function toggleSelectedOptionAssignee(member: TeamMember) {
-    if (!selectedOption) return;
-
-    setOptionAssigneeError(null);
-
-    try {
-      await onToggleOptionAssignee(selectedOption, member);
-    } catch (assignError) {
-      setOptionAssigneeError(assignError instanceof Error ? assignError.message : "Impossible de modifier les collaborateurs.");
-    }
-  }
-
-  async function addCollaborator(event: React.FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    if (!permissions.canManageUsers) return;
-
-    setSavingCollaborator(true);
-    setCollaboratorError(null);
-
-    try {
-      await onCreateTeamMember({ firstName: collaboratorFirstName, lastName: collaboratorLastName });
-      setCollaboratorFirstName("");
-      setCollaboratorLastName("");
-      setAddingCollaborator(false);
-    } catch (saveError) {
-      setCollaboratorError(saveError instanceof Error ? saveError.message : "Impossible d'ajouter ce collaborateur.");
-    } finally {
-      setSavingCollaborator(false);
     }
   }
 
@@ -6986,9 +6776,6 @@ function ContextDetailBlock({
   if (!selectedOption) return null;
 
   const optionTone = getOptionTone(selectedOption.status);
-  const optionCollaborators = getVisibleOptionCollaborators(teamMembers, permissions.canManageUsers ? "admin" : "team");
-  const selectedOptionAssignee = getOptionAssignee(selectedOption);
-  const nextCollaboratorInitials = getInitialsFromName(collaboratorFirstName, collaboratorLastName);
 
   return (
     <Card className="border-emerald-200 bg-white p-4 sm:p-5">
@@ -7063,85 +6850,6 @@ function ContextDetailBlock({
         </div>
         {optionItemError && <div className="text-base font-medium text-rose-700">{optionItemError}</div>}
       </div>
-      {canEdit && (
-      <div className="mt-4">
-        <div className="mb-2 flex items-center justify-between gap-3">
-          <div className="text-base font-semibold uppercase tracking-[0.16em] text-stone-500">Collaborateurs</div>
-          {permissions.canManageUsers && !addingCollaborator && (
-            <button
-              type="button"
-              onClick={() => setAddingCollaborator(true)}
-              className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-emerald-200 bg-emerald-50 text-base font-semibold leading-none text-emerald-700 transition hover:bg-emerald-100"
-              aria-label="Ajouter un collaborateur"
-              title="Ajouter un collaborateur"
-            >
-              +
-            </button>
-          )}
-        </div>
-        {permissions.canManageUsers && addingCollaborator && (
-          <form onSubmit={addCollaborator} className="mb-3 flex min-w-0 flex-col gap-2 rounded-xl border border-emerald-100 bg-emerald-50/60 p-2">
-            <div className="grid min-w-0 grid-cols-2 gap-2">
-              <input
-                required
-                value={collaboratorFirstName}
-                onChange={(event) => setCollaboratorFirstName(event.target.value)}
-                placeholder="Prénom"
-                className="h-9 min-w-0 rounded-full border border-emerald-200 bg-white px-3 text-base font-medium text-stone-950 outline-none transition placeholder:text-stone-300 focus:border-emerald-400"
-              />
-              <input
-                required
-                value={collaboratorLastName}
-                onChange={(event) => setCollaboratorLastName(event.target.value)}
-                placeholder="Nom"
-                className="h-9 min-w-0 rounded-full border border-emerald-200 bg-white px-3 text-base font-medium text-stone-950 outline-none transition placeholder:text-stone-300 focus:border-emerald-400"
-              />
-            </div>
-            <div className="flex items-center justify-between gap-2">
-              <span className="rounded-full bg-white px-2.5 py-1 text-base font-semibold text-emerald-700">{nextCollaboratorInitials}</span>
-              <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setAddingCollaborator(false);
-                    setCollaboratorFirstName("");
-                    setCollaboratorLastName("");
-                  }}
-                  className="h-8 rounded-full border border-emerald-100 bg-white px-3 text-base font-semibold text-stone-500 transition hover:bg-emerald-50"
-                >
-                  Annuler
-                </button>
-                <button disabled={savingCollaborator} className="h-8 rounded-full bg-emerald-600 px-3 text-base font-semibold text-white transition hover:bg-emerald-700 disabled:bg-stone-300">
-                  Ajouter
-                </button>
-              </div>
-            </div>
-          </form>
-        )}
-        <div className="flex flex-wrap gap-2">
-          {optionCollaborators.map((member) => {
-            const isAssigned = selectedOptionAssignee?.id === member.id;
-            const collaboratorProfile = getOptionCollaboratorProfile(member);
-            return (
-              <button
-                key={member.id}
-                onClick={() => void toggleSelectedOptionAssignee(member)}
-                className={cn(
-                  "rounded-full border px-3 py-1.5 text-base font-semibold transition",
-                  isAssigned
-                    ? "border-emerald-400/70 bg-emerald-200/90 text-emerald-950 hover:bg-emerald-200"
-                    : "border-emerald-100 bg-emerald-50/80 text-stone-700 hover:bg-emerald-100/55",
-                )}
-              >
-                {collaboratorProfile.firstName}
-              </button>
-            );
-          })}
-        </div>
-        {optionAssigneeError && <div className="mt-2 text-base font-medium text-rose-700">{optionAssigneeError}</div>}
-        {collaboratorError && <div className="mt-2 text-base font-medium text-rose-700">{collaboratorError}</div>}
-      </div>
-      )}
     </Card>
   );
 }
