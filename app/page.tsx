@@ -827,11 +827,29 @@ function getProfileDisplayName(profile: UserProfile | null) {
 }
 
 function getProfileInitials(profile: UserProfile | null, email?: string | null) {
-  const names = [profile?.firstName, profile?.lastName].filter(Boolean);
-  if (names.length > 0) {
-    return names.map((name) => name?.trim().charAt(0).toUpperCase()).join("").slice(0, 2);
+  const firstName = profile?.firstName?.trim() ?? "";
+  const lastName = profile?.lastName?.trim() ?? "";
+
+  if (firstName && lastName) {
+    return `${firstName.charAt(0)}${lastName.charAt(0)}`.toLocaleUpperCase("fr-FR");
   }
-  return (email?.trim().charAt(0).toUpperCase() || "U");
+
+  if (firstName) {
+    const knownInternalInitials = completedByOverrideChoices.find((choice) => choice.label.toLocaleLowerCase("fr-FR") === firstName.toLocaleLowerCase("fr-FR"))?.initials;
+    if (knownInternalInitials) {
+      return knownInternalInitials;
+    }
+
+    return firstName.slice(0, 2).toLocaleUpperCase("fr-FR");
+  }
+
+  const emailLocalPart = email?.trim().split("@")[0] ?? "";
+  const emailParts = emailLocalPart.split(/[^a-zA-ZÀ-ÿ0-9]+/).filter(Boolean);
+  if (emailParts.length >= 2) {
+    return `${emailParts[0].charAt(0)}${emailParts[1].charAt(0)}`.toLocaleUpperCase("fr-FR");
+  }
+
+  return emailLocalPart.slice(0, 2).toLocaleUpperCase("fr-FR") || "U";
 }
 
 function getCompleterInitials(profile: UserProfile | null, email?: string | null) {
@@ -840,6 +858,11 @@ function getCompleterInitials(profile: UserProfile | null, email?: string | null
 
 function getCompleterLabel(profile: UserProfile | null, email?: string | null) {
   return profile?.firstName?.trim() || getProfileDisplayName(profile) || email || null;
+}
+
+function getCompletedByInitialsForDisplay(option: EventOption) {
+  const knownInitials = completedByOverrideChoices.find((choice) => choice.label === option.completedByLabel || choice.initials === option.completedByInitials)?.initials;
+  return knownInitials ?? option.completedByInitials;
 }
 
 function getRoleLabel(role: UserRole) {
@@ -5603,7 +5626,7 @@ function ProductionDetail({
               {event.options.map((option) => {
                 const Icon = getOptionIcon(option.label);
                 const optionTone = getOptionTone(option.status);
-                const optionCompletedInitials = option.status === "completed" ? option.completedByInitials : null;
+                const optionCompletedInitials = option.status === "completed" ? getCompletedByInitialsForDisplay(option) : null;
                 const showOptionCompletedInitials = Boolean(optionCompletedInitials);
                 const isSelectedOption = contextSelection?.type === "option" && contextSelection.optionId === option.id;
                 const isConfirmingDelete = confirmDelete?.type === "option" && confirmDelete.optionId === option.id;
@@ -5882,7 +5905,7 @@ function EventSwipePreview({ event, style }: { event: ProductionEvent; style: Re
                 {event.options.map((option) => {
                 const Icon = getOptionIcon(option.label);
                 const optionTone = getOptionTone(option.status);
-                const optionCompletedInitials = option.status === "completed" ? option.completedByInitials : null;
+                const optionCompletedInitials = option.status === "completed" ? getCompletedByInitialsForDisplay(option) : null;
                 const showOptionCompletedInitials = Boolean(optionCompletedInitials);
                 return (
                   <div
