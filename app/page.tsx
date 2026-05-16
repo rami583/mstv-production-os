@@ -76,7 +76,7 @@ type EventActivityLogRow = Database["public"]["Tables"]["event_activity_log"]["R
 type ProfileRow = Database["public"]["Tables"]["profiles"]["Row"];
 type TeamMemberRow = Database["public"]["Tables"]["team_members"]["Row"];
 
-type UserRole = "admin" | "production" | "technical" | "readonly";
+type UserRole = "admin" | "team";
 
 type EventQueryRow = EventRow & {
   event_options: EventOptionRow[] | null;
@@ -247,7 +247,7 @@ type QuoteExtractionResult = {
   services: string[];
 };
 
-const userRoleOptions: UserRole[] = ["admin", "production", "technical", "readonly"];
+const userRoleOptions: UserRole[] = ["admin", "team"];
 const realtimeTableNames = [
   "events",
   "event_options",
@@ -803,8 +803,7 @@ function mapTeamMember(row: TeamMemberRow): TeamMember {
 }
 
 function normalizeUserRole(role: string | null | undefined): UserRole {
-  if (role === "admin" || role === "production" || role === "technical" || role === "readonly") return role;
-  return "readonly";
+  return role === "admin" ? "admin" : "team";
 }
 
 function mapUserProfile(row: ProfileRow): UserProfile {
@@ -835,19 +834,17 @@ function getProfileInitials(profile: UserProfile | null, email?: string | null) 
 function getRoleLabel(role: UserRole) {
   const labels: Record<UserRole, string> = {
     admin: "Admin",
-    production: "Production",
-    technical: "Technique",
-    readonly: "Lecture seule",
+    team: "Team",
   };
   return labels[role];
 }
 
 function getPermissionsForRole(role: UserRole): AppPermissions {
   return {
-    canManageEvents: role === "admin" || role === "production",
-    canManageOperational: role === "admin" || role === "production" || role === "technical",
-    canSoftDeleteEvents: role === "admin" || role === "production",
-    canRestoreEvents: role === "admin" || role === "production",
+    canManageEvents: role === "admin",
+    canManageOperational: role === "admin" || role === "team",
+    canSoftDeleteEvents: role === "admin",
+    canRestoreEvents: role === "admin",
     canPermanentDeleteEvents: role === "admin",
     canManageUsers: role === "admin",
   };
@@ -1172,7 +1169,7 @@ async function fetchOrCreateProfile(session: Session) {
       email: session.user.email ?? null,
       first_name: firstName,
       last_name: null,
-      role: "readonly",
+      role: "team",
     })
     .select()
     .single();
@@ -1253,7 +1250,7 @@ export default function Home() {
   const hasNextEvent = selectedEventIndex >= 0 && selectedEventIndex < chronologicalEvents.length - 1;
   const isSelectedDateToday = selectedDateKey === todayKey;
   const yearLabel = String(visibleMonth.getFullYear());
-  const permissions = useMemo(() => getPermissionsForRole(profile?.role ?? "readonly"), [profile?.role]);
+  const permissions = useMemo(() => getPermissionsForRole(profile?.role ?? "team"), [profile?.role]);
   const actorName = getProfileDisplayName(profile);
 
   useEffect(() => {
@@ -1596,7 +1593,7 @@ export default function Home() {
 
   function assertCanManageEvents() {
     if (!permissions.canManageEvents) {
-      throw new Error("Action réservée aux rôles admin ou production.");
+      throw new Error("Action réservée aux admins.");
     }
   }
 
@@ -3289,7 +3286,7 @@ export default function Home() {
           onSearch={() => setSearchOpen(true)}
           canOpenHistory={screen === "detail" && Boolean(selectedEvent)}
           onOpenHistory={openHistory}
-          canOpenTrash={profile?.role !== "readonly"}
+          canOpenTrash={permissions.canRestoreEvents || permissions.canPermanentDeleteEvents}
           onOpenTrash={() => {
             setTrashOpen(true);
             setCreateMenuOpen(false);
@@ -3340,6 +3337,7 @@ export default function Home() {
                   setDeleteDialogEvent(event);
                 }
               }}
+              canDeleteEvents={permissions.canSoftDeleteEvents}
               setSelectedDateKey={setSelectedDateKey}
               changeMonth={changeMonth}
             />
@@ -3431,7 +3429,7 @@ export default function Home() {
           }}
           canCreateEvent={permissions.canManageEvents}
           canImportQuote={permissions.canManageEvents}
-          canOpenTrash={profile?.role !== "readonly"}
+          canOpenTrash={permissions.canRestoreEvents || permissions.canPermanentDeleteEvents}
           onSelectMonth={selectYearOverviewMonth}
         />
       )}
@@ -3764,7 +3762,7 @@ function CreateMenu({
     <div className="absolute right-1 top-14 z-40 w-56 rounded-2xl border border-stone-200 bg-white/95 p-1.5 backdrop-blur-xl">
       {!hasActions && (
         <div className="px-4 py-3 text-right text-base font-medium text-stone-400">
-          Lecture seule
+          Aucune action
         </div>
       )}
       {canImportQuote && (
@@ -4332,6 +4330,7 @@ function CalendarDashboard({
   events,
   onOpen,
   onDeleteRequest,
+  canDeleteEvents,
   visibleMonth,
   selectedDateKey,
   setSelectedDateKey,
@@ -4340,6 +4339,7 @@ function CalendarDashboard({
   events: ProductionEvent[];
   onOpen: (id: string) => void;
   onDeleteRequest: (event: ProductionEvent) => void;
+  canDeleteEvents: boolean;
   visibleMonth: Date;
   selectedDateKey: string;
   setSelectedDateKey: (dateKey: string) => void;
@@ -4511,6 +4511,7 @@ function CalendarDashboard({
           onSelectDate={setSelectedDateKey}
           onOpen={onOpen}
           onDeleteRequest={onDeleteRequest}
+          canDeleteEvents={canDeleteEvents}
           onPreviousMonth={() => animateMonthChange(-1)}
           onNextMonth={() => animateMonthChange(1)}
           interactive={false}
@@ -4523,6 +4524,7 @@ function CalendarDashboard({
           onSelectDate={setSelectedDateKey}
           onOpen={onOpen}
           onDeleteRequest={onDeleteRequest}
+          canDeleteEvents={canDeleteEvents}
           onPreviousMonth={() => animateMonthChange(-1)}
           onNextMonth={() => animateMonthChange(1)}
           onCalendarPointerDown={handleMonthSwipePointerDown}
@@ -4545,6 +4547,7 @@ function CalendarDashboard({
           onSelectDate={setSelectedDateKey}
           onOpen={onOpen}
           onDeleteRequest={onDeleteRequest}
+          canDeleteEvents={canDeleteEvents}
           onPreviousMonth={() => animateMonthChange(-1)}
           onNextMonth={() => animateMonthChange(1)}
           interactive={false}
@@ -4562,6 +4565,7 @@ function CalendarMonthPage({
   onSelectDate,
   onOpen,
   onDeleteRequest,
+  canDeleteEvents,
   onPreviousMonth,
   onNextMonth,
   onCalendarPointerDown,
@@ -4578,6 +4582,7 @@ function CalendarMonthPage({
   onSelectDate: (dateKey: string) => void;
   onOpen: (id: string) => void;
   onDeleteRequest: (event: ProductionEvent) => void;
+  canDeleteEvents: boolean;
   onPreviousMonth: () => void;
   onNextMonth: () => void;
   onCalendarPointerDown?: (event: ReactPointerEvent<HTMLDivElement>) => void;
@@ -4631,7 +4636,7 @@ function CalendarMonthPage({
         </div>
       </div>
       <div className="no-scrollbar min-h-0 flex-1 overflow-y-auto overscroll-contain pb-5">
-        <SelectedDayEvents markers={selectedMarkers} events={selectedEvents} onOpen={onOpen} onDeleteRequest={onDeleteRequest} />
+        <SelectedDayEvents markers={selectedMarkers} events={selectedEvents} onOpen={onOpen} onDeleteRequest={onDeleteRequest} canDeleteEvents={canDeleteEvents} />
       </div>
     </div>
   );
@@ -4792,11 +4797,13 @@ function SelectedDayEvents({
   events,
   onOpen,
   onDeleteRequest,
+  canDeleteEvents,
 }: {
   markers: CalendarMarker[];
   events: ProductionEvent[];
   onOpen: (id: string) => void;
   onDeleteRequest: (event: ProductionEvent) => void;
+  canDeleteEvents: boolean;
 }) {
   const [openDeleteEventId, setOpenDeleteEventId] = useState<string | null>(null);
   const sectionRef = useRef<HTMLElement | null>(null);
@@ -4813,6 +4820,12 @@ function SelectedDayEvents({
     document.addEventListener("pointerdown", handlePointerDown);
     return () => document.removeEventListener("pointerdown", handlePointerDown);
   }, [openDeleteEventId]);
+
+  useEffect(() => {
+    if (!canDeleteEvents) {
+      setOpenDeleteEventId(null);
+    }
+  }, [canDeleteEvents]);
 
   if (markers.length === 0 && events.length === 0) return null;
   const orderedMarkers = [...markers].sort((a, b) => {
@@ -4834,6 +4847,7 @@ function SelectedDayEvents({
         <SwipeableCalendarEventRow
           key={event.id}
           event={event}
+          canDelete={canDeleteEvents}
           isDeleteOpen={openDeleteEventId === event.id}
           hasOpenDelete={Boolean(openDeleteEventId)}
           onOpenDelete={() => setOpenDeleteEventId(event.id)}
@@ -4874,6 +4888,7 @@ const calendarEventFullSwipeRatio = 0.65;
 
 function SwipeableCalendarEventRow({
   event,
+  canDelete,
   isDeleteOpen,
   hasOpenDelete,
   onOpenDelete,
@@ -4882,6 +4897,7 @@ function SwipeableCalendarEventRow({
   onDeleteRequest,
 }: {
   event: ProductionEvent;
+  canDelete: boolean;
   isDeleteOpen: boolean;
   hasOpenDelete: boolean;
   onOpenDelete: () => void;
@@ -4894,12 +4910,13 @@ function SwipeableCalendarEventRow({
   const rowRef = useRef<HTMLDivElement | null>(null);
   const pointerStartRef = useRef<{ pointerId: number; x: number; y: number } | null>(null);
   const suppressClickRef = useRef(false);
-  const baseOffset = isDeleteOpen ? -calendarEventDeleteActionWidth : 0;
+  const baseOffset = canDelete && isDeleteOpen ? -calendarEventDeleteActionWidth : 0;
   const visibleOffset = isDragging ? dragOffset : baseOffset;
-  const deleteActionVisible = visibleOffset < -1;
+  const deleteActionVisible = canDelete && visibleOffset < -1;
   const timeRange = formatTimeRange(event.startTime, event.endTime);
 
   function handlePointerDown(pointerEvent: ReactPointerEvent<HTMLDivElement>) {
+    if (!canDelete) return;
     if ((pointerEvent.target as HTMLElement).closest("[data-swipe-action]")) return;
 
     pointerStartRef.current = {
@@ -4913,6 +4930,7 @@ function SwipeableCalendarEventRow({
   }
 
   function handlePointerMove(pointerEvent: ReactPointerEvent<HTMLDivElement>) {
+    if (!canDelete) return;
     const pointerStart = pointerStartRef.current;
     if (!pointerStart) return;
 
@@ -4934,6 +4952,7 @@ function SwipeableCalendarEventRow({
   }
 
   function handlePointerUp(pointerEvent: ReactPointerEvent<HTMLDivElement>) {
+    if (!canDelete) return;
     const pointerStart = pointerStartRef.current;
     if (!pointerStart) return;
 
@@ -4975,20 +4994,22 @@ function SwipeableCalendarEventRow({
 
   return (
     <div data-calendar-swipe-row className="relative overflow-hidden rounded-xl">
-      <button
-        type="button"
-        data-swipe-action
-        onClick={(clickEvent) => {
-          clickEvent.stopPropagation();
-          onDeleteRequest(event);
-        }}
-        className={cn(
-          "absolute inset-y-0 right-0 z-0 flex w-full items-center justify-end rounded-r-xl bg-[#bb2720] pr-5 text-base font-semibold text-white transition hover:bg-[#a9231d]",
-          deleteActionVisible ? "opacity-100" : "pointer-events-none opacity-0",
-        )}
-      >
-        Supprimer
-      </button>
+      {canDelete && (
+        <button
+          type="button"
+          data-swipe-action
+          onClick={(clickEvent) => {
+            clickEvent.stopPropagation();
+            onDeleteRequest(event);
+          }}
+          className={cn(
+            "absolute inset-y-0 right-0 z-0 flex w-full items-center justify-end rounded-r-xl bg-[#bb2720] pr-5 text-base font-semibold text-white transition hover:bg-[#a9231d]",
+            deleteActionVisible ? "opacity-100" : "pointer-events-none opacity-0",
+          )}
+        >
+          Supprimer
+        </button>
+      )}
       <div
         ref={rowRef}
         onPointerDown={handlePointerDown}
@@ -5012,7 +5033,7 @@ function SwipeableCalendarEventRow({
         }}
         role="button"
         tabIndex={0}
-        style={{ transform: `translateX(${visibleOffset}px)`, touchAction: "pan-y" }}
+        style={{ transform: `translateX(${canDelete ? visibleOffset : 0}px)`, touchAction: "pan-y" }}
         className={cn(
           "relative z-10 grid min-h-20 w-full cursor-pointer grid-cols-[3px_1fr_auto] items-center gap-4 rounded-xl bg-white/70 px-4 py-4 text-left hover:bg-white lg:gap-5 lg:px-5",
           deleteActionVisible && "bg-white",
@@ -5505,7 +5526,7 @@ function ProductionDetail({
           onUpdateTime={onUpdateEventTime}
           onTimelineTimeEditStart={onTimelineTimeEditStart}
           onTimelineTimeEditEnd={onTimelineTimeEditEnd}
-          editable={permissions.canManageEvents}
+          editable={permissions.canManageOperational}
         />
       </Card>
 
