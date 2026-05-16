@@ -687,27 +687,169 @@ function extractQuoteFields(text: string, fallbackDate: string, fileName: string
   };
 }
 
+class PdfImportError extends Error {
+  constructor(
+    message: string,
+    public readonly causeDetails?: unknown,
+  ) {
+    super(message);
+    this.name = "PdfImportError";
+  }
+}
+
+function getPdfWorkerSrc() {
+  if (typeof window === "undefined") return "/pdf.worker.mjs";
+  return new URL("/pdf.worker.mjs", window.location.href).toString();
+}
+
+function formatBytesForDebug(bytes: Uint8Array, byteCount = 16) {
+  const sample = bytes.slice(0, byteCount);
+  return {
+    ascii: Array.from(sample)
+      .map((byte) => (byte >= 32 && byte <= 126 ? String.fromCharCode(byte) : "."))
+      .join(""),
+    hex: Array.from(sample)
+      .map((byte) => byte.toString(16).padStart(2, "0"))
+      .join(" "),
+  };
+}
+
+function getDebugError(error: unknown) {
+  if (error instanceof Error) {
+    return {
+      name: error.name,
+      message: error.message,
+      stack: error.stack,
+    };
+  }
+
+  return {
+    name: typeof error,
+    message: String(error),
+  };
+}
+
 async function extractPdfText(file: File) {
+  const debugId = `quote-pdf-${Date.now()}`;
+  console.info("[Quote PDF import] file received", {
+    debugId,
+    name: file.name,
+    type: file.type || "(empty)",
+    size: file.size,
+    lastModified: "lastModified" in file ? file.lastModified : null,
+  });
+
+  let arrayBuffer: ArrayBuffer;
+  try {
+    arrayBuffer = await file.arrayBuffer();
+  } catch (readError) {
+    console.error("[Quote PDF import] file.arrayBuffer failed", {
+      debugId,
+      error: getDebugError(readError),
+    });
+    throw new PdfImportError("Impossible de lire le fichier PDF depuis l’appareil.", readError);
+  }
+
+  const bytes = new Uint8Array(arrayBuffer);
+  const header = formatBytesForDebug(bytes);
+  const hasPdfHeader = header.ascii.startsWith("%PDF");
+  console.info("[Quote PDF import] file bytes", {
+    debugId,
+    byteLength: arrayBuffer.byteLength,
+    uint8Length: bytes.byteLength,
+    header,
+    hasPdfHeader,
+  });
+
+  if (bytes.byteLength === 0) {
+    throw new PdfImportError("Le fichier PDF reçu est vide.");
+  }
+
+  if (!hasPdfHeader) {
+    console.warn("[Quote PDF import] PDF header is not %PDF; trying pdfjs anyway", {
+      debugId,
+      header,
+    });
+  }
+
   const pdfjs = await import("pdfjs-dist");
-  pdfjs.GlobalWorkerOptions.workerSrc = new URL("pdfjs-dist/build/pdf.worker.mjs", import.meta.url).toString();
-  const bytes = new Uint8Array(await file.arrayBuffer());
-  const pdf = await pdfjs.getDocument({ data: bytes }).promise;
+  const workerSrc = getPdfWorkerSrc();
+  pdfjs.GlobalWorkerOptions.workerSrc = workerSrc;
+  console.info("[Quote PDF import] pdfjs configured", {
+    debugId,
+    version: pdfjs.version,
+    workerSrc,
+  });
+
+  let pdf;
+  try {
+    const loadingTask = pdfjs.getDocument({
+      data: bytes.slice(),
+      useWorkerFetch: false,
+      useWasm: false,
+    });
+    pdf = await loadingTask.promise;
+    console.info("[Quote PDF import] pdfjs loaded document", {
+      debugId,
+      pages: pdf.numPages,
+    });
+  } catch (pdfError) {
+    console.error("[Quote PDF import] pdfjs failed to load document", {
+      debugId,
+      hasPdfHeader,
+      workerSrc,
+      error: getDebugError(pdfError),
+    });
+    throw new PdfImportError(
+      hasPdfHeader
+        ? "Le PDF semble valide, mais le lecteur PDF de l’app n’a pas réussi à l’ouvrir."
+        : "Le fichier reçu ne ressemble pas à un PDF valide.",
+      pdfError,
+    );
+  }
+
   const pages: string[] = [];
 
   for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber += 1) {
-    const page = await pdf.getPage(pageNumber);
-    const content = await page.getTextContent();
-    const pageText = content.items
-      .map((item) => {
-        if (!("str" in item)) return "";
-        const text = item.str;
-        return "hasEOL" in item && item.hasEOL ? `${text}\n` : `${text} `;
-      })
-      .join("");
-    pages.push(pageText);
+    try {
+      const page = await pdf.getPage(pageNumber);
+      const content = await page.getTextContent();
+      const pageText = content.items
+        .map((item) => {
+          const textItem = item as { str?: unknown; hasEOL?: boolean };
+          if (typeof textItem.str !== "string") return "";
+          return textItem.hasEOL ? `${textItem.str}\n` : `${textItem.str} `;
+        })
+        .join("");
+
+      console.info("[Quote PDF import] extracted page text", {
+        debugId,
+        pageNumber,
+        itemCount: content.items.length,
+        textLength: pageText.trim().length,
+      });
+      pages.push(pageText);
+    } catch (pageError) {
+      console.error("[Quote PDF import] page text extraction failed", {
+        debugId,
+        pageNumber,
+        error: getDebugError(pageError),
+      });
+      throw new PdfImportError("Le PDF s’ouvre, mais l’extraction du texte a échoué.", pageError);
+    }
   }
 
-  return pages.join("\n");
+  const text = pages.join("\n");
+  console.info("[Quote PDF import] extracted document text", {
+    debugId,
+    totalTextLength: text.trim().length,
+  });
+
+  if (!text.trim()) {
+    throw new PdfImportError("Le PDF a été lu, mais aucun texte exploitable n’a été trouvé.");
+  }
+
+  return text;
 }
 
 function eventSortValue(event: ProductionEvent) {
@@ -7614,8 +7756,21 @@ function QuoteImportModal({
       setResolution(null);
       setStep("review");
     } catch (extractError) {
-      console.error("Failed to extract quote PDF text", extractError);
-      setError("Impossible de lire ce PDF. Vérifiez qu'il contient bien du texte sélectionnable.");
+      console.error("Failed to extract quote PDF text", {
+        fileName: file.name,
+        fileType: file.type || "(empty)",
+        fileSize: file.size,
+        error: getDebugError(extractError),
+        cause:
+          extractError instanceof PdfImportError && extractError.causeDetails
+            ? getDebugError(extractError.causeDetails)
+            : null,
+      });
+      setError(
+        extractError instanceof PdfImportError
+          ? extractError.message
+          : "Impossible de lire ce PDF. Vérifiez qu'il contient bien du texte sélectionnable.",
+      );
     } finally {
       setExtracting(false);
     }
