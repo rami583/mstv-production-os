@@ -1307,7 +1307,7 @@ export default function Home() {
               setProfile(nextProfile);
             }
 
-            await reloadData();
+            await reloadData(undefined, { silent: true });
 
             if (trashOpen) {
               await refreshTrash();
@@ -1419,8 +1419,10 @@ export default function Home() {
     };
   }, []);
 
-  async function reloadData(nextSelectedId?: string | null) {
-    setLoading(true);
+  async function reloadData(nextSelectedId?: string | null, options: { silent?: boolean } = {}) {
+    if (!options.silent) {
+      setLoading(true);
+    }
     setError(null);
 
     try {
@@ -1434,7 +1436,9 @@ export default function Home() {
     } catch (supabaseError) {
       setError(supabaseError instanceof Error ? supabaseError.message : "Impossible de charger les données.");
     } finally {
-      setLoading(false);
+      if (!options.silent) {
+        setLoading(false);
+      }
     }
   }
 
@@ -3575,6 +3579,7 @@ function AppHeader({
   onDeleteEvent: () => void;
 }) {
   const menuWrapperRef = useRef<HTMLDivElement | null>(null);
+  const hasCreateMenuActions = canImportQuote || canCreateEvent || canDuplicateEvent || canDeleteEvent || canOpenTrash;
 
   useEffect(() => {
     if (!createMenuOpen) return;
@@ -3589,6 +3594,12 @@ function AppHeader({
     document.addEventListener("pointerdown", handlePointerDown);
     return () => document.removeEventListener("pointerdown", handlePointerDown);
   }, [createMenuOpen, setCreateMenuOpen]);
+
+  useEffect(() => {
+    if (!hasCreateMenuActions && createMenuOpen) {
+      setCreateMenuOpen(false);
+    }
+  }, [createMenuOpen, hasCreateMenuActions, setCreateMenuOpen]);
 
   return (
     <header className="relative mb-5 flex items-center justify-between gap-2 px-1 py-1">
@@ -3633,29 +3644,31 @@ function AppHeader({
         )}
         {canOpenHistory && <HeaderIcon label="Historique" icon={History} onClick={onOpenHistory} />}
         <HeaderIcon label="Rechercher" icon={Search} onClick={onSearch} />
-        <div ref={menuWrapperRef} className="relative">
-          <button
-            onClick={() => setCreateMenuOpen((current) => !current)}
-            className="flex h-10 w-10 items-center justify-center rounded-full bg-[#bb2720] text-base font-semibold leading-none text-white transition hover:bg-[#a7211b]"
-            aria-label="Créer"
-          >
-            +
-          </button>
-          {createMenuOpen && (
-            <CreateMenu
-              onImportQuote={onImportQuote}
-              onCreateEvent={onCreateEvent}
-              onOpenTrash={onOpenTrash}
-              canImportQuote={canImportQuote}
-              canCreateEvent={canCreateEvent}
-              canOpenTrash={canOpenTrash}
-              canDuplicateEvent={canDuplicateEvent}
-              onDuplicateEvent={onDuplicateEvent}
-              canDeleteEvent={canDeleteEvent}
-              onDeleteEvent={onDeleteEvent}
-            />
-          )}
-        </div>
+        {hasCreateMenuActions && (
+          <div ref={menuWrapperRef} className="relative">
+            <button
+              onClick={() => setCreateMenuOpen((current) => !current)}
+              className="flex h-10 w-10 items-center justify-center rounded-full bg-[#bb2720] text-base font-semibold leading-none text-white transition hover:bg-[#a7211b]"
+              aria-label="Créer"
+            >
+              +
+            </button>
+            {createMenuOpen && (
+              <CreateMenu
+                onImportQuote={onImportQuote}
+                onCreateEvent={onCreateEvent}
+                onOpenTrash={onOpenTrash}
+                canImportQuote={canImportQuote}
+                canCreateEvent={canCreateEvent}
+                canOpenTrash={canOpenTrash}
+                canDuplicateEvent={canDuplicateEvent}
+                onDuplicateEvent={onDuplicateEvent}
+                canDeleteEvent={canDeleteEvent}
+                onDeleteEvent={onDeleteEvent}
+              />
+            )}
+          </div>
+        )}
         <AccountMenu profile={profile} email={email} canManageUsers={canManageUsers} onOpenUserManagement={onOpenUserManagement} onLogout={onLogout} />
       </div>
     </header>
