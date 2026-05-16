@@ -248,6 +248,17 @@ type QuoteExtractionResult = {
 };
 
 const userRoleOptions: UserRole[] = ["admin", "production", "technical", "readonly"];
+const realtimeTableNames = [
+  "events",
+  "event_options",
+  "event_option_items",
+  "event_links",
+  "event_link_entries",
+  "event_document_groups",
+  "event_documents",
+  "event_activity_log",
+  "profiles",
+] as const;
 
 type DuplicateEventRequest = {
   event: ProductionEvent;
@@ -1319,6 +1330,77 @@ export default function Home() {
     if (!userManagementOpen || !permissions.canManageUsers) return;
     void refreshManagedProfiles();
   }, [userManagementOpen, permissions.canManageUsers]);
+
+  useEffect(() => {
+    if (!authSession || !profile || !supabase) return;
+
+    const currentSession = authSession;
+    const realtimeClient = supabase;
+    let disposed = false;
+    let refreshTimer: number | null = null;
+
+    function scheduleRealtimeRefresh() {
+      if (refreshTimer) {
+        window.clearTimeout(refreshTimer);
+      }
+
+      refreshTimer = window.setTimeout(() => {
+        if (disposed) return;
+
+        void (async () => {
+          try {
+            const nextProfile = await fetchOrCreateProfile(currentSession);
+            if (!disposed) {
+              setProfile(nextProfile);
+            }
+
+            await reloadData();
+
+            if (trashOpen) {
+              await refreshTrash();
+            }
+
+            if (historyOpen && selectedEvent?.id) {
+              await refreshActivityLog(selectedEvent.id);
+            }
+
+            if (userManagementOpen && permissions.canManageUsers) {
+              await refreshManagedProfiles();
+            }
+          } catch (realtimeError) {
+            console.warn("Realtime refresh failed", realtimeError);
+          }
+        })();
+      }, 450);
+    }
+
+    const channel = realtimeClient.channel(`mstv-production-realtime-${currentSession.user.id}`);
+    realtimeTableNames.forEach((table) => {
+      channel.on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table,
+        },
+        scheduleRealtimeRefresh,
+      );
+    });
+
+    channel.subscribe((status) => {
+      if (status === "CHANNEL_ERROR" || status === "TIMED_OUT") {
+        console.warn("Supabase realtime channel status", status);
+      }
+    });
+
+    return () => {
+      disposed = true;
+      if (refreshTimer) {
+        window.clearTimeout(refreshTimer);
+      }
+      void realtimeClient.removeChannel(channel);
+    };
+  }, [authSession?.user.id, profile?.id, profile?.role, trashOpen, historyOpen, selectedEvent?.id, userManagementOpen, permissions.canManageUsers]);
 
   useEffect(() => {
     let cancelled = false;

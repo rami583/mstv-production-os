@@ -5,6 +5,7 @@ create index if not exists profiles_role_idx on public.profiles(role);
 create index if not exists profiles_email_idx on public.profiles(email);
 
 drop policy if exists "authenticated profiles update own basic fields" on public.profiles;
+drop policy if exists "authenticated profiles update own or admin" on public.profiles;
 create policy "authenticated profiles update own or admin"
 on public.profiles
 for update
