@@ -87,6 +87,10 @@ type EventQueryRow = EventRow & {
 type TeamMember = {
   id: string;
   firstName: string;
+  lastName: string | null;
+  initials: string;
+  isAssignable: boolean;
+  visibility: "admin" | "team";
   role: string | null;
 };
 
@@ -258,6 +262,7 @@ const realtimeTableNames = [
   "event_documents",
   "event_activity_log",
   "profiles",
+  "team_members",
 ] as const;
 
 type DuplicateEventRequest = {
@@ -323,13 +328,14 @@ const defaultLinks = ["Drive client", "Habillage Guillaume", "Événement LiveMa
 const platformLinkLabels = new Set(["plateforme", "plateforme de diffusion", "evenement plateforme", "event plateforme"]);
 const eventDocumentsBucket = "event-documents";
 const optionCollaboratorProfiles = [
-  { firstName: "Antoine", displayName: "Antoine Santi", initials: "AS" },
-  { firstName: "Rami", displayName: "Rami Mustakim", initials: "RM" },
-  { firstName: "Arthur", displayName: "Arthur Legrand", initials: "AL" },
-  { firstName: "Gauthier", displayName: "Gauthier Renard", initials: "GR" },
-  { firstName: "Tony", displayName: "Tony Bouilly", initials: "TB" },
-  { firstName: "Guillaume", displayName: "Guillaume Gallot", initials: "GG" },
-];
+  { firstName: "Rami", lastName: "Mustakim", displayName: "Rami Mustakim", initials: "RM", visibility: "admin" },
+  { firstName: "Antoine", lastName: "Santi", displayName: "Antoine Santi", initials: "AS", visibility: "admin" },
+  { firstName: "Guillaume", lastName: "Gallot", displayName: "Guillaume Gallot", initials: "GG", visibility: "admin" },
+  { firstName: "Arthur", lastName: "Legrand", displayName: "Arthur Legrand", initials: "AL", visibility: "team" },
+  { firstName: "Tony", lastName: "Bouilly", displayName: "Tony Bouilly", initials: "TB", visibility: "team" },
+  { firstName: "Gauthier", lastName: "Renard", displayName: "Gauthier Renard", initials: "GR", visibility: "team" },
+] as const;
+const optionCollaboratorOrder: Map<string, number> = new Map(optionCollaboratorProfiles.map((profile, index) => [profile.firstName, index]));
 
 const calendarArrowClassName =
   "flex h-9 w-9 items-center justify-center rounded-full text-base text-[#bb2720] transition hover:bg-[#bb2720]/[0.08] disabled:cursor-not-allowed disabled:text-stone-300 disabled:hover:bg-transparent";
@@ -795,11 +801,27 @@ function serializeLinkEntries(entries: EventLinkEntry[], isPlatform: boolean) {
 }
 
 function mapTeamMember(row: TeamMemberRow): TeamMember {
+  const fallbackProfile = optionCollaboratorProfiles.find((profile) => profile.firstName === row.first_name);
+  const firstName = row.first_name;
+  const lastName = row.last_name ?? fallbackProfile?.lastName ?? null;
+  const initials = row.initials ?? fallbackProfile?.initials ?? getInitialsFromName(firstName, lastName);
+  const visibility = row.visibility === "team" || fallbackProfile?.visibility === "team" ? "team" : "admin";
+
   return {
     id: row.id,
-    firstName: row.first_name,
+    firstName,
+    lastName,
+    initials,
+    isAssignable: row.is_assignable ?? true,
+    visibility,
     role: row.role,
   };
+}
+
+function getInitialsFromName(firstName: string, lastName?: string | null) {
+  const firstInitial = firstName.trim().charAt(0).toLocaleUpperCase("fr-FR");
+  const lastInitial = lastName?.trim().charAt(0).toLocaleUpperCase("fr-FR") ?? "";
+  return `${firstInitial}${lastInitial}`.slice(0, 2) || firstInitial || "U";
 }
 
 function normalizeUserRole(role: string | null | undefined): UserRole {
@@ -866,11 +888,33 @@ function mapEventActivityLog(row: EventActivityLogRow): EventActivityLog {
 }
 
 function getOptionCollaboratorProfile(member: TeamMember) {
-  return optionCollaboratorProfiles.find((profile) => profile.firstName === member.firstName) ?? null;
+  const fallbackProfile = optionCollaboratorProfiles.find((profile) => profile.firstName === member.firstName);
+  return {
+    firstName: member.firstName,
+    displayName: [member.firstName, member.lastName].filter(Boolean).join(" ") || fallbackProfile?.displayName || member.firstName,
+    initials: member.initials || fallbackProfile?.initials || getInitialsFromName(member.firstName, member.lastName),
+  };
 }
 
 function getOptionAssignee(option: EventOption) {
   return option.assignees[0] ?? null;
+}
+
+function canRoleAssignOptionToMember(role: UserRole, member: TeamMember) {
+  if (!member.isAssignable) return false;
+  if (role === "admin") return true;
+  return member.visibility === "team";
+}
+
+function getVisibleOptionCollaborators(teamMembers: TeamMember[], role: UserRole) {
+  return teamMembers
+    .filter((member) => canRoleAssignOptionToMember(role, member))
+    .sort((first, second) => {
+      const firstOrder = optionCollaboratorOrder.get(first.firstName) ?? 999;
+      const secondOrder = optionCollaboratorOrder.get(second.firstName) ?? 999;
+      if (firstOrder !== secondOrder) return firstOrder - secondOrder;
+      return first.firstName.localeCompare(second.firstName, "fr");
+    });
 }
 
 function mapEventOptionItem(row: EventOptionItemRow): EventOptionItem {
@@ -1003,12 +1047,12 @@ function withLinkEntries(events: ProductionEvent[], entries: EventLinkEntry[]) {
 function withOptionAssignees(events: ProductionEvent[], teamMembers: TeamMember[]) {
   return events.map((event) => ({
     ...event,
-    options: event.options.map((option) => ({
-      ...option,
-      assignees: option.assignedTeamMemberId
-        ? teamMembers.filter((member) => member.id === option.assignedTeamMemberId && getOptionCollaboratorProfile(member)).slice(0, 1)
-        : [],
-    })),
+      options: event.options.map((option) => ({
+        ...option,
+        assignees: option.assignedTeamMemberId
+        ? teamMembers.filter((member) => member.id === option.assignedTeamMemberId && member.isAssignable).slice(0, 1)
+          : [],
+      })),
   }));
 }
 
@@ -2523,6 +2567,9 @@ export default function Home() {
     if (!supabase) {
       throw new Error("Configuration Supabase manquante.");
     }
+    if (!canRoleAssignOptionToMember(profile?.role ?? "team", member)) {
+      throw new Error("Vous ne pouvez pas assigner cette option à ce collaborateur.");
+    }
 
     const currentAssignee = getOptionAssignee(option);
     const isAssigned = currentAssignee?.id === member.id;
@@ -2579,6 +2626,37 @@ export default function Home() {
       previousValue: { assignedTeamMemberId: currentAssignee?.id ?? null, name: currentAssignee?.firstName ?? null },
       newValue: { assignedTeamMemberId: nextAssignedTeamMemberId, name: isAssigned ? null : member.firstName },
     });
+  }
+
+  async function createTeamMember(input: { firstName: string; lastName: string }) {
+    assertCanManageUsers();
+    if (!supabase) {
+      throw new Error("Configuration Supabase manquante.");
+    }
+
+    const firstName = formatTitleCase(input.firstName);
+    const lastName = formatTitleCase(input.lastName);
+    const initials = getInitialsFromName(firstName, lastName);
+    const payload: Database["public"]["Tables"]["team_members"]["Insert"] = {
+      first_name: firstName,
+      last_name: lastName,
+      initials,
+      is_assignable: true,
+      visibility: "admin",
+      role: "Collaborateur",
+    };
+
+    const { data, error: insertError } = await supabase
+      .from("team_members")
+      .insert(payload)
+      .select()
+      .single();
+
+    if (insertError) throw insertError;
+
+    const nextMember = mapTeamMember(data);
+    setTeamMembers((current) => [...current, nextMember].sort((a, b) => a.firstName.localeCompare(b.firstName, "fr")));
+    return nextMember;
   }
 
   async function createEventLink(eventId: string, input: { label: string; url: string }) {
@@ -3361,6 +3439,7 @@ export default function Home() {
               onCreateOptionItem={createEventOptionItem}
               onDeleteOptionItem={deleteEventOptionItem}
               onToggleOptionAssignee={toggleOptionAssignee}
+              onCreateTeamMember={createTeamMember}
               onCreateLink={createEventLink}
               onDeleteLink={deleteEventLink}
               onRenameLink={renameEventLink}
@@ -5068,6 +5147,7 @@ function ProductionDetail({
   onCreateOptionItem,
   onDeleteOptionItem,
   onToggleOptionAssignee,
+  onCreateTeamMember,
   onCreateLink,
   onDeleteLink,
   onRenameLink,
@@ -5099,6 +5179,7 @@ function ProductionDetail({
   onCreateOptionItem: (option: EventOption, label: string) => Promise<EventOptionItem>;
   onDeleteOptionItem: (option: EventOption, item: EventOptionItem) => Promise<void>;
   onToggleOptionAssignee: (option: EventOption, member: TeamMember) => Promise<void>;
+  onCreateTeamMember: (input: { firstName: string; lastName: string }) => Promise<TeamMember>;
   onCreateLink: (eventId: string, input: { label: string; url: string }) => Promise<EventLink>;
   onDeleteLink: (link: EventLink) => Promise<void>;
   onRenameLink: (link: EventLink, label: string) => Promise<EventLink>;
@@ -5788,6 +5869,7 @@ function ProductionDetail({
             onCreateOptionItem={onCreateOptionItem}
             onDeleteOptionItem={onDeleteOptionItem}
             onToggleOptionAssignee={onToggleOptionAssignee}
+            onCreateTeamMember={onCreateTeamMember}
             teamMembers={teamMembers}
             onRenameLink={onRenameLink}
             onSaveLinkEntries={onSaveLinkEntries}
@@ -6436,6 +6518,7 @@ function ContextDetailBlock({
   onCreateOptionItem,
   onDeleteOptionItem,
   onToggleOptionAssignee,
+  onCreateTeamMember,
   teamMembers,
   onRenameLink,
   onSaveLinkEntries,
@@ -6453,6 +6536,7 @@ function ContextDetailBlock({
   onCreateOptionItem: (option: EventOption, label: string) => Promise<EventOptionItem>;
   onDeleteOptionItem: (option: EventOption, item: EventOptionItem) => Promise<void>;
   onToggleOptionAssignee: (option: EventOption, member: TeamMember) => Promise<void>;
+  onCreateTeamMember: (input: { firstName: string; lastName: string }) => Promise<TeamMember>;
   teamMembers: TeamMember[];
   onRenameLink: (link: EventLink, label: string) => Promise<EventLink>;
   onSaveLinkEntries: (link: EventLink, drafts: LinkEntryDraft[]) => Promise<EventLink>;
@@ -6481,6 +6565,11 @@ function ContextDetailBlock({
   const [savingOptionItem, setSavingOptionItem] = useState(false);
   const [optionItemError, setOptionItemError] = useState<string | null>(null);
   const [optionAssigneeError, setOptionAssigneeError] = useState<string | null>(null);
+  const [addingCollaborator, setAddingCollaborator] = useState(false);
+  const [collaboratorFirstName, setCollaboratorFirstName] = useState("");
+  const [collaboratorLastName, setCollaboratorLastName] = useState("");
+  const [savingCollaborator, setSavingCollaborator] = useState(false);
+  const [collaboratorError, setCollaboratorError] = useState<string | null>(null);
   const [titleRenameError, setTitleRenameError] = useState<string | null>(null);
   const [draggingDocumentFiles, setDraggingDocumentFiles] = useState(false);
   const [uploadingDocumentFiles, setUploadingDocumentFiles] = useState(false);
@@ -6535,6 +6624,11 @@ function ContextDetailBlock({
     setSavingOptionItem(false);
     setOptionItemError(null);
     setOptionAssigneeError(null);
+    setAddingCollaborator(false);
+    setCollaboratorFirstName("");
+    setCollaboratorLastName("");
+    setSavingCollaborator(false);
+    setCollaboratorError(null);
     setTitleRenameError(null);
     setDraggingDocumentFiles(false);
     setUploadingDocumentFiles(false);
@@ -6657,6 +6751,25 @@ function ContextDetailBlock({
       await onToggleOptionAssignee(selectedOption, member);
     } catch (assignError) {
       setOptionAssigneeError(assignError instanceof Error ? assignError.message : "Impossible de modifier les collaborateurs.");
+    }
+  }
+
+  async function addCollaborator(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!permissions.canManageUsers) return;
+
+    setSavingCollaborator(true);
+    setCollaboratorError(null);
+
+    try {
+      await onCreateTeamMember({ firstName: collaboratorFirstName, lastName: collaboratorLastName });
+      setCollaboratorFirstName("");
+      setCollaboratorLastName("");
+      setAddingCollaborator(false);
+    } catch (saveError) {
+      setCollaboratorError(saveError instanceof Error ? saveError.message : "Impossible d'ajouter ce collaborateur.");
+    } finally {
+      setSavingCollaborator(false);
     }
   }
 
@@ -6873,13 +6986,9 @@ function ContextDetailBlock({
   if (!selectedOption) return null;
 
   const optionTone = getOptionTone(selectedOption.status);
-  const optionCollaborators = optionCollaboratorProfiles
-    .map((profile) => {
-      const member = teamMembers.find((item) => item.firstName === profile.firstName);
-      return member ? { ...profile, member } : null;
-    })
-    .filter((entry): entry is (typeof optionCollaboratorProfiles)[number] & { member: TeamMember } => Boolean(entry));
+  const optionCollaborators = getVisibleOptionCollaborators(teamMembers, permissions.canManageUsers ? "admin" : "team");
   const selectedOptionAssignee = getOptionAssignee(selectedOption);
+  const nextCollaboratorInitials = getInitialsFromName(collaboratorFirstName, collaboratorLastName);
 
   return (
     <Card className="border-emerald-200 bg-white p-4 sm:p-5">
@@ -6956,10 +7065,63 @@ function ContextDetailBlock({
       </div>
       {canEdit && (
       <div className="mt-4">
-        <div className="mb-2 text-base font-semibold uppercase tracking-[0.16em] text-stone-500">Collaborateurs</div>
+        <div className="mb-2 flex items-center justify-between gap-3">
+          <div className="text-base font-semibold uppercase tracking-[0.16em] text-stone-500">Collaborateurs</div>
+          {permissions.canManageUsers && !addingCollaborator && (
+            <button
+              type="button"
+              onClick={() => setAddingCollaborator(true)}
+              className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-emerald-200 bg-emerald-50 text-base font-semibold leading-none text-emerald-700 transition hover:bg-emerald-100"
+              aria-label="Ajouter un collaborateur"
+              title="Ajouter un collaborateur"
+            >
+              +
+            </button>
+          )}
+        </div>
+        {permissions.canManageUsers && addingCollaborator && (
+          <form onSubmit={addCollaborator} className="mb-3 flex min-w-0 flex-col gap-2 rounded-xl border border-emerald-100 bg-emerald-50/60 p-2">
+            <div className="grid min-w-0 grid-cols-2 gap-2">
+              <input
+                required
+                value={collaboratorFirstName}
+                onChange={(event) => setCollaboratorFirstName(event.target.value)}
+                placeholder="Prénom"
+                className="h-9 min-w-0 rounded-full border border-emerald-200 bg-white px-3 text-base font-medium text-stone-950 outline-none transition placeholder:text-stone-300 focus:border-emerald-400"
+              />
+              <input
+                required
+                value={collaboratorLastName}
+                onChange={(event) => setCollaboratorLastName(event.target.value)}
+                placeholder="Nom"
+                className="h-9 min-w-0 rounded-full border border-emerald-200 bg-white px-3 text-base font-medium text-stone-950 outline-none transition placeholder:text-stone-300 focus:border-emerald-400"
+              />
+            </div>
+            <div className="flex items-center justify-between gap-2">
+              <span className="rounded-full bg-white px-2.5 py-1 text-base font-semibold text-emerald-700">{nextCollaboratorInitials}</span>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setAddingCollaborator(false);
+                    setCollaboratorFirstName("");
+                    setCollaboratorLastName("");
+                  }}
+                  className="h-8 rounded-full border border-emerald-100 bg-white px-3 text-base font-semibold text-stone-500 transition hover:bg-emerald-50"
+                >
+                  Annuler
+                </button>
+                <button disabled={savingCollaborator} className="h-8 rounded-full bg-emerald-600 px-3 text-base font-semibold text-white transition hover:bg-emerald-700 disabled:bg-stone-300">
+                  Ajouter
+                </button>
+              </div>
+            </div>
+          </form>
+        )}
         <div className="flex flex-wrap gap-2">
-          {optionCollaborators.map(({ member }) => {
+          {optionCollaborators.map((member) => {
             const isAssigned = selectedOptionAssignee?.id === member.id;
+            const collaboratorProfile = getOptionCollaboratorProfile(member);
             return (
               <button
                 key={member.id}
@@ -6971,12 +7133,13 @@ function ContextDetailBlock({
                     : "border-emerald-100 bg-emerald-50/80 text-stone-700 hover:bg-emerald-100/55",
                 )}
               >
-                {member.firstName}
+                {collaboratorProfile.firstName}
               </button>
             );
           })}
         </div>
         {optionAssigneeError && <div className="mt-2 text-base font-medium text-rose-700">{optionAssigneeError}</div>}
+        {collaboratorError && <div className="mt-2 text-base font-medium text-rose-700">{collaboratorError}</div>}
       </div>
       )}
     </Card>

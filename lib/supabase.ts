@@ -213,12 +213,20 @@ export type Database = {
         Row: {
           id: string;
           first_name: string;
+          last_name: string | null;
+          initials: string | null;
+          is_assignable: boolean | null;
+          visibility: string | null;
           role: string | null;
           created_at: string;
         };
         Insert: {
           id?: string;
           first_name: string;
+          last_name?: string | null;
+          initials?: string | null;
+          is_assignable?: boolean | null;
+          visibility?: string | null;
           role?: string | null;
           created_at?: string;
         };
