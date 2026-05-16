@@ -3148,26 +3148,62 @@ export default function Home() {
     if (!supabase) {
       throw new Error("Configuration Supabase manquante.");
     }
+    if (profile?.id === profileToUpdate.id) {
+      setManagedProfilesError("Vous ne pouvez pas modifier votre propre rôle.");
+      return;
+    }
 
+    const payload = { role };
     setUpdatingProfileId(profileToUpdate.id);
     setManagedProfilesError(null);
 
     try {
       const { data, error: updateError } = await supabase
         .from("profiles")
-        .update({ role })
+        .update(payload)
         .eq("id", profileToUpdate.id)
         .select()
         .single();
 
+      console.info("Profile role update response", {
+        payload,
+        targetProfileId: profileToUpdate.id,
+        requestedRole: role,
+        returnedRow: data,
+        errorMessage: updateError?.message,
+        errorCode: updateError?.code,
+        errorDetails: updateError?.details,
+        errorHint: updateError?.hint,
+      });
+
       if (updateError) throw updateError;
 
       const updatedProfile = mapUserProfile(data);
+      if (updatedProfile.role !== role) {
+        console.warn("Profile role update did not persist requested role", {
+          payload,
+          targetProfileId: profileToUpdate.id,
+          requestedRole: role,
+          returnedRole: updatedProfile.role,
+          returnedRow: data,
+        });
+        throw new Error("Le rôle n'a pas été modifié dans Supabase. Vérifiez la migration des policies profils.");
+      }
+
       setManagedProfiles((current) => current.map((item) => (item.id === updatedProfile.id ? updatedProfile : item)));
       if (profile?.id === updatedProfile.id) {
         setProfile(updatedProfile);
       }
     } catch (roleError) {
+      console.error("Failed to update profile role", {
+        payload,
+        targetProfileId: profileToUpdate.id,
+        targetEmail: profileToUpdate.email,
+        currentProfileId: profile?.id,
+        currentProfileRole: profile?.role,
+        errorMessage: roleError instanceof Error ? roleError.message : null,
+        error: roleError,
+      });
       setManagedProfilesError(roleError instanceof Error ? roleError.message : "Impossible de modifier le rôle.");
     } finally {
       setUpdatingProfileId(null);
@@ -7499,19 +7535,22 @@ function UserManagementSheet({
                       <p className="mt-1 truncate text-base font-medium text-stone-500">{userProfile.email ?? "Email non renseigné"}</p>
                       <p className="mt-1 text-sm font-semibold text-stone-400">Créé le {formatHistoryTimestamp(userProfile.createdAt)}</p>
                     </div>
-                    <select
-                      value={userProfile.role}
-                      disabled={isUpdating}
-                      onChange={(event) => void onUpdateRole(userProfile, event.target.value as UserRole)}
-                      className="h-10 rounded-full border border-stone-200 bg-white px-3 text-base font-semibold text-stone-700 outline-none transition focus:border-[#bb2720]/40 disabled:text-stone-300"
-                      aria-label={`Rôle de ${displayName}`}
-                    >
-                      {userRoleOptions.map((role) => (
-                        <option key={role} value={role}>
-                          {getRoleLabel(role)}
-                        </option>
-                      ))}
-                    </select>
+                    <div className="flex shrink-0 flex-col items-start gap-1 sm:items-end">
+                      <select
+                        value={userProfile.role}
+                        disabled={isUpdating || isCurrentProfile}
+                        onChange={(event) => void onUpdateRole(userProfile, event.target.value as UserRole)}
+                        className="h-10 rounded-full border border-stone-200 bg-white px-3 text-base font-semibold text-stone-700 outline-none transition focus:border-[#bb2720]/40 disabled:bg-stone-100 disabled:text-stone-400"
+                        aria-label={`Rôle de ${displayName}`}
+                      >
+                        {userRoleOptions.map((role) => (
+                          <option key={role} value={role}>
+                            {getRoleLabel(role)}
+                          </option>
+                        ))}
+                      </select>
+                      {isCurrentProfile && <p className="text-xs font-semibold text-stone-400">Vous ne pouvez pas modifier votre propre rôle.</p>}
+                    </div>
                   </div>
                 </div>
               );
