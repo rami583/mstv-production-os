@@ -3346,7 +3346,7 @@ export default function Home() {
             openQuoteImport();
           }}
           onSearch={() => setSearchOpen(true)}
-          canOpenHistory={screen === "detail" && Boolean(selectedEvent)}
+          canOpenHistory={permissions.canManageEvents && screen === "detail" && Boolean(selectedEvent)}
           onOpenHistory={openHistory}
           canOpenTrash={permissions.canRestoreEvents || permissions.canPermanentDeleteEvents}
           onOpenTrash={() => {
