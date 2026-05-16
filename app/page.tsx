@@ -225,6 +225,11 @@ type QuoteExtractionResult = {
   services: string[];
 };
 
+type DuplicateEventRequest = {
+  event: ProductionEvent;
+  date: string;
+};
+
 const PAGE_GAP = 18;
 const PAGE_TRANSITION_MS = 360;
 const PAGE_TRANSITION_EASING = "cubic-bezier(0.22, 1, 0.36, 1)";
@@ -1063,6 +1068,8 @@ export default function Home() {
   const [editingReturnScreen, setEditingReturnScreen] = useState<Screen>("calendar");
   const [deleteDialogEvent, setDeleteDialogEvent] = useState<ProductionEvent | null>(null);
   const [permanentDeleteDialogEvent, setPermanentDeleteDialogEvent] = useState<ProductionEvent | null>(null);
+  const [duplicateDatePickerEvent, setDuplicateDatePickerEvent] = useState<ProductionEvent | null>(null);
+  const [duplicateRequest, setDuplicateRequest] = useState<DuplicateEventRequest | null>(null);
   const [dateEditorOpen, setDateEditorOpen] = useState(false);
   const [documentPreview, setDocumentPreview] = useState<DocumentPreview | null>(null);
   const [historyOpen, setHistoryOpen] = useState(false);
@@ -1548,6 +1555,141 @@ export default function Home() {
         newValue: { field, value: nextValue },
       });
     }
+  }
+
+  async function duplicateEventToDate(sourceEvent: ProductionEvent, nextDate: string) {
+    if (!supabase) {
+      throw new Error("Configuration Supabase manquante.");
+    }
+
+    if (sourceEvent.deletedAt) {
+      throw new Error("Impossible de dupliquer un événement supprimé.");
+    }
+
+    const normalizedDate = nextDate.trim();
+    if (!normalizedDate) {
+      throw new Error("La nouvelle date est obligatoire.");
+    }
+
+    const { data: duplicatedEvent, error: eventError } = await supabase
+      .from("events")
+      .insert({
+        client_name: sourceEvent.clientName,
+        event_name: sourceEvent.eventName,
+        date: normalizedDate,
+        client_arrival_time: sourceEvent.clientArrivalTime || null,
+        start_time: sourceEvent.startTime || null,
+        end_time: sourceEvent.endTime || null,
+        end_of_day_time: sourceEvent.endOfDayTime || null,
+        status: sourceEvent.status,
+      })
+      .select()
+      .single();
+
+    if (eventError) throw eventError;
+
+    for (const option of sourceEvent.options) {
+      const { data: duplicatedOption, error: optionError } = await supabase
+        .from("event_options")
+        .insert({
+          event_id: duplicatedEvent.id,
+          label: option.label,
+          status: option.status,
+          details: option.details,
+          assigned_team_member_id: option.assignedTeamMemberId,
+        })
+        .select()
+        .single();
+
+      if (optionError) throw optionError;
+
+      if (option.items.length > 0) {
+        const { error: optionItemsError } = await supabase.from("event_option_items").insert(
+          option.items.map((item) => ({
+            option_id: duplicatedOption.id,
+            label: item.label,
+          })),
+        );
+
+        if (optionItemsError) throw optionItemsError;
+      }
+    }
+
+    for (const link of sourceEvent.links) {
+      const { data: duplicatedLink, error: linkError } = await supabase
+        .from("event_links")
+        .insert({
+          event_id: duplicatedEvent.id,
+          label: link.label,
+          url: link.url,
+          stream_key: link.streamKey,
+          status: link.status,
+        })
+        .select()
+        .single();
+
+      if (linkError) throw linkError;
+
+      const entriesToDuplicate =
+        link.entries.length > 0
+          ? link.entries
+          : link.url || link.streamKey
+            ? [
+                {
+                  id: "",
+                  linkId: link.id,
+                  url: link.url,
+                  streamKey: link.streamKey,
+                  position: 0,
+                  createdAt: link.createdAt,
+                },
+              ]
+            : [];
+
+      if (entriesToDuplicate.length > 0) {
+        const { error: linkEntriesError } = await supabase.from("event_link_entries").insert(
+          entriesToDuplicate.map((entry, position) => ({
+            link_id: duplicatedLink.id,
+            url: entry.url,
+            stream_key: entry.streamKey,
+            position: entry.position ?? position,
+          })),
+        );
+
+        if (linkEntriesError) throw linkEntriesError;
+      }
+    }
+
+    if (sourceEvent.documentGroups.length > 0) {
+      const { error: documentGroupsError } = await supabase.from("event_document_groups").insert(
+        sourceEvent.documentGroups.map((group) => ({
+          event_id: duplicatedEvent.id,
+          label: group.label,
+        })),
+      );
+
+      if (documentGroupsError) throw documentGroupsError;
+    }
+
+    await logEventActivity({
+      eventId: duplicatedEvent.id,
+      actionType: "event_duplicated",
+      entityType: "event",
+      entityId: duplicatedEvent.id,
+      description: `Événement dupliqué depuis ${formatFullDate(sourceEvent.date)}`,
+      previousValue: {
+        eventId: sourceEvent.id,
+        date: sourceEvent.date,
+      },
+      newValue: {
+        date: normalizedDate,
+      },
+    });
+
+    await reloadData(duplicatedEvent.id);
+    setSelectedDateKey(normalizedDate);
+    setVisibleMonth(new Date(`${normalizedDate}T12:00:00`));
+    setScreen("detail");
   }
 
   async function updateEventTime(event: ProductionEvent, field: EventTimeField, value: string, activityDescription = "Horaire modifié") {
@@ -2689,6 +2831,13 @@ export default function Home() {
             setCreateModalOpen(true);
             setCreateMenuOpen(false);
           }}
+          canDuplicateEvent={screen === "detail" && Boolean(selectedEvent)}
+          onDuplicateEvent={() => {
+            if (selectedEvent && !selectedEvent.deletedAt) {
+              setDuplicateDatePickerEvent(selectedEvent);
+            }
+            setCreateMenuOpen(false);
+          }}
           canDeleteEvent={screen === "detail" && Boolean(selectedEvent)}
           onDeleteEvent={() => {
             console.log("Delete event menu action clicked", {
@@ -2849,6 +2998,28 @@ export default function Home() {
         />
       )}
 
+      {duplicateDatePickerEvent && (
+        <SharedDatePicker
+          selectedDate={duplicateDatePickerEvent.date}
+          onClose={() => setDuplicateDatePickerEvent(null)}
+          onSelectDate={(nextDate) => {
+            setDuplicateRequest({ event: duplicateDatePickerEvent, date: nextDate });
+            setDuplicateDatePickerEvent(null);
+          }}
+        />
+      )}
+
+      {duplicateRequest && (
+        <DuplicateEventDialog
+          request={duplicateRequest}
+          onClose={() => setDuplicateRequest(null)}
+          onConfirm={async (request) => {
+            await duplicateEventToDate(request.event, request.date);
+            setDuplicateRequest(null);
+          }}
+        />
+      )}
+
       {searchOpen && (
         <EventSearchOverlay
           events={chronologicalEvents}
@@ -2930,6 +3101,8 @@ function AppHeader({
   onLogoClick,
   onOpenYearOverview,
   onCreateEvent,
+  canDuplicateEvent,
+  onDuplicateEvent,
   canDeleteEvent,
   onDeleteEvent,
 }: {
@@ -2950,6 +3123,8 @@ function AppHeader({
   onLogoClick?: () => void;
   onOpenYearOverview: () => void;
   onCreateEvent: () => void;
+  canDuplicateEvent: boolean;
+  onDuplicateEvent: () => void;
   canDeleteEvent: boolean;
   onDeleteEvent: () => void;
 }) {
@@ -3025,6 +3200,8 @@ function AppHeader({
               onImportQuote={onImportQuote}
               onCreateEvent={onCreateEvent}
               onOpenTrash={onOpenTrash}
+              canDuplicateEvent={canDuplicateEvent}
+              onDuplicateEvent={onDuplicateEvent}
               canDeleteEvent={canDeleteEvent}
               onDeleteEvent={onDeleteEvent}
             />
@@ -3039,12 +3216,16 @@ function CreateMenu({
   onImportQuote,
   onCreateEvent,
   onOpenTrash,
+  canDuplicateEvent,
+  onDuplicateEvent,
   canDeleteEvent,
   onDeleteEvent,
 }: {
   onImportQuote: () => void;
   onCreateEvent: () => void;
   onOpenTrash: () => void;
+  canDuplicateEvent: boolean;
+  onDuplicateEvent: () => void;
   canDeleteEvent: boolean;
   onDeleteEvent: () => void;
 }) {
@@ -3062,6 +3243,14 @@ function CreateMenu({
       >
         Créer un événement
       </button>
+      {canDuplicateEvent && (
+        <button
+          onClick={onDuplicateEvent}
+          className="block w-full rounded-xl px-4 py-3 text-right text-base font-medium text-stone-700 transition hover:bg-[#bb2720]/[0.05] hover:text-stone-950"
+        >
+          Dupliquer l'événement
+        </button>
+      )}
       {canDeleteEvent && (
         <button
           onClick={onDeleteEvent}
@@ -3410,6 +3599,8 @@ function YearOverviewOverlay({
           onLogoClick={onGoToday}
           onOpenYearOverview={() => undefined}
           onCreateEvent={onCreateEvent}
+          canDuplicateEvent={false}
+          onDuplicateEvent={() => undefined}
           canDeleteEvent={false}
           onDeleteEvent={() => undefined}
         />
@@ -6661,6 +6852,73 @@ function TrashEventsSheet({
               );
             })}
           </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function DuplicateEventDialog({
+  request,
+  onClose,
+  onConfirm,
+}: {
+  request: DuplicateEventRequest;
+  onClose: () => void;
+  onConfirm: (request: DuplicateEventRequest) => Promise<void>;
+}) {
+  const [duplicating, setDuplicating] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function handleConfirm() {
+    setDuplicating(true);
+    setError(null);
+
+    try {
+      await onConfirm(request);
+    } catch (duplicateError) {
+      setError(duplicateError instanceof Error ? duplicateError.message : "Impossible de dupliquer l'événement.");
+      setDuplicating(false);
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-end bg-stone-950/10 p-3 sm:items-center sm:justify-center sm:p-6">
+      <div className="w-full rounded-3xl border border-stone-200 bg-white p-5 sm:max-w-md sm:p-6">
+        <div className="mb-5">
+          <p className="truncate text-base font-semibold text-stone-950">{request.event.clientName}</p>
+          <p className="mt-1 truncate text-base text-stone-500">{request.event.eventName}</p>
+          <div className="mt-4 grid grid-cols-2 gap-2">
+            <div className="rounded-2xl bg-stone-50 px-3 py-3">
+              <p className="text-xs font-semibold uppercase tracking-normal text-stone-400">Date source</p>
+              <p className="mt-1 text-base font-semibold text-stone-800">{formatFullDate(request.event.date)}</p>
+            </div>
+            <div className="rounded-2xl bg-[#bb2720]/[0.06] px-3 py-3">
+              <p className="text-xs font-semibold uppercase tracking-normal text-[#bb2720]/70">Nouvelle date</p>
+              <p className="mt-1 text-base font-semibold text-[#bb2720]">{formatFullDate(request.date)}</p>
+            </div>
+          </div>
+        </div>
+
+        {error && <div className="mb-4 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-base font-medium text-rose-700">{error}</div>}
+
+        <div className="flex justify-end gap-2">
+          <button
+            type="button"
+            onClick={onClose}
+            disabled={duplicating}
+            className="rounded-full border border-stone-200 bg-white px-4 py-2 text-base font-semibold text-stone-600 disabled:text-stone-300"
+          >
+            Annuler
+          </button>
+          <button
+            type="button"
+            onClick={() => void handleConfirm()}
+            disabled={duplicating}
+            className="rounded-full bg-[#bb2720] px-4 py-2 text-base font-semibold text-white disabled:bg-stone-300"
+          >
+            {duplicating ? "Duplication..." : "Dupliquer"}
+          </button>
         </div>
       </div>
     </div>
