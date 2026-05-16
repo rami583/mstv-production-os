@@ -92,6 +92,7 @@ type TeamMember = {
 
 type UserProfile = {
   id: string;
+  email: string | null;
   firstName: string | null;
   lastName: string | null;
   role: UserRole;
@@ -104,6 +105,7 @@ type AppPermissions = {
   canSoftDeleteEvents: boolean;
   canRestoreEvents: boolean;
   canPermanentDeleteEvents: boolean;
+  canManageUsers: boolean;
 };
 
 type EventOption = {
@@ -244,6 +246,8 @@ type QuoteExtractionResult = {
   endOfDayTime: string;
   services: string[];
 };
+
+const userRoleOptions: UserRole[] = ["admin", "production", "technical", "readonly"];
 
 type DuplicateEventRequest = {
   event: ProductionEvent;
@@ -795,6 +799,7 @@ function normalizeUserRole(role: string | null | undefined): UserRole {
 function mapUserProfile(row: ProfileRow): UserProfile {
   return {
     id: row.id,
+    email: row.email ?? null,
     firstName: row.first_name,
     lastName: row.last_name,
     role: normalizeUserRole(row.role),
@@ -833,6 +838,7 @@ function getPermissionsForRole(role: UserRole): AppPermissions {
     canSoftDeleteEvents: role === "admin" || role === "production",
     canRestoreEvents: role === "admin" || role === "production",
     canPermanentDeleteEvents: role === "admin",
+    canManageUsers: role === "admin",
   };
 }
 
@@ -1130,7 +1136,21 @@ async function fetchOrCreateProfile(session: Session) {
     .maybeSingle();
 
   if (error) throw error;
-  if (data) return mapUserProfile(data);
+  if (data) {
+    const nextEmail = session.user.email ?? null;
+    if (nextEmail && data.email !== nextEmail) {
+      const { data: updatedProfile, error: updateError } = await supabase
+        .from("profiles")
+        .update({ email: nextEmail })
+        .eq("id", session.user.id)
+        .select()
+        .single();
+
+      if (updateError) throw updateError;
+      return mapUserProfile(updatedProfile);
+    }
+    return mapUserProfile(data);
+  }
 
   const emailName = session.user.email?.split("@")[0]?.replace(/[._-]+/g, " ") ?? "Utilisateur";
   const firstName = formatTitleCase(emailName).split(" ")[0] || "Utilisateur";
@@ -1138,6 +1158,7 @@ async function fetchOrCreateProfile(session: Session) {
     .from("profiles")
     .insert({
       id: session.user.id,
+      email: session.user.email ?? null,
       first_name: firstName,
       last_name: null,
       role: "readonly",
@@ -1147,6 +1168,21 @@ async function fetchOrCreateProfile(session: Session) {
 
   if (insertError) throw insertError;
   return mapUserProfile(insertedProfile);
+}
+
+async function fetchProfiles() {
+  if (!supabase) {
+    throw new Error("Configuration Supabase manquante.");
+  }
+
+  const { data, error } = await supabase
+    .from("profiles")
+    .select("*")
+    .order("first_name", { ascending: true })
+    .order("last_name", { ascending: true });
+
+  if (error) throw error;
+  return (data ?? []).map(mapUserProfile);
 }
 
 export default function Home() {
@@ -1178,6 +1214,11 @@ export default function Home() {
   const [documentPreview, setDocumentPreview] = useState<DocumentPreview | null>(null);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [trashOpen, setTrashOpen] = useState(false);
+  const [userManagementOpen, setUserManagementOpen] = useState(false);
+  const [managedProfiles, setManagedProfiles] = useState<UserProfile[]>([]);
+  const [managedProfilesLoading, setManagedProfilesLoading] = useState(false);
+  const [managedProfilesError, setManagedProfilesError] = useState<string | null>(null);
+  const [updatingProfileId, setUpdatingProfileId] = useState<string | null>(null);
   const [deletedEvents, setDeletedEvents] = useState<ProductionEvent[]>([]);
   const [trashLoading, setTrashLoading] = useState(false);
   const [trashError, setTrashError] = useState<string | null>(null);
@@ -1273,6 +1314,11 @@ export default function Home() {
     if (!trashOpen) return;
     void refreshTrash();
   }, [trashOpen]);
+
+  useEffect(() => {
+    if (!userManagementOpen || !permissions.canManageUsers) return;
+    void refreshManagedProfiles();
+  }, [userManagementOpen, permissions.canManageUsers]);
 
   useEffect(() => {
     let cancelled = false;
@@ -1373,6 +1419,22 @@ export default function Home() {
       setTrashError("Impossible de charger la corbeille. Vérifiez la migration 012_soft_delete_events.sql.");
     } finally {
       setTrashLoading(false);
+    }
+  }
+
+  async function refreshManagedProfiles() {
+    if (!permissions.canManageUsers) return;
+
+    setManagedProfilesLoading(true);
+    setManagedProfilesError(null);
+
+    try {
+      setManagedProfiles(await fetchProfiles());
+    } catch (profilesError) {
+      console.error("Failed to load profiles. Apply supabase/migrations/014_profiles_admin_management.sql if needed.", profilesError);
+      setManagedProfilesError("Impossible de charger les utilisateurs.");
+    } finally {
+      setManagedProfilesLoading(false);
     }
   }
 
@@ -1477,6 +1539,12 @@ export default function Home() {
   function assertCanPermanentDeleteEvents() {
     if (!permissions.canPermanentDeleteEvents) {
       throw new Error("Suppression définitive réservée aux admins.");
+    }
+  }
+
+  function assertCanManageUsers() {
+    if (!permissions.canManageUsers) {
+      throw new Error("Gestion utilisateurs réservée aux admins.");
     }
   }
 
@@ -2993,6 +3061,37 @@ export default function Home() {
     setPermanentDeleteDialogEvent(null);
   }
 
+  async function updateManagedProfileRole(profileToUpdate: UserProfile, role: UserRole) {
+    assertCanManageUsers();
+    if (!supabase) {
+      throw new Error("Configuration Supabase manquante.");
+    }
+
+    setUpdatingProfileId(profileToUpdate.id);
+    setManagedProfilesError(null);
+
+    try {
+      const { data, error: updateError } = await supabase
+        .from("profiles")
+        .update({ role })
+        .eq("id", profileToUpdate.id)
+        .select()
+        .single();
+
+      if (updateError) throw updateError;
+
+      const updatedProfile = mapUserProfile(data);
+      setManagedProfiles((current) => current.map((item) => (item.id === updatedProfile.id ? updatedProfile : item)));
+      if (profile?.id === updatedProfile.id) {
+        setProfile(updatedProfile);
+      }
+    } catch (roleError) {
+      setManagedProfilesError(roleError instanceof Error ? roleError.message : "Impossible de modifier le rôle.");
+    } finally {
+      setUpdatingProfileId(null);
+    }
+  }
+
   async function signOut() {
     if (!supabase) return;
     await supabase.auth.signOut();
@@ -3063,6 +3162,8 @@ export default function Home() {
           profile={profile}
           email={authSession.user.email}
           onLogout={signOut}
+          canManageUsers={permissions.canManageUsers}
+          onOpenUserManagement={() => setUserManagementOpen(true)}
           onImportQuote={() => {
             if (!permissions.canManageEvents) return;
             openQuoteImport();
@@ -3188,6 +3289,8 @@ export default function Home() {
           profile={profile}
           email={authSession.user.email}
           onLogout={signOut}
+          canManageUsers={permissions.canManageUsers}
+          onOpenUserManagement={() => setUserManagementOpen(true)}
           onGoToday={() => {
             goToday();
             setYearOverviewOpen(false);
@@ -3317,6 +3420,18 @@ export default function Home() {
         />
       )}
 
+      {userManagementOpen && permissions.canManageUsers && (
+        <UserManagementSheet
+          profiles={managedProfiles}
+          currentProfileId={profile?.id ?? null}
+          loading={managedProfilesLoading}
+          error={managedProfilesError}
+          updatingProfileId={updatingProfileId}
+          onClose={() => setUserManagementOpen(false)}
+          onUpdateRole={updateManagedProfileRole}
+        />
+      )}
+
       {permanentDeleteDialogEvent && (
         <PermanentDeleteEventDialog
           event={permanentDeleteDialogEvent}
@@ -3366,6 +3481,8 @@ function AppHeader({
   profile,
   email,
   onLogout,
+  canManageUsers,
+  onOpenUserManagement,
   onImportQuote,
   onSearch,
   canOpenHistory,
@@ -3394,6 +3511,8 @@ function AppHeader({
   profile: UserProfile | null;
   email: string | undefined;
   onLogout: () => void;
+  canManageUsers: boolean;
+  onOpenUserManagement: () => void;
   onImportQuote: () => void;
   onSearch: () => void;
   canOpenHistory: boolean;
@@ -3492,7 +3611,7 @@ function AppHeader({
             />
           )}
         </div>
-        <AccountMenu profile={profile} email={email} onLogout={onLogout} />
+        <AccountMenu profile={profile} email={email} canManageUsers={canManageUsers} onOpenUserManagement={onOpenUserManagement} onLogout={onLogout} />
       </div>
     </header>
   );
@@ -3698,6 +3817,8 @@ function YearOverviewOverlay({
   profile,
   email,
   onLogout,
+  canManageUsers,
+  onOpenUserManagement,
   onGoToday,
   onImportQuote,
   onSearch,
@@ -3718,6 +3839,8 @@ function YearOverviewOverlay({
   profile: UserProfile | null;
   email: string | undefined;
   onLogout: () => void;
+  canManageUsers: boolean;
+  onOpenUserManagement: () => void;
   onGoToday: () => void;
   onImportQuote: () => void;
   onSearch: () => void;
@@ -3911,6 +4034,8 @@ function YearOverviewOverlay({
           profile={profile}
           email={email}
           onLogout={onLogout}
+          canManageUsers={canManageUsers}
+          onOpenUserManagement={onOpenUserManagement}
           onImportQuote={onImportQuote}
           onSearch={onSearch}
           canOpenHistory={false}
@@ -7238,6 +7363,84 @@ function TrashEventsSheet({
   );
 }
 
+function UserManagementSheet({
+  profiles,
+  currentProfileId,
+  loading,
+  error,
+  updatingProfileId,
+  onClose,
+  onUpdateRole,
+}: {
+  profiles: UserProfile[];
+  currentProfileId: string | null;
+  loading: boolean;
+  error: string | null;
+  updatingProfileId: string | null;
+  onClose: () => void;
+  onUpdateRole: (profile: UserProfile, role: UserRole) => Promise<void>;
+}) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-end bg-stone-950/10 p-3 sm:items-center sm:justify-center sm:p-6">
+      <div className="flex max-h-[82vh] w-full flex-col rounded-3xl border border-stone-200 bg-white p-4 sm:max-w-2xl sm:p-5">
+        <div className="mb-4 flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <h2 className="text-base font-semibold text-stone-950">Gestion utilisateurs</h2>
+            <p className="mt-1 text-base font-medium text-stone-500">Rôles de l'équipe MSTV.</p>
+          </div>
+          <button type="button" onClick={onClose} className="rounded-full border border-stone-200 bg-white px-3 py-1.5 text-base font-semibold text-stone-600 transition hover:bg-stone-50">
+            Fermer
+          </button>
+        </div>
+
+        {error && <div className="mb-3 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-base font-medium text-rose-700">{error}</div>}
+
+        <div className="no-scrollbar min-h-0 flex-1 overflow-y-auto overscroll-contain">
+          {loading && <div className="rounded-2xl bg-stone-50 px-4 py-3 text-base font-medium text-stone-500">Chargement...</div>}
+          {!loading && profiles.length === 0 && !error && (
+            <div className="rounded-2xl bg-stone-50 px-4 py-3 text-base font-medium text-stone-500">Aucun utilisateur pour le moment.</div>
+          )}
+          <div className="space-y-2">
+            {profiles.map((userProfile) => {
+              const displayName = getProfileDisplayName(userProfile) ?? "Utilisateur";
+              const isUpdating = updatingProfileId === userProfile.id;
+              const isCurrentProfile = currentProfileId === userProfile.id;
+
+              return (
+                <div key={userProfile.id} className="rounded-2xl border border-stone-200 bg-stone-50/70 px-4 py-3">
+                  <div className="flex min-w-0 flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                    <div className="min-w-0">
+                      <p className="truncate text-base font-semibold text-stone-950">
+                        {displayName}
+                        {isCurrentProfile && <span className="ml-2 text-sm font-semibold text-[#bb2720]">Vous</span>}
+                      </p>
+                      <p className="mt-1 truncate text-base font-medium text-stone-500">{userProfile.email ?? "Email non renseigné"}</p>
+                      <p className="mt-1 text-sm font-semibold text-stone-400">Créé le {formatHistoryTimestamp(userProfile.createdAt)}</p>
+                    </div>
+                    <select
+                      value={userProfile.role}
+                      disabled={isUpdating}
+                      onChange={(event) => void onUpdateRole(userProfile, event.target.value as UserRole)}
+                      className="h-10 rounded-full border border-stone-200 bg-white px-3 text-base font-semibold text-stone-700 outline-none transition focus:border-[#bb2720]/40 disabled:text-stone-300"
+                      aria-label={`Rôle de ${displayName}`}
+                    >
+                      {userRoleOptions.map((role) => (
+                        <option key={role} value={role}>
+                          {getRoleLabel(role)}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function DuplicateEventDialog({
   request,
   onClose,
@@ -7953,7 +8156,19 @@ function HeaderIcon({ label, icon: Icon, onClick }: { label: string; icon: Lucid
   );
 }
 
-function AccountMenu({ profile, email, onLogout }: { profile: UserProfile | null; email?: string; onLogout: () => void }) {
+function AccountMenu({
+  profile,
+  email,
+  canManageUsers,
+  onOpenUserManagement,
+  onLogout,
+}: {
+  profile: UserProfile | null;
+  email?: string;
+  canManageUsers: boolean;
+  onOpenUserManagement: () => void;
+  onLogout: () => void;
+}) {
   const [open, setOpen] = useState(false);
   const wrapperRef = useRef<HTMLDivElement | null>(null);
   const displayName = getProfileDisplayName(profile) ?? email ?? "Utilisateur";
@@ -7990,6 +8205,18 @@ function AccountMenu({ profile, email, onLogout }: { profile: UserProfile | null
             <p className="truncate text-base font-semibold text-stone-950">{displayName}</p>
             <p className="mt-1 truncate text-sm font-medium text-stone-500">{profile ? getRoleLabel(profile.role) : email}</p>
           </div>
+          {canManageUsers && (
+            <button
+              type="button"
+              onClick={() => {
+                setOpen(false);
+                onOpenUserManagement();
+              }}
+              className="block w-full rounded-xl px-4 py-3 text-right text-base font-medium text-stone-700 transition hover:bg-[#bb2720]/[0.05] hover:text-stone-950"
+            >
+              Gestion utilisateurs
+            </button>
+          )}
           <button
             type="button"
             onClick={() => {
