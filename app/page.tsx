@@ -977,6 +977,13 @@ function getCompleterLabel(profile: UserProfile | null, email?: string | null) {
   return profile?.firstName?.trim() || getProfileDisplayName(profile) || email || null;
 }
 
+function getPasswordResetRedirectUrl() {
+  if (typeof window === "undefined") return undefined;
+  const configuredUrl = process.env.NEXT_PUBLIC_SITE_URL?.trim();
+  const origin = configuredUrl || window.location.origin;
+  return origin.endsWith("/") ? origin : `${origin}/`;
+}
+
 function getCompletedByInitialsForDisplay(option: EventOption) {
   const knownInitials = completedByOverrideChoices.find((choice) => choice.label === option.completedByLabel || choice.initials === option.completedByInitials)?.initials;
   return knownInitials ?? option.completedByInitials;
@@ -1325,6 +1332,7 @@ export default function Home() {
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
   const [authError, setAuthError] = useState<string | null>(null);
+  const [passwordRecoveryOpen, setPasswordRecoveryOpen] = useState(false);
   const [screen, setScreen] = useState<Screen>("calendar");
   const [events, setEvents] = useState<ProductionEvent[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -1420,7 +1428,10 @@ export default function Home() {
       if (!cancelled) setAuthLoading(false);
     }
 
-    const { data: authListener } = supabase?.auth.onAuthStateChange((_event, session) => {
+    const { data: authListener } = supabase?.auth.onAuthStateChange((authEvent, session) => {
+      if (authEvent === "PASSWORD_RECOVERY") {
+        setPasswordRecoveryOpen(true);
+      }
       void loadAuthenticatedProfile(session);
     }) ?? { data: { subscription: null } };
 
@@ -1430,6 +1441,14 @@ export default function Home() {
       cancelled = true;
       void authListener.subscription?.unsubscribe();
     };
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const recoveryPayload = `${window.location.search}${window.location.hash}`;
+    if (/type=(?:recovery|password_recovery)\b/i.test(recoveryPayload)) {
+      setPasswordRecoveryOpen(true);
+    }
   }, []);
 
   useEffect(() => {
@@ -3539,8 +3558,39 @@ export default function Home() {
     setCreateMenuOpen(false);
   }
 
+  async function requestPasswordResetEmail() {
+    if (!supabase) {
+      throw new Error("Configuration Supabase manquante.");
+    }
+
+    const email = authSession?.user.email;
+    if (!email) {
+      throw new Error("Adresse email introuvable.");
+    }
+
+    const { error: resetError } = await supabase.auth.resetPasswordForEmail(email, {
+      redirectTo: getPasswordResetRedirectUrl(),
+    });
+
+    if (resetError) throw resetError;
+  }
+
   if (authLoading) {
     return <FullScreenStatus>Chargement...</FullScreenStatus>;
+  }
+
+  if (passwordRecoveryOpen) {
+    if (!authSession) {
+      return <FullScreenStatus>Préparation de la réinitialisation...</FullScreenStatus>;
+    }
+
+    return (
+      <UpdatePasswordScreen
+        email={authSession.user.email}
+        onComplete={() => setPasswordRecoveryOpen(false)}
+        onCancel={() => setPasswordRecoveryOpen(false)}
+      />
+    );
   }
 
   if (!authSession) {
@@ -3597,6 +3647,7 @@ export default function Home() {
           profile={profile}
           email={authSession.user.email}
           onLogout={signOut}
+          onResetPassword={requestPasswordResetEmail}
           canManageUsers={permissions.canManageUsers}
           onOpenUserManagement={() => setUserManagementOpen(true)}
           onImportQuote={() => {
@@ -3724,6 +3775,7 @@ export default function Home() {
           profile={profile}
           email={authSession.user.email}
           onLogout={signOut}
+          onResetPassword={requestPasswordResetEmail}
           canManageUsers={permissions.canManageUsers}
           onOpenUserManagement={() => setUserManagementOpen(true)}
           onGoToday={() => {
@@ -3922,6 +3974,7 @@ function AppHeader({
   profile,
   email,
   onLogout,
+  onResetPassword,
   canManageUsers,
   onOpenUserManagement,
   onImportQuote,
@@ -3952,6 +4005,7 @@ function AppHeader({
   profile: UserProfile | null;
   email: string | undefined;
   onLogout: () => void;
+  onResetPassword: () => Promise<void>;
   canManageUsers: boolean;
   onOpenUserManagement: () => void;
   onImportQuote: () => void;
@@ -4061,7 +4115,7 @@ function AppHeader({
             )}
           </div>
         )}
-        <AccountMenu profile={profile} email={email} canManageUsers={canManageUsers} onOpenUserManagement={onOpenUserManagement} onLogout={onLogout} />
+        <AccountMenu profile={profile} email={email} canManageUsers={canManageUsers} onOpenUserManagement={onOpenUserManagement} onLogout={onLogout} onResetPassword={onResetPassword} />
       </div>
     </header>
   );
@@ -4267,6 +4321,7 @@ function YearOverviewOverlay({
   profile,
   email,
   onLogout,
+  onResetPassword,
   canManageUsers,
   onOpenUserManagement,
   onGoToday,
@@ -4289,6 +4344,7 @@ function YearOverviewOverlay({
   profile: UserProfile | null;
   email: string | undefined;
   onLogout: () => void;
+  onResetPassword: () => Promise<void>;
   canManageUsers: boolean;
   onOpenUserManagement: () => void;
   onGoToday: () => void;
@@ -4484,6 +4540,7 @@ function YearOverviewOverlay({
           profile={profile}
           email={email}
           onLogout={onLogout}
+          onResetPassword={onResetPassword}
           canManageUsers={canManageUsers}
           onOpenUserManagement={onOpenUserManagement}
           onImportQuote={onImportQuote}
@@ -8731,15 +8788,20 @@ function HeaderIcon({ label, icon: Icon, onClick }: { label: string; icon: Lucid
 function AccountMenu({
   profile,
   email,
+  onResetPassword,
   onLogout,
 }: {
   profile: UserProfile | null;
   email?: string;
   canManageUsers: boolean;
   onOpenUserManagement: () => void;
+  onResetPassword: () => Promise<void>;
   onLogout: () => void;
 }) {
   const [open, setOpen] = useState(false);
+  const [resetSending, setResetSending] = useState(false);
+  const [resetMessage, setResetMessage] = useState<string | null>(null);
+  const [resetError, setResetError] = useState<string | null>(null);
   const wrapperRef = useRef<HTMLDivElement | null>(null);
   const displayName = getProfileDisplayName(profile) ?? email ?? "Utilisateur";
   const initials = getProfileInitials(profile, email);
@@ -8775,6 +8837,31 @@ function AccountMenu({
             <p className="truncate text-base font-semibold text-stone-950">{displayName}</p>
             <p className="mt-1 truncate text-sm font-medium text-stone-500">{profile ? getRoleLabel(profile.role) : email}</p>
           </div>
+          {(resetMessage || resetError) && (
+            <div className={cn("mx-2 mb-1 rounded-xl px-3 py-2 text-right text-sm font-semibold", resetError ? "bg-rose-50 text-rose-700" : "bg-emerald-50 text-emerald-700")}>
+              {resetError ?? resetMessage}
+            </div>
+          )}
+          <button
+            type="button"
+            disabled={resetSending}
+            onClick={async () => {
+              setResetSending(true);
+              setResetMessage(null);
+              setResetError(null);
+              try {
+                await onResetPassword();
+                setResetMessage("Un email de réinitialisation vous a été envoyé.");
+              } catch (passwordResetError) {
+                setResetError(passwordResetError instanceof Error ? passwordResetError.message : "Impossible d'envoyer l'email.");
+              } finally {
+                setResetSending(false);
+              }
+            }}
+            className="block w-full rounded-xl px-4 py-3 text-right text-base font-medium text-stone-700 transition hover:bg-[#bb2720]/[0.05] hover:text-stone-950 disabled:text-stone-300"
+          >
+            {resetSending ? "Envoi..." : "Réinitialiser le mot de passe"}
+          </button>
           <button
             type="button"
             onClick={() => {
@@ -9010,6 +9097,117 @@ function FullScreenStatus({ children, tone = "neutral" }: { children: React.Reac
       >
         {children}
       </div>
+    </main>
+  );
+}
+
+function UpdatePasswordScreen({
+  email,
+  onComplete,
+  onCancel,
+}: {
+  email?: string;
+  onComplete: () => void;
+  onCancel: () => void;
+}) {
+  const [password, setPassword] = useState("");
+  const [passwordConfirmation, setPasswordConfirmation] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [completed, setCompleted] = useState(false);
+
+  async function submitPassword(formEvent: React.FormEvent<HTMLFormElement>) {
+    formEvent.preventDefault();
+    if (!supabase) {
+      setError("Configuration Supabase manquante.");
+      return;
+    }
+    if (password.length < 6) {
+      setError("Le mot de passe doit contenir au moins 6 caractères.");
+      return;
+    }
+    if (password !== passwordConfirmation) {
+      setError("Les deux mots de passe ne correspondent pas.");
+      return;
+    }
+
+    setSubmitting(true);
+    setError(null);
+
+    const { error: updateError } = await supabase.auth.updateUser({ password });
+    if (updateError) {
+      setError(updateError.message);
+      setSubmitting(false);
+      return;
+    }
+
+    setCompleted(true);
+    setSubmitting(false);
+    if (typeof window !== "undefined") {
+      window.history.replaceState(null, "", window.location.pathname || "/");
+    }
+  }
+
+  return (
+    <main className="flex h-screen h-[100svh] items-center justify-center bg-[#f7f9fb] p-4 text-stone-950">
+      <form onSubmit={submitPassword} className="w-full max-w-sm rounded-3xl border border-stone-200 bg-white p-5 sm:p-6">
+        <div className="mb-6 flex items-center gap-3">
+          <img src="/brand/mon-studio-tv-icon.png" alt="Mon Studio TV" className="h-11 w-auto" />
+          <div>
+            <h1 className="text-base font-semibold text-stone-950">Nouveau mot de passe</h1>
+            <p className="mt-1 truncate text-base font-medium text-stone-500">{email ?? "MSTV Production OS"}</p>
+          </div>
+        </div>
+
+        {completed ? (
+          <div className="rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-base font-semibold text-emerald-700">
+            Mot de passe mis à jour.
+          </div>
+        ) : (
+          <div className="space-y-3">
+            <input
+              type="password"
+              required
+              autoComplete="new-password"
+              value={password}
+              onChange={(event) => setPassword(event.target.value)}
+              placeholder="Nouveau mot de passe"
+              className={formInputClassName}
+            />
+            <input
+              type="password"
+              required
+              autoComplete="new-password"
+              value={passwordConfirmation}
+              onChange={(event) => setPasswordConfirmation(event.target.value)}
+              placeholder="Confirmer"
+              className={formInputClassName}
+            />
+          </div>
+        )}
+
+        {error && (
+          <div className="mt-4 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-base font-medium text-rose-700">
+            {error}
+          </div>
+        )}
+
+        <div className="mt-5 flex gap-2">
+          <button
+            type="button"
+            onClick={completed ? onComplete : onCancel}
+            disabled={submitting}
+            className="h-11 flex-1 rounded-full border border-stone-200 bg-white text-base font-semibold text-stone-600 transition hover:bg-stone-50 disabled:text-stone-300"
+          >
+            {completed ? "Continuer" : "Annuler"}
+          </button>
+          {!completed && (
+            <button type="submit" disabled={submitting} className="h-11 flex-1 rounded-full bg-[#bb2720] text-base font-semibold text-white transition hover:bg-[#a7211b] disabled:bg-stone-300">
+              {submitting ? "Mise à jour..." : "Valider"}
+            </button>
+          )}
+        </div>
+      </form>
     </main>
   );
 }
