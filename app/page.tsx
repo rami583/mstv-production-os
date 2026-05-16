@@ -354,8 +354,6 @@ const defaultOptions = [
   { label: "Modération", details: "Comptes modérateurs à préparer" },
 ];
 
-const defaultLinks = ["Drive client", "Habillage Guillaume", "Événement LiveMaker", "Conducteur", "Slides", "Replay"];
-
 const platformLinkLabels = new Set(["plateforme", "plateforme de diffusion", "evenement plateforme", "event plateforme"]);
 const eventDocumentsBucket = "event-documents";
 const calendarArrowClassName =
@@ -1889,7 +1887,7 @@ export default function Home() {
 
     if (eventError) throw eventError;
 
-    const optionDefinitions = uniqueLabels([...defaultOptions.map((option) => option.label), ...(normalizedInput.optionLabels ?? [])]).map((label) => {
+    const optionDefinitions = uniqueLabels(normalizedInput.optionLabels ?? []).map((label) => {
       const defaultOption = defaultOptions.find((option) => normalizeLabel(option.label) === normalizeLabel(label));
       return {
         label,
@@ -1897,8 +1895,10 @@ export default function Home() {
       };
     });
 
-    const [{ data: insertedOptions, error: optionError }, { error: linkError }] = await Promise.all([
-      supabase
+    let insertedOptions: EventOptionRow[] = [];
+
+    if (optionDefinitions.length > 0) {
+      const { data, error: optionError } = await supabase
         .from("event_options")
         .insert(
           optionDefinitions.map((option) => ({
@@ -1908,21 +1908,13 @@ export default function Home() {
             details: option.details,
           })),
         )
-        .select(),
-      supabase.from("event_links").insert(
-        defaultLinks.map((label) => ({
-          event_id: event.id,
-          label,
-          url: null,
-          status: "missing" as LinkStatus,
-        })),
-      ),
-    ]);
+        .select();
 
-    if (optionError) throw optionError;
-    if (linkError) throw linkError;
+      if (optionError) throw optionError;
+      insertedOptions = data ?? [];
+    }
 
-    const defaultOptionItems = (insertedOptions ?? []).flatMap((option) => {
+    const defaultOptionItems = insertedOptions.flatMap((option) => {
       const defaultOption = optionDefinitions.find((item) => item.label === option.label);
       return splitStoredDetails(defaultOption?.details ?? "").map((label) => ({
         option_id: option.id,
@@ -1932,7 +1924,7 @@ export default function Home() {
 
     if (defaultOptionItems.length > 0) {
       const { error: optionItemError } = await supabase.from("event_option_items").insert(defaultOptionItems);
-    if (optionItemError) throw optionItemError;
+      if (optionItemError) throw optionItemError;
     }
 
     await logEventActivity({
