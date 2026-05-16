@@ -8487,8 +8487,15 @@ function SharedDatePicker({
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-end justify-center bg-stone-950/10 p-3 sm:items-center sm:p-6">
-      <div className="w-full max-w-sm rounded-3xl border border-stone-200 bg-white p-3 sm:p-4">
+    <div
+      className="fixed inset-0 z-50 flex items-end justify-center bg-stone-950/10 p-3 sm:items-center sm:p-6"
+      onPointerDown={(pointerEvent) => {
+        if (pointerEvent.target === pointerEvent.currentTarget && !saving) {
+          onClose();
+        }
+      }}
+    >
+      <div className="w-full max-w-sm rounded-3xl border border-stone-200 bg-white p-3 sm:p-4" onPointerDown={(pointerEvent) => pointerEvent.stopPropagation()}>
         <div
           ref={pickerPagerRef}
           className="overflow-hidden"
@@ -8557,8 +8564,15 @@ function SharedDatePicker({
       </div>
 
       {pendingDate && (
-        <div className="absolute inset-0 flex items-end justify-center bg-stone-950/10 p-3 sm:items-center sm:p-6">
-          <div className="w-full max-w-sm rounded-3xl border border-stone-200 bg-white p-4 sm:p-5">
+        <div
+          className="absolute inset-0 flex items-end justify-center bg-stone-950/10 p-3 sm:items-center sm:p-6"
+          onPointerDown={(pointerEvent) => {
+            if (pointerEvent.target === pointerEvent.currentTarget && !saving) {
+              onClose();
+            }
+          }}
+        >
+          <div className="w-full max-w-sm rounded-3xl border border-stone-200 bg-white p-4 sm:p-5" onPointerDown={(pointerEvent) => pointerEvent.stopPropagation()}>
             <div className="grid grid-cols-2 gap-2">
               <button
                 type="button"
