@@ -3558,23 +3558,6 @@ export default function Home() {
     setCreateMenuOpen(false);
   }
 
-  async function requestPasswordResetEmail() {
-    if (!supabase) {
-      throw new Error("Configuration Supabase manquante.");
-    }
-
-    const email = authSession?.user.email;
-    if (!email) {
-      throw new Error("Adresse email introuvable.");
-    }
-
-    const { error: resetError } = await supabase.auth.resetPasswordForEmail(email, {
-      redirectTo: getPasswordResetRedirectUrl(),
-    });
-
-    if (resetError) throw resetError;
-  }
-
   if (authLoading) {
     return <FullScreenStatus>Chargement...</FullScreenStatus>;
   }
@@ -3647,7 +3630,6 @@ export default function Home() {
           profile={profile}
           email={authSession.user.email}
           onLogout={signOut}
-          onResetPassword={requestPasswordResetEmail}
           canManageUsers={permissions.canManageUsers}
           onOpenUserManagement={() => setUserManagementOpen(true)}
           onImportQuote={() => {
@@ -3775,7 +3757,6 @@ export default function Home() {
           profile={profile}
           email={authSession.user.email}
           onLogout={signOut}
-          onResetPassword={requestPasswordResetEmail}
           canManageUsers={permissions.canManageUsers}
           onOpenUserManagement={() => setUserManagementOpen(true)}
           onGoToday={() => {
@@ -3974,7 +3955,6 @@ function AppHeader({
   profile,
   email,
   onLogout,
-  onResetPassword,
   canManageUsers,
   onOpenUserManagement,
   onImportQuote,
@@ -4005,7 +3985,6 @@ function AppHeader({
   profile: UserProfile | null;
   email: string | undefined;
   onLogout: () => void;
-  onResetPassword: () => Promise<void>;
   canManageUsers: boolean;
   onOpenUserManagement: () => void;
   onImportQuote: () => void;
@@ -4115,7 +4094,7 @@ function AppHeader({
             )}
           </div>
         )}
-        <AccountMenu profile={profile} email={email} canManageUsers={canManageUsers} onOpenUserManagement={onOpenUserManagement} onLogout={onLogout} onResetPassword={onResetPassword} />
+        <AccountMenu profile={profile} email={email} canManageUsers={canManageUsers} onOpenUserManagement={onOpenUserManagement} onLogout={onLogout} />
       </div>
     </header>
   );
@@ -4321,7 +4300,6 @@ function YearOverviewOverlay({
   profile,
   email,
   onLogout,
-  onResetPassword,
   canManageUsers,
   onOpenUserManagement,
   onGoToday,
@@ -4344,7 +4322,6 @@ function YearOverviewOverlay({
   profile: UserProfile | null;
   email: string | undefined;
   onLogout: () => void;
-  onResetPassword: () => Promise<void>;
   canManageUsers: boolean;
   onOpenUserManagement: () => void;
   onGoToday: () => void;
@@ -4540,7 +4517,6 @@ function YearOverviewOverlay({
           profile={profile}
           email={email}
           onLogout={onLogout}
-          onResetPassword={onResetPassword}
           canManageUsers={canManageUsers}
           onOpenUserManagement={onOpenUserManagement}
           onImportQuote={onImportQuote}
@@ -8788,20 +8764,15 @@ function HeaderIcon({ label, icon: Icon, onClick }: { label: string; icon: Lucid
 function AccountMenu({
   profile,
   email,
-  onResetPassword,
   onLogout,
 }: {
   profile: UserProfile | null;
   email?: string;
   canManageUsers: boolean;
   onOpenUserManagement: () => void;
-  onResetPassword: () => Promise<void>;
   onLogout: () => void;
 }) {
   const [open, setOpen] = useState(false);
-  const [resetSending, setResetSending] = useState(false);
-  const [resetMessage, setResetMessage] = useState<string | null>(null);
-  const [resetError, setResetError] = useState<string | null>(null);
   const wrapperRef = useRef<HTMLDivElement | null>(null);
   const displayName = getProfileDisplayName(profile) ?? email ?? "Utilisateur";
   const initials = getProfileInitials(profile, email);
@@ -8832,43 +8803,18 @@ function AccountMenu({
         {initials}
       </button>
       {open && (
-        <div className="absolute right-0 top-14 z-40 w-56 rounded-2xl border border-stone-200 bg-white/95 p-1.5 text-right backdrop-blur-xl">
-          <div className="px-4 py-3">
-            <p className="truncate text-base font-semibold text-stone-950">{displayName}</p>
-            <p className="mt-1 truncate text-sm font-medium text-stone-500">{profile ? getRoleLabel(profile.role) : email}</p>
+        <div className="absolute right-0 top-12 z-40 w-44 rounded-2xl border border-stone-200 bg-white/95 p-1 text-right backdrop-blur-xl">
+          <div className="px-3 py-2">
+            <p className="truncate text-sm font-semibold text-stone-950">{displayName}</p>
+            <p className="mt-0.5 truncate text-xs font-medium text-stone-500">{profile ? getRoleLabel(profile.role) : email}</p>
           </div>
-          {(resetMessage || resetError) && (
-            <div className={cn("mx-2 mb-1 rounded-xl px-3 py-2 text-right text-sm font-semibold", resetError ? "bg-rose-50 text-rose-700" : "bg-emerald-50 text-emerald-700")}>
-              {resetError ?? resetMessage}
-            </div>
-          )}
-          <button
-            type="button"
-            disabled={resetSending}
-            onClick={async () => {
-              setResetSending(true);
-              setResetMessage(null);
-              setResetError(null);
-              try {
-                await onResetPassword();
-                setResetMessage("Un email de réinitialisation vous a été envoyé.");
-              } catch (passwordResetError) {
-                setResetError(passwordResetError instanceof Error ? passwordResetError.message : "Impossible d'envoyer l'email.");
-              } finally {
-                setResetSending(false);
-              }
-            }}
-            className="block w-full rounded-xl px-4 py-3 text-right text-base font-medium text-stone-700 transition hover:bg-[#bb2720]/[0.05] hover:text-stone-950 disabled:text-stone-300"
-          >
-            {resetSending ? "Envoi..." : "Réinitialiser le mot de passe"}
-          </button>
           <button
             type="button"
             onClick={() => {
               setOpen(false);
               void onLogout();
             }}
-            className="block w-full rounded-xl px-4 py-3 text-right text-base font-medium text-stone-700 transition hover:bg-[#bb2720]/[0.05] hover:text-stone-950"
+            className="block w-full rounded-xl px-3 py-2 text-right text-sm font-medium text-stone-700 transition hover:bg-[#bb2720]/[0.05] hover:text-stone-950"
           >
             Déconnexion
           </button>
@@ -9216,7 +9162,9 @@ function LoginScreen({ error }: { error: string | null }) {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const [resetSending, setResetSending] = useState(false);
   const [loginError, setLoginError] = useState<string | null>(null);
+  const [resetMessage, setResetMessage] = useState<string | null>(null);
 
   async function submitLogin(formEvent: React.FormEvent<HTMLFormElement>) {
     formEvent.preventDefault();
@@ -9237,6 +9185,35 @@ function LoginScreen({ error }: { error: string | null }) {
       setLoginError(signInError.message);
       setSubmitting(false);
     }
+  }
+
+  async function sendPasswordReset() {
+    if (!supabase) {
+      setLoginError("Configuration Supabase manquante.");
+      return;
+    }
+
+    const targetEmail = email.trim();
+    if (!targetEmail) {
+      setLoginError("Entrez votre email pour recevoir le lien de réinitialisation.");
+      return;
+    }
+
+    setResetSending(true);
+    setLoginError(null);
+    setResetMessage(null);
+
+    const { error: resetError } = await supabase.auth.resetPasswordForEmail(targetEmail, {
+      redirectTo: getPasswordResetRedirectUrl(),
+    });
+
+    if (resetError) {
+      setLoginError(resetError.message);
+    } else {
+      setResetMessage("Un email de réinitialisation vous a été envoyé.");
+    }
+
+    setResetSending(false);
   }
 
   return (
@@ -9276,6 +9253,11 @@ function LoginScreen({ error }: { error: string | null }) {
             {loginError ?? error}
           </div>
         )}
+        {resetMessage && (
+          <div className="mt-4 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-base font-medium text-emerald-700">
+            {resetMessage}
+          </div>
+        )}
 
         <button
           type="submit"
@@ -9283,6 +9265,14 @@ function LoginScreen({ error }: { error: string | null }) {
           className="mt-5 h-11 w-full rounded-full bg-[#bb2720] text-base font-semibold text-white transition hover:bg-[#a7211b] disabled:bg-stone-300"
         >
           {submitting ? "Connexion..." : "Se connecter"}
+        </button>
+        <button
+          type="button"
+          onClick={() => void sendPasswordReset()}
+          disabled={resetSending}
+          className="mt-3 w-full text-center text-sm font-semibold text-stone-500 transition hover:text-[#bb2720] disabled:text-stone-300"
+        >
+          {resetSending ? "Envoi..." : "Mot de passe oublié ?"}
         </button>
       </form>
     </main>
