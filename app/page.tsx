@@ -6,6 +6,8 @@ import {
   Camera,
   Captions,
   Check,
+  ChevronLeft,
+  ChevronRight,
   CircleHelp,
   CirclePlay,
   Cloud,
@@ -42,7 +44,9 @@ import {
   useMemo,
   useRef,
   useState,
+  type Dispatch,
   type PointerEvent as ReactPointerEvent,
+  type SetStateAction,
   type TouchEvent as ReactTouchEvent,
   type WheelEvent as ReactWheelEvent,
 } from "react";
@@ -1578,7 +1582,7 @@ function normalizeExternalCalendarVisibility(visibility: string | null | undefin
 function getExternalCalendarVisibilityLabel(visibility: ExternalCalendarVisibility) {
   const labels: Record<ExternalCalendarVisibility, string> = {
     admin_only: "Admin",
-    team: "Équipe",
+    team: "Team",
     private: "Privé",
   };
   return labels[visibility];
@@ -9382,6 +9386,8 @@ function ExternalCalendarsSheet({
   onDelete: (calendar: ExternalCalendar) => Promise<void>;
   onSync: (calendar: ExternalCalendar) => Promise<void>;
 }) {
+  const [view, setView] = useState<"list" | "add" | "detail">("list");
+  const [selectedCalendarId, setSelectedCalendarId] = useState<string | null>(null);
   const defaultVisibility: ExternalCalendarVisibility = permissions.canManageEvents ? "admin_only" : "private";
   const [draft, setDraft] = useState<{ name: string; icsUrl: string; color: string; visibility: ExternalCalendarVisibility }>({
     name: "",
@@ -9391,6 +9397,9 @@ function ExternalCalendarsSheet({
   });
   const [savingNew, setSavingNew] = useState(false);
   const [localError, setLocalError] = useState<string | null>(null);
+  const selectedCalendar = selectedCalendarId ? calendars.find((calendar) => calendar.id === selectedCalendarId) ?? null : null;
+  const selectedCalendarEvents = selectedCalendar ? events.filter((event) => event.externalCalendarId === selectedCalendar.id) : [];
+  const canCreateExternalCalendar = Boolean(profile?.id);
 
   useEffect(() => {
     setDraft((current) => ({
@@ -9398,6 +9407,13 @@ function ExternalCalendarsSheet({
       visibility: permissions.canManageEvents ? current.visibility : "private",
     }));
   }, [permissions.canManageEvents]);
+
+  useEffect(() => {
+    if (view === "detail" && selectedCalendarId && !selectedCalendar) {
+      setSelectedCalendarId(null);
+      setView("list");
+    }
+  }, [selectedCalendar, selectedCalendarId, view]);
 
   async function handleCreate() {
     setLocalError(null);
@@ -9410,6 +9426,7 @@ function ExternalCalendarsSheet({
     try {
       await onCreate(draft);
       setDraft({ name: "", icsUrl: "", color: "", visibility: defaultVisibility });
+      setView("list");
     } catch (createError) {
       setLocalError(createError instanceof Error ? createError.message : "Impossible d'ajouter ce calendrier.");
     } finally {
@@ -9421,9 +9438,27 @@ function ExternalCalendarsSheet({
     <div className="fixed inset-0 z-50 flex items-end bg-stone-950/10 p-3 sm:items-center sm:justify-center sm:p-6">
       <div className="flex max-h-[86vh] w-full flex-col rounded-3xl border border-stone-200 bg-white p-4 sm:max-w-2xl sm:p-5">
         <div className="mb-4 flex items-start justify-between gap-3">
-          <div className="min-w-0">
-            <h2 className="text-base font-semibold text-stone-950">Calendriers externes</h2>
-            <p className="mt-1 text-base font-medium text-stone-500">Flux ICS en lecture seule.</p>
+          <div className="flex min-w-0 items-start gap-2">
+            {view !== "list" && (
+              <button
+                type="button"
+                onClick={() => {
+                  setLocalError(null);
+                  setSelectedCalendarId(null);
+                  setView("list");
+                }}
+                className="-ml-1 mt-0.5 flex h-8 w-8 items-center justify-center rounded-full text-stone-500 transition hover:bg-stone-100"
+                aria-label="Retour"
+              >
+                <ChevronLeft className="h-5 w-5" />
+              </button>
+            )}
+            <div className="min-w-0">
+              <h2 className="text-base font-semibold text-stone-950">
+                {view === "add" ? "Ajouter un calendrier" : view === "detail" ? selectedCalendar?.name ?? "Calendrier" : "Calendriers externes"}
+              </h2>
+              <p className="mt-1 text-base font-medium text-stone-500">Flux ICS en lecture seule.</p>
+            </div>
           </div>
           <button type="button" onClick={onClose} className="rounded-full border border-stone-200 bg-white px-3 py-1.5 text-base font-semibold text-stone-600 transition hover:bg-stone-50">
             Fermer
@@ -9433,74 +9468,194 @@ function ExternalCalendarsSheet({
         {(error || localError) && <div className="mb-3 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-base font-medium text-rose-700">{localError || error}</div>}
 
         <div className="no-scrollbar min-h-0 flex-1 overflow-y-auto overscroll-contain">
-          {loading && <div className="rounded-2xl bg-stone-50 px-4 py-3 text-base font-medium text-stone-500">Chargement...</div>}
-          {!loading && calendars.length === 0 && !error && (
-            <div className="rounded-2xl bg-stone-50 px-4 py-3 text-base font-medium text-stone-500">Aucun calendrier externe pour le moment.</div>
+          {view === "list" && (
+            <ExternalCalendarsListView
+              calendars={calendars}
+              events={events}
+              loading={loading}
+              error={error}
+              canCreate={canCreateExternalCalendar}
+              onSelect={(calendar) => {
+                setLocalError(null);
+                setSelectedCalendarId(calendar.id);
+                setView("detail");
+              }}
+              onAdd={() => {
+                setLocalError(null);
+                setDraft({ name: "", icsUrl: "", color: "", visibility: defaultVisibility });
+                setView("add");
+              }}
+            />
           )}
-          <div className="space-y-2">
-            {calendars.map((calendar) => (
-              <ExternalCalendarEditorRow
-                key={calendar.id}
-                calendar={calendar}
-                events={events.filter((event) => event.externalCalendarId === calendar.id)}
-                permissions={permissions}
-                profile={profile}
-                syncing={syncingCalendarId === calendar.id}
-                onUpdate={onUpdate}
-                onDelete={onDelete}
-                onSync={onSync}
-              />
-            ))}
-          </div>
 
-          <div className="mt-3 rounded-2xl border border-stone-200 bg-stone-50/70 px-4 py-3">
-            <p className="mb-3 text-base font-semibold text-stone-950">Ajouter un calendrier</p>
-            <div className="grid gap-2">
-              <input
-                value={draft.name}
-                onChange={(event) => setDraft((current) => ({ ...current, name: event.target.value }))}
-                placeholder="Nom"
-                className="h-10 rounded-xl border border-stone-200 bg-white px-3 text-base font-semibold text-stone-950 outline-none transition placeholder:text-stone-300 focus:border-[#bb2720]/40"
-              />
-              <input
-                value={draft.icsUrl}
-                onChange={(event) => setDraft((current) => ({ ...current, icsUrl: event.target.value }))}
-                placeholder="URL ICS"
-                inputMode="url"
-                className="h-10 rounded-xl border border-stone-200 bg-white px-3 text-base font-medium text-stone-950 outline-none transition placeholder:text-stone-300 focus:border-[#bb2720]/40"
-              />
-              <div className="grid grid-cols-1 gap-2 sm:grid-cols-[auto_1fr]">
-                <ExternalCalendarColorPalette
-                  value={draft.color}
-                  onChange={(nextColor) => setDraft((current) => ({ ...current, color: nextColor }))}
-                />
-                <select
-                  value={draft.visibility}
-                  onChange={(event) => setDraft((current) => ({ ...current, visibility: event.target.value as ExternalCalendarVisibility }))}
-                  className="h-10 rounded-xl border border-stone-200 bg-white px-3 text-base font-semibold text-stone-700 outline-none"
-                >
-                  {permissions.canManageEvents && <option value="admin_only">Admin uniquement</option>}
-                  {permissions.canManageEvents && <option value="team">Toute l'équipe</option>}
-                  <option value="private">Privé</option>
-                </select>
-              </div>
-              <button
-                type="button"
-                onClick={() => void handleCreate()}
-                disabled={savingNew || !draft.name.trim() || !draft.icsUrl.trim() || !draft.color.trim()}
-                className="justify-self-end rounded-full border border-stone-200 bg-white px-3 py-1.5 text-base font-semibold text-stone-600 transition hover:bg-stone-100 disabled:text-stone-300"
-              >
-                {savingNew ? "Ajout..." : "Ajouter"}
-              </button>
-            </div>
-          </div>
+          {view === "add" && (
+            <ExternalCalendarAddView
+              draft={draft}
+              permissions={permissions}
+              saving={savingNew}
+              onChange={setDraft}
+              onCreate={handleCreate}
+            />
+          )}
+
+          {view === "detail" && selectedCalendar && (
+            <ExternalCalendarSettingsDetail
+              calendar={selectedCalendar}
+              events={selectedCalendarEvents}
+              permissions={permissions}
+              profile={profile}
+              syncing={syncingCalendarId === selectedCalendar.id}
+              onUpdate={onUpdate}
+              onDelete={async (calendar) => {
+                await onDelete(calendar);
+                setSelectedCalendarId(null);
+                setView("list");
+              }}
+              onSync={onSync}
+            />
+          )}
         </div>
       </div>
     </div>
   );
 }
 
-function ExternalCalendarEditorRow({
+function ExternalCalendarColorDot({ color, className }: { color: string | null; className?: string }) {
+  const tone = getExternalCalendarTone(color);
+  return <span style={tone.dotStyle} className={cn("h-3.5 w-3.5 shrink-0 rounded-full", tone.dot, className)} />;
+}
+
+function getExternalCalendarStatusLine(events: ExternalCalendarEvent[]) {
+  const latestSync = events
+    .map((event) => event.lastSyncedAt)
+    .filter(Boolean)
+    .sort()
+    .at(-1);
+
+  if (!latestSync) return "Jamais synchronisé";
+  return `${events.length} événement${events.length > 1 ? "s" : ""} · Sync ${formatHistoryTimestamp(latestSync)}`;
+}
+
+function ExternalCalendarsListView({
+  calendars,
+  events,
+  loading,
+  error,
+  canCreate,
+  onSelect,
+  onAdd,
+}: {
+  calendars: ExternalCalendar[];
+  events: ExternalCalendarEvent[];
+  loading: boolean;
+  error: string | null;
+  canCreate: boolean;
+  onSelect: (calendar: ExternalCalendar) => void;
+  onAdd: () => void;
+}) {
+  if (loading) {
+    return <div className="rounded-2xl bg-stone-50 px-4 py-3 text-base font-medium text-stone-500">Chargement...</div>;
+  }
+
+  return (
+    <div className="space-y-2">
+      {calendars.length === 0 && !error && (
+        <div className="rounded-2xl bg-stone-50 px-4 py-3 text-base font-medium text-stone-500">Aucun calendrier externe pour le moment.</div>
+      )}
+      {calendars.map((calendar) => {
+        const calendarEvents = events.filter((event) => event.externalCalendarId === calendar.id);
+        return (
+          <button
+            key={calendar.id}
+            type="button"
+            onClick={() => onSelect(calendar)}
+            className="grid w-full grid-cols-[auto_1fr_auto] items-center gap-3 rounded-2xl border border-stone-200 bg-stone-50/70 px-4 py-3 text-left transition hover:bg-stone-100/80"
+          >
+            <ExternalCalendarColorDot color={calendar.color} />
+            <span className="min-w-0">
+              <span className="flex min-w-0 items-center gap-2">
+                <span className="truncate text-base font-semibold text-stone-950">{calendar.name}</span>
+                <span className="shrink-0 rounded-full bg-white px-2 py-0.5 text-xs font-semibold text-stone-500 ring-1 ring-stone-200">
+                  {getExternalCalendarVisibilityLabel(calendar.visibility)}
+                </span>
+              </span>
+              <span className="mt-0.5 block truncate text-sm font-semibold text-stone-400">{getExternalCalendarStatusLine(calendarEvents)}</span>
+            </span>
+            <ChevronRight className="h-5 w-5 text-stone-300" />
+          </button>
+        );
+      })}
+      {canCreate && (
+        <button
+          type="button"
+          onClick={onAdd}
+          className="mt-3 flex w-full items-center justify-center rounded-2xl border border-dashed border-stone-300 bg-white px-4 py-3 text-base font-semibold text-stone-600 transition hover:bg-stone-50"
+        >
+          Ajouter un calendrier
+        </button>
+      )}
+    </div>
+  );
+}
+
+function ExternalCalendarAddView({
+  draft,
+  permissions,
+  saving,
+  onChange,
+  onCreate,
+}: {
+  draft: { name: string; icsUrl: string; color: string; visibility: ExternalCalendarVisibility };
+  permissions: AppPermissions;
+  saving: boolean;
+  onChange: Dispatch<SetStateAction<{ name: string; icsUrl: string; color: string; visibility: ExternalCalendarVisibility }>>;
+  onCreate: () => Promise<void>;
+}) {
+  return (
+    <div className="rounded-2xl border border-stone-200 bg-stone-50/70 px-4 py-3">
+      <div className="grid gap-2">
+        <input
+          value={draft.name}
+          onChange={(event) => onChange((current) => ({ ...current, name: event.target.value }))}
+          placeholder="Nom"
+          className="h-10 rounded-xl border border-stone-200 bg-white px-3 text-base font-semibold text-stone-950 outline-none transition placeholder:text-stone-300 focus:border-[#bb2720]/40"
+        />
+        <input
+          value={draft.icsUrl}
+          onChange={(event) => onChange((current) => ({ ...current, icsUrl: event.target.value }))}
+          placeholder="URL ICS"
+          inputMode="url"
+          className="h-10 rounded-xl border border-stone-200 bg-white px-3 text-base font-medium text-stone-950 outline-none transition placeholder:text-stone-300 focus:border-[#bb2720]/40"
+        />
+        <div className="grid grid-cols-1 gap-2 sm:grid-cols-[auto_1fr]">
+          <ExternalCalendarColorPalette
+            value={draft.color}
+            onChange={(nextColor) => onChange((current) => ({ ...current, color: nextColor }))}
+          />
+          <select
+            value={draft.visibility}
+            onChange={(event) => onChange((current) => ({ ...current, visibility: event.target.value as ExternalCalendarVisibility }))}
+            className="h-10 rounded-xl border border-stone-200 bg-white px-3 text-base font-semibold text-stone-700 outline-none"
+          >
+            {permissions.canManageEvents && <option value="admin_only">Admin uniquement</option>}
+            {permissions.canManageEvents && <option value="team">Toute l'équipe</option>}
+            <option value="private">Privé</option>
+          </select>
+        </div>
+        <button
+          type="button"
+          onClick={() => void onCreate()}
+          disabled={saving || !draft.name.trim() || !draft.icsUrl.trim() || !draft.color.trim()}
+          className="justify-self-end rounded-full border border-stone-200 bg-white px-3 py-1.5 text-base font-semibold text-stone-600 transition hover:bg-stone-100 disabled:text-stone-300"
+        >
+          {saving ? "Ajout..." : "Ajouter"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function ExternalCalendarSettingsDetail({
   calendar,
   events,
   permissions,
@@ -9529,11 +9684,6 @@ function ExternalCalendarEditorRow({
   const [deleting, setDeleting] = useState(false);
   const [rowError, setRowError] = useState<string | null>(null);
   const canManage = canManageExternalCalendar(permissions, profile, calendar);
-  const latestSync = events
-    .map((event) => event.lastSyncedAt)
-    .filter(Boolean)
-    .sort()
-    .at(-1);
   const hasChanges =
     draft.name.trim() !== calendar.name ||
     draft.icsUrl.trim() !== calendar.icsUrl ||
@@ -9601,7 +9751,7 @@ function ExternalCalendarEditorRow({
           <span className="rounded-full bg-indigo-50 px-2.5 py-1 text-sm font-semibold text-indigo-700">{getExternalCalendarVisibilityLabel(calendar.visibility)}</span>
         </div>
         <p className="text-sm font-semibold text-stone-400">
-          {latestSync ? `${events.length} événement${events.length > 1 ? "s" : ""} · Sync ${formatHistoryTimestamp(latestSync)}` : "Jamais synchronisé"}
+          {getExternalCalendarStatusLine(events)}
         </p>
         <input
           value={draft.icsUrl}
