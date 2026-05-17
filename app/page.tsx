@@ -472,7 +472,44 @@ function getCalendarMarkers(dateKey: string) {
   return [...publicHolidays, ...schoolHolidaysZoneC].filter((marker) => isDateKeyInMarker(dateKey, marker));
 }
 
+function normalizeHexColor(color: string | null | undefined) {
+  const trimmedColor = color?.trim() ?? "";
+  const shortMatch = trimmedColor.match(/^#([0-9a-f]{3})$/i);
+  if (shortMatch) {
+    return `#${shortMatch[1].split("").map((char) => `${char}${char}`).join("")}`.toLocaleLowerCase("fr-FR");
+  }
+
+  const longMatch = trimmedColor.match(/^#[0-9a-f]{6}$/i);
+  return longMatch ? trimmedColor.toLocaleLowerCase("fr-FR") : null;
+}
+
+function getHexRgb(color: string) {
+  const normalizedColor = normalizeHexColor(color);
+  if (!normalizedColor) return null;
+
+  return {
+    r: Number.parseInt(normalizedColor.slice(1, 3), 16),
+    g: Number.parseInt(normalizedColor.slice(3, 5), 16),
+    b: Number.parseInt(normalizedColor.slice(5, 7), 16),
+  };
+}
+
 function getExternalCalendarTone(color: string | null) {
+  const hexColor = normalizeHexColor(color);
+  if (hexColor) {
+    const rgb = getHexRgb(hexColor);
+    return {
+      dot: "",
+      bg: "",
+      stripe: "",
+      title: "text-stone-950",
+      meta: "text-stone-600",
+      dotStyle: { backgroundColor: hexColor },
+      bgStyle: rgb ? { backgroundColor: `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 0.12)` } : undefined,
+      stripeStyle: { backgroundColor: hexColor },
+    };
+  }
+
   const normalizedColor = normalizeLabel(color ?? "");
   if (normalizedColor.includes("violet") || normalizedColor.includes("direction") || normalizedColor.includes("indigo")) {
     return {
@@ -6028,9 +6065,12 @@ function CalendarMonthGrid({
         const dayDots = [
           publicHolidayMarker ? { key: "public-holiday", className: "bg-emerald-400/80" } : null,
           schoolHolidayMarker ? { key: "school-holiday", className: "bg-amber-400/80" } : null,
-          ...dayExternalEvents.slice(0, 4).map((event) => ({ key: `external-${event.id}`, className: getExternalCalendarTone(event.calendarColor).dot })),
+          ...dayExternalEvents.slice(0, 4).map((event) => {
+            const tone = getExternalCalendarTone(event.calendarColor);
+            return { key: `external-${event.id}`, className: tone.dot, style: tone.dotStyle };
+          }),
           ...dayEvents.slice(0, 4).map((event) => ({ key: event.id, className: "bg-[#bb2720]" })),
-        ].filter(Boolean).slice(0, 4) as { key: string; className: string }[];
+        ].filter(Boolean).slice(0, 4) as { key: string; className: string; style?: React.CSSProperties }[];
 
         return (
           <button
@@ -6063,16 +6103,17 @@ function CalendarMonthGrid({
                 <span className="mt-1 hidden min-w-0 flex-wrap justify-end gap-1 lg:flex">
                   {publicHolidayMarker && <span className="h-1.5 w-1.5 rounded-full bg-emerald-400/80" />}
                   {schoolHolidayMarker && <span className="h-1.5 w-1.5 rounded-full bg-amber-400/80" />}
-                  {dayExternalEvents.slice(0, 2).map((event) => (
-                    <span key={`desktop-external-${event.id}`} className={cn("h-1.5 w-1.5 rounded-full", getExternalCalendarTone(event.calendarColor).dot)} />
-                  ))}
+                  {dayExternalEvents.slice(0, 2).map((event) => {
+                    const tone = getExternalCalendarTone(event.calendarColor);
+                    return <span key={`desktop-external-${event.id}`} style={tone.dotStyle} className={cn("h-1.5 w-1.5 rounded-full", tone.dot)} />;
+                  })}
                 </span>
               )}
             </span>
             {dayDots.length > 0 && (
               <span className="flex min-h-3 w-full items-center justify-center gap-0.5 px-0.5 lg:hidden">
                 {dayDots.map((dot) => (
-                  <span key={dot.key} className={cn("h-1.5 w-1.5 shrink-0 rounded-full", dot.className)} />
+                  <span key={dot.key} style={dot.style} className={cn("h-1.5 w-1.5 shrink-0 rounded-full", dot.className)} />
                 ))}
               </span>
             )}
@@ -6090,9 +6131,10 @@ function CalendarMonthGrid({
             )}
             {dayEvents.length === 0 && dayExternalEvents.length > 0 && (
               <span className="hidden max-w-full gap-0.5 lg:mt-2 lg:flex lg:gap-1">
-                {dayExternalEvents.slice(0, 3).map((event) => (
-                  <span key={event.id} className={cn("h-2 w-2 shrink-0 rounded-full lg:h-2.5 lg:w-2.5", getExternalCalendarTone(event.calendarColor).dot)} />
-                ))}
+                {dayExternalEvents.slice(0, 3).map((event) => {
+                  const tone = getExternalCalendarTone(event.calendarColor);
+                  return <span key={event.id} style={tone.dotStyle} className={cn("h-2 w-2 shrink-0 rounded-full lg:h-2.5 lg:w-2.5", tone.dot)} />;
+                })}
               </span>
             )}
           </button>
@@ -6231,12 +6273,13 @@ function ExternalCalendarEventRow({
     <button
       type="button"
       onClick={() => onOpen(event)}
+      style={tone.bgStyle}
       className={cn(
         "grid min-h-20 w-full grid-cols-[3px_1fr_auto] items-center gap-4 rounded-xl px-4 py-4 text-left transition hover:bg-white lg:gap-5 lg:px-5",
         tone.bg,
       )}
     >
-      <span className={cn("h-full min-h-14 rounded-full", tone.stripe)} />
+      <span style={tone.stripeStyle} className={cn("h-full min-h-14 rounded-full", tone.stripe)} />
       <span className="min-w-0">
         <span className={cn("block text-base font-semibold leading-snug", tone.title)}>{event.title}</span>
         <span className={cn("block truncate text-base font-medium", tone.meta)}>
@@ -9192,6 +9235,10 @@ function ExternalCalendarColorPalette({
   onChange: (value: string) => void;
   disabled?: boolean;
 }) {
+  const customInputRef = useRef<HTMLInputElement | null>(null);
+  const customColor = normalizeHexColor(value) ?? "#64748b";
+  const customSelected = Boolean(normalizeHexColor(value));
+
   return (
     <div className="flex h-10 items-center gap-2 rounded-xl border border-stone-200 bg-white px-3" aria-label="Couleur du calendrier">
       {externalCalendarColorOptions.map((colorOption) => {
@@ -9215,6 +9262,30 @@ function ExternalCalendarColorPalette({
           </button>
         );
       })}
+      <button
+        type="button"
+        onClick={() => customInputRef.current?.click()}
+        disabled={disabled}
+        aria-label="Personnaliser"
+        aria-pressed={customSelected}
+        title="Personnaliser"
+        className={cn(
+          "flex h-6 w-6 items-center justify-center rounded-full transition disabled:cursor-default disabled:opacity-50",
+          customSelected ? "ring-2 ring-stone-300 ring-offset-2 ring-offset-white" : "ring-0 hover:ring-2 hover:ring-stone-200 hover:ring-offset-2 hover:ring-offset-white",
+        )}
+        style={{ backgroundColor: customColor }}
+      >
+        {customSelected ? <Check className="h-3.5 w-3.5 text-white" strokeWidth={3} /> : <Palette className="h-3.5 w-3.5 text-white" strokeWidth={2.5} />}
+      </button>
+      <input
+        ref={customInputRef}
+        type="color"
+        value={customColor}
+        onChange={(event) => onChange(event.target.value)}
+        disabled={disabled}
+        className="sr-only"
+        aria-label="Couleur personnalisée"
+      />
     </div>
   );
 }
@@ -9551,7 +9622,7 @@ function ExternalCalendarEventDetails({
             Fermer
           </button>
         </div>
-        <div className={cn("grid gap-3 rounded-2xl px-4 py-3", tone.bg)}>
+        <div style={tone.bgStyle} className={cn("grid gap-3 rounded-2xl px-4 py-3", tone.bg)}>
           <p className={cn("text-base font-semibold", tone.title)}>{dateLabel}</p>
           {timeRange && <p className={cn("text-base font-medium", tone.meta)}>{timeRange}</p>}
           {event.location && <p className="text-base font-medium text-stone-600">{event.location}</p>}
