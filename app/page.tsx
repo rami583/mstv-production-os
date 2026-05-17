@@ -78,6 +78,7 @@ type ExternalCalendarRow = Database["public"]["Tables"]["external_calendars"]["R
 type ExternalCalendarEventRow = Database["public"]["Tables"]["external_calendar_events"]["Row"];
 
 type UserRole = "admin" | "team";
+type ExternalCalendarVisibility = "admin_only" | "team" | "private";
 
 type EventQueryRow = EventRow & {
   event_options: EventOptionRow[] | null;
@@ -208,7 +209,9 @@ type ExternalCalendar = {
   name: string;
   icsUrl: string;
   color: string | null;
-  visibility: string;
+  visibility: ExternalCalendarVisibility;
+  createdByProfileId: string | null;
+  createdByName: string | null;
   createdAt: string;
 };
 
@@ -226,7 +229,8 @@ type ExternalCalendarEvent = {
   lastSyncedAt: string | null;
   calendarName: string;
   calendarColor: string | null;
-  calendarVisibility: string;
+  calendarVisibility: ExternalCalendarVisibility;
+  calendarCreatedByProfileId: string | null;
 };
 
 type ProductionEvent = {
@@ -448,6 +452,26 @@ function getExternalCalendarTone(color: string | null) {
       stripe: "bg-sky-400",
       title: "text-sky-950",
       meta: "text-sky-700",
+    };
+  }
+
+  if (normalizedColor.includes("green") || normalizedColor.includes("vert") || normalizedColor.includes("emerald")) {
+    return {
+      dot: "bg-emerald-400/85",
+      bg: "bg-emerald-50/80",
+      stripe: "bg-emerald-400",
+      title: "text-emerald-950",
+      meta: "text-emerald-700",
+    };
+  }
+
+  if (normalizedColor.includes("red") || normalizedColor.includes("rouge") || normalizedColor.includes("rose")) {
+    return {
+      dot: "bg-rose-400/85",
+      bg: "bg-rose-50/80",
+      stripe: "bg-rose-400",
+      title: "text-rose-950",
+      meta: "text-rose-700",
     };
   }
 
@@ -1398,6 +1422,33 @@ function getRoleLabel(role: UserRole) {
   return labels[role];
 }
 
+function normalizeExternalCalendarVisibility(visibility: string | null | undefined): ExternalCalendarVisibility {
+  if (visibility === "admin" || visibility === "admin_only") return "admin_only";
+  if (visibility === "team") return "team";
+  if (visibility === "private") return "private";
+  return "private";
+}
+
+function getExternalCalendarVisibilityLabel(visibility: ExternalCalendarVisibility) {
+  const labels: Record<ExternalCalendarVisibility, string> = {
+    admin_only: "Admin",
+    team: "Équipe",
+    private: "Privé",
+  };
+  return labels[visibility];
+}
+
+function canViewExternalCalendar(permissions: AppPermissions, profile: UserProfile | null, calendar: Pick<ExternalCalendar, "visibility" | "createdByProfileId">) {
+  if (permissions.canManageEvents) return true;
+  if (calendar.visibility === "team") return true;
+  return calendar.visibility === "private" && Boolean(profile?.id) && calendar.createdByProfileId === profile?.id;
+}
+
+function canManageExternalCalendar(permissions: AppPermissions, profile: UserProfile | null, calendar: Pick<ExternalCalendar, "createdByProfileId">) {
+  if (permissions.canManageEvents) return true;
+  return Boolean(profile?.id) && calendar.createdByProfileId === profile?.id;
+}
+
 function getPermissionsForRole(role: UserRole): AppPermissions {
   return {
     canManageEvents: role === "admin",
@@ -1566,7 +1617,9 @@ function mapExternalCalendar(row: ExternalCalendarRow): ExternalCalendar {
     name: row.name,
     icsUrl: row.ics_url,
     color: row.color,
-    visibility: row.visibility ?? "admin",
+    visibility: normalizeExternalCalendarVisibility(row.visibility),
+    createdByProfileId: row.created_by_profile_id ?? null,
+    createdByName: row.created_by_name ?? null,
     createdAt: row.created_at,
   };
 }
@@ -1586,7 +1639,8 @@ function mapExternalCalendarEvent(row: ExternalCalendarEventQueryRow): ExternalC
     lastSyncedAt: row.last_synced_at,
     calendarName: row.external_calendars?.name ?? "Calendrier externe",
     calendarColor: row.external_calendars?.color ?? null,
-    calendarVisibility: row.external_calendars?.visibility ?? "admin",
+    calendarVisibility: normalizeExternalCalendarVisibility(row.external_calendars?.visibility),
+    calendarCreatedByProfileId: row.external_calendars?.created_by_profile_id ?? null,
   };
 }
 
@@ -1891,8 +1945,14 @@ export default function Home() {
   const permissions = useMemo(() => getPermissionsForRole(profile?.role ?? "team"), [profile?.role]);
   const actorName = getProfileDisplayName(profile);
   const visibleExternalCalendarEvents = useMemo(
-    () => (permissions.canManageEvents ? externalCalendarEvents.filter((event) => event.calendarVisibility === "admin") : []),
-    [externalCalendarEvents, permissions.canManageEvents],
+    () =>
+      externalCalendarEvents.filter((event) =>
+        canViewExternalCalendar(permissions, profile, {
+          visibility: event.calendarVisibility,
+          createdByProfileId: event.calendarCreatedByProfileId,
+        }),
+      ),
+    [externalCalendarEvents, permissions, profile],
   );
 
   useEffect(() => {
@@ -1983,9 +2043,9 @@ export default function Home() {
   }, [userManagementOpen, permissions.canManageUsers]);
 
   useEffect(() => {
-    if (!externalCalendarSettingsOpen || !permissions.canManageEvents) return;
+    if (!externalCalendarSettingsOpen) return;
     void refreshExternalCalendarSettings();
-  }, [externalCalendarSettingsOpen, permissions.canManageEvents]);
+  }, [externalCalendarSettingsOpen]);
 
   useEffect(() => {
     if (!authSession || !profile || !supabase) return;
@@ -2024,7 +2084,7 @@ export default function Home() {
               await refreshManagedProfiles();
             }
 
-            if (externalCalendarSettingsOpen && permissions.canManageEvents) {
+            if (externalCalendarSettingsOpen) {
               await refreshExternalCalendarSettings();
             }
           } catch (realtimeError) {
@@ -2060,7 +2120,7 @@ export default function Home() {
       }
       void realtimeClient.removeChannel(channel);
     };
-  }, [authSession?.user.id, profile?.id, profile?.role, trashOpen, historyOpen, selectedEvent?.id, userManagementOpen, externalCalendarSettingsOpen, permissions.canManageUsers, permissions.canManageEvents]);
+  }, [authSession?.user.id, profile?.id, profile?.role, trashOpen, historyOpen, selectedEvent?.id, userManagementOpen, externalCalendarSettingsOpen, permissions.canManageUsers]);
 
   useEffect(() => {
     let cancelled = false;
@@ -2135,8 +2195,8 @@ export default function Home() {
     try {
       const [nextEvents, nextExternalCalendars, nextExternalEvents] = await Promise.all([
         fetchEvents(),
-        permissions.canManageEvents ? fetchExternalCalendars() : Promise.resolve([]),
-        permissions.canManageEvents ? fetchExternalCalendarEvents() : Promise.resolve([]),
+        fetchExternalCalendars(),
+        fetchExternalCalendarEvents(),
       ]);
       setEvents(nextEvents);
       setExternalCalendars(nextExternalCalendars);
@@ -2186,8 +2246,6 @@ export default function Home() {
   }
 
   async function refreshExternalCalendarSettings() {
-    if (!permissions.canManageEvents) return;
-
     setExternalCalendarSettingsLoading(true);
     setExternalCalendarSettingsError(null);
 
@@ -2206,9 +2264,10 @@ export default function Home() {
     }
   }
 
-  async function createExternalCalendar(input: { name: string; icsUrl: string; color: string; visibility: string }) {
-    assertCanManageEvents();
+  async function createExternalCalendar(input: { name: string; icsUrl: string; color: string; visibility: ExternalCalendarVisibility }) {
     if (!supabase) throw new Error("Configuration Supabase manquante.");
+    if (!profile?.id) throw new Error("Profil utilisateur introuvable.");
+    const visibility = permissions.canManageEvents ? input.visibility : "private";
 
     const { error: insertError } = await supabase
       .from("external_calendars")
@@ -2216,16 +2275,21 @@ export default function Home() {
         name: input.name.trim(),
         ics_url: input.icsUrl.trim(),
         color: input.color,
-        visibility: input.visibility,
+        visibility,
+        created_by_profile_id: profile.id,
+        created_by_name: actorName,
       });
 
     if (insertError) throw insertError;
     await refreshExternalCalendarSettings();
   }
 
-  async function updateExternalCalendar(calendar: ExternalCalendar, input: { name: string; icsUrl: string; color: string; visibility: string }) {
-    assertCanManageEvents();
+  async function updateExternalCalendar(calendar: ExternalCalendar, input: { name: string; icsUrl: string; color: string; visibility: ExternalCalendarVisibility }) {
     if (!supabase) throw new Error("Configuration Supabase manquante.");
+    if (!canManageExternalCalendar(permissions, profile, calendar)) {
+      throw new Error("Vous ne pouvez modifier que vos calendriers.");
+    }
+    const visibility = permissions.canManageEvents ? input.visibility : "private";
 
     const { error: updateError } = await supabase
       .from("external_calendars")
@@ -2233,7 +2297,7 @@ export default function Home() {
         name: input.name.trim(),
         ics_url: input.icsUrl.trim(),
         color: input.color,
-        visibility: input.visibility,
+        visibility,
       })
       .eq("id", calendar.id);
 
@@ -2242,8 +2306,10 @@ export default function Home() {
   }
 
   async function syncExternalCalendar(calendar: ExternalCalendar) {
-    assertCanManageEvents();
     if (!supabase) throw new Error("Configuration Supabase manquante.");
+    if (!canManageExternalCalendar(permissions, profile, calendar)) {
+      throw new Error("Vous ne pouvez synchroniser que vos calendriers.");
+    }
     if (!calendar.icsUrl.trim()) {
       throw new Error("Ajoutez une URL ICS avant de synchroniser.");
     }
@@ -2286,6 +2352,21 @@ export default function Home() {
     } finally {
       setSyncingExternalCalendarId(null);
     }
+  }
+
+  async function deleteExternalCalendar(calendar: ExternalCalendar) {
+    if (!supabase) throw new Error("Configuration Supabase manquante.");
+    if (!canManageExternalCalendar(permissions, profile, calendar)) {
+      throw new Error("Vous ne pouvez supprimer que vos calendriers.");
+    }
+
+    const { error: deleteError } = await supabase
+      .from("external_calendars")
+      .delete()
+      .eq("id", calendar.id);
+
+    if (deleteError) throw deleteError;
+    await refreshExternalCalendarSettings();
   }
 
   async function fetchActivityLog(eventId: string) {
@@ -4326,7 +4407,7 @@ export default function Home() {
           onLogout={signOut}
           canManageUsers={permissions.canManageUsers}
           onOpenUserManagement={() => setUserManagementOpen(true)}
-          canManageExternalCalendars={permissions.canManageEvents}
+          canManageExternalCalendars={Boolean(profile)}
           onOpenExternalCalendars={() => setExternalCalendarSettingsOpen(true)}
           onImportQuote={() => {
             if (!permissions.canManageEvents) return;
@@ -4464,7 +4545,7 @@ export default function Home() {
           onLogout={signOut}
           canManageUsers={permissions.canManageUsers}
           onOpenUserManagement={() => setUserManagementOpen(true)}
-          canManageExternalCalendars={permissions.canManageEvents}
+          canManageExternalCalendars={Boolean(profile)}
           onOpenExternalCalendars={() => setExternalCalendarSettingsOpen(true)}
           onGoToday={() => {
             goToday();
@@ -4613,15 +4694,26 @@ export default function Home() {
         />
       )}
 
-      {externalCalendarSettingsOpen && permissions.canManageEvents && (
+      {externalCalendarSettingsOpen && (
         <ExternalCalendarsSheet
           calendars={externalCalendars}
+          events={externalCalendarEvents}
+          permissions={permissions}
+          profile={profile}
           loading={externalCalendarSettingsLoading}
           error={externalCalendarSettingsError}
           syncingCalendarId={syncingExternalCalendarId}
           onClose={() => setExternalCalendarSettingsOpen(false)}
           onCreate={createExternalCalendar}
           onUpdate={updateExternalCalendar}
+          onDelete={async (calendar) => {
+            try {
+              await deleteExternalCalendar(calendar);
+            } catch (deleteError) {
+              console.error("External calendar delete failed", deleteError);
+              setExternalCalendarSettingsError(deleteError instanceof Error ? deleteError.message : "Impossible de supprimer ce calendrier.");
+            }
+          }}
           onSync={async (calendar) => {
             try {
               await syncExternalCalendar(calendar);
@@ -9034,26 +9126,47 @@ function UserManagementSheet({
 
 function ExternalCalendarsSheet({
   calendars,
+  events,
+  permissions,
+  profile,
   loading,
   error,
   syncingCalendarId,
   onClose,
   onCreate,
   onUpdate,
+  onDelete,
   onSync,
 }: {
   calendars: ExternalCalendar[];
+  events: ExternalCalendarEvent[];
+  permissions: AppPermissions;
+  profile: UserProfile | null;
   loading: boolean;
   error: string | null;
   syncingCalendarId: string | null;
   onClose: () => void;
-  onCreate: (input: { name: string; icsUrl: string; color: string; visibility: string }) => Promise<void>;
-  onUpdate: (calendar: ExternalCalendar, input: { name: string; icsUrl: string; color: string; visibility: string }) => Promise<void>;
+  onCreate: (input: { name: string; icsUrl: string; color: string; visibility: ExternalCalendarVisibility }) => Promise<void>;
+  onUpdate: (calendar: ExternalCalendar, input: { name: string; icsUrl: string; color: string; visibility: ExternalCalendarVisibility }) => Promise<void>;
+  onDelete: (calendar: ExternalCalendar) => Promise<void>;
   onSync: (calendar: ExternalCalendar) => Promise<void>;
 }) {
-  const [draft, setDraft] = useState({ name: "", icsUrl: "", color: "direction", visibility: "admin" });
+  const defaultVisibility: ExternalCalendarVisibility = permissions.canManageEvents ? "admin_only" : "private";
+  const [draft, setDraft] = useState<{ name: string; icsUrl: string; color: string; visibility: ExternalCalendarVisibility }>({
+    name: "",
+    icsUrl: "",
+    color: "indigo",
+    visibility: defaultVisibility,
+  });
   const [savingNew, setSavingNew] = useState(false);
   const [localError, setLocalError] = useState<string | null>(null);
+
+  useEffect(() => {
+    setDraft((current) => ({
+      ...current,
+      visibility: permissions.canManageEvents ? current.visibility : "private",
+    }));
+  }, [permissions.canManageEvents]);
 
   async function handleCreate() {
     setLocalError(null);
@@ -9065,7 +9178,7 @@ function ExternalCalendarsSheet({
     setSavingNew(true);
     try {
       await onCreate(draft);
-      setDraft({ name: "", icsUrl: "", color: "direction", visibility: "admin" });
+      setDraft({ name: "", icsUrl: "", color: "indigo", visibility: defaultVisibility });
     } catch (createError) {
       setLocalError(createError instanceof Error ? createError.message : "Impossible d'ajouter ce calendrier.");
     } finally {
@@ -9090,13 +9203,20 @@ function ExternalCalendarsSheet({
 
         <div className="no-scrollbar min-h-0 flex-1 overflow-y-auto overscroll-contain">
           {loading && <div className="rounded-2xl bg-stone-50 px-4 py-3 text-base font-medium text-stone-500">Chargement...</div>}
+          {!loading && calendars.length === 0 && !error && (
+            <div className="rounded-2xl bg-stone-50 px-4 py-3 text-base font-medium text-stone-500">Aucun calendrier externe pour le moment.</div>
+          )}
           <div className="space-y-2">
             {calendars.map((calendar) => (
               <ExternalCalendarEditorRow
                 key={calendar.id}
                 calendar={calendar}
+                events={events.filter((event) => event.externalCalendarId === calendar.id)}
+                permissions={permissions}
+                profile={profile}
                 syncing={syncingCalendarId === calendar.id}
                 onUpdate={onUpdate}
+                onDelete={onDelete}
                 onSync={onSync}
               />
             ))}
@@ -9124,15 +9244,19 @@ function ExternalCalendarsSheet({
                   onChange={(event) => setDraft((current) => ({ ...current, color: event.target.value }))}
                   className="h-10 rounded-xl border border-stone-200 bg-white px-3 text-base font-semibold text-stone-700 outline-none"
                 >
-                  <option value="direction">Direction bleu/violet</option>
+                  <option value="indigo">Bleu/violet</option>
                   <option value="sky">Bleu doux</option>
+                  <option value="emerald">Vert doux</option>
+                  <option value="rose">Rouge doux</option>
                 </select>
                 <select
                   value={draft.visibility}
-                  onChange={(event) => setDraft((current) => ({ ...current, visibility: event.target.value }))}
+                  onChange={(event) => setDraft((current) => ({ ...current, visibility: event.target.value as ExternalCalendarVisibility }))}
                   className="h-10 rounded-xl border border-stone-200 bg-white px-3 text-base font-semibold text-stone-700 outline-none"
                 >
-                  <option value="admin">Admin uniquement</option>
+                  {permissions.canManageEvents && <option value="admin_only">Admin uniquement</option>}
+                  {permissions.canManageEvents && <option value="team">Toute l'équipe</option>}
+                  <option value="private">Privé</option>
                 </select>
               </div>
               <button
@@ -9153,34 +9277,49 @@ function ExternalCalendarsSheet({
 
 function ExternalCalendarEditorRow({
   calendar,
+  events,
+  permissions,
+  profile,
   syncing,
   onUpdate,
+  onDelete,
   onSync,
 }: {
   calendar: ExternalCalendar;
+  events: ExternalCalendarEvent[];
+  permissions: AppPermissions;
+  profile: UserProfile | null;
   syncing: boolean;
-  onUpdate: (calendar: ExternalCalendar, input: { name: string; icsUrl: string; color: string; visibility: string }) => Promise<void>;
+  onUpdate: (calendar: ExternalCalendar, input: { name: string; icsUrl: string; color: string; visibility: ExternalCalendarVisibility }) => Promise<void>;
+  onDelete: (calendar: ExternalCalendar) => Promise<void>;
   onSync: (calendar: ExternalCalendar) => Promise<void>;
 }) {
-  const [draft, setDraft] = useState({
+  const [draft, setDraft] = useState<{ name: string; icsUrl: string; color: string; visibility: ExternalCalendarVisibility }>({
     name: calendar.name,
     icsUrl: calendar.icsUrl,
-    color: calendar.color ?? "direction",
+    color: calendar.color ?? "indigo",
     visibility: calendar.visibility,
   });
   const [saving, setSaving] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   const [rowError, setRowError] = useState<string | null>(null);
+  const canManage = canManageExternalCalendar(permissions, profile, calendar);
+  const latestSync = events
+    .map((event) => event.lastSyncedAt)
+    .filter(Boolean)
+    .sort()
+    .at(-1);
   const hasChanges =
     draft.name.trim() !== calendar.name ||
     draft.icsUrl.trim() !== calendar.icsUrl ||
-    draft.color !== (calendar.color ?? "direction") ||
+    draft.color !== (calendar.color ?? "indigo") ||
     draft.visibility !== calendar.visibility;
 
   useEffect(() => {
     setDraft({
       name: calendar.name,
       icsUrl: calendar.icsUrl,
-      color: calendar.color ?? "direction",
+      color: calendar.color ?? "indigo",
       visibility: calendar.visibility,
     });
   }, [calendar.color, calendar.icsUrl, calendar.name, calendar.visibility]);
@@ -9194,6 +9333,17 @@ function ExternalCalendarEditorRow({
       setRowError(saveError instanceof Error ? saveError.message : "Impossible d'enregistrer ce calendrier.");
     } finally {
       setSaving(false);
+    }
+  }
+
+  async function handleDelete() {
+    setRowError(null);
+    setDeleting(true);
+    try {
+      await onDelete(calendar);
+    } catch (deleteError) {
+      setRowError(deleteError instanceof Error ? deleteError.message : "Impossible de supprimer ce calendrier.");
+      setDeleting(false);
     }
   }
 
@@ -9219,38 +9369,49 @@ function ExternalCalendarEditorRow({
           <input
             value={draft.name}
             onChange={(event) => setDraft((current) => ({ ...current, name: event.target.value }))}
+            readOnly={!canManage}
             className="min-w-0 flex-1 bg-transparent text-base font-semibold text-stone-950 outline-none"
             aria-label="Nom du calendrier"
           />
-          <span className="rounded-full bg-indigo-50 px-2.5 py-1 text-sm font-semibold text-indigo-700">Lecture seule</span>
+          <span className="rounded-full bg-indigo-50 px-2.5 py-1 text-sm font-semibold text-indigo-700">{getExternalCalendarVisibilityLabel(calendar.visibility)}</span>
         </div>
+        <p className="text-sm font-semibold text-stone-400">
+          {latestSync ? `${events.length} événement${events.length > 1 ? "s" : ""} · Sync ${formatHistoryTimestamp(latestSync)}` : "Jamais synchronisé"}
+        </p>
         <input
           value={draft.icsUrl}
           onChange={(event) => setDraft((current) => ({ ...current, icsUrl: event.target.value }))}
           placeholder="URL ICS"
           inputMode="url"
+          readOnly={!canManage}
           className="h-10 rounded-xl border border-stone-200 bg-white px-3 text-base font-medium text-stone-950 outline-none transition placeholder:text-stone-300 focus:border-[#bb2720]/40"
         />
         <div className="grid grid-cols-2 gap-2">
           <select
             value={draft.color}
             onChange={(event) => setDraft((current) => ({ ...current, color: event.target.value }))}
+            disabled={!canManage}
             className="h-10 rounded-xl border border-stone-200 bg-white px-3 text-base font-semibold text-stone-700 outline-none"
           >
-            <option value="direction">Direction bleu/violet</option>
+            <option value="indigo">Bleu/violet</option>
             <option value="sky">Bleu doux</option>
+            <option value="emerald">Vert doux</option>
+            <option value="rose">Rouge doux</option>
           </select>
           <select
             value={draft.visibility}
-            onChange={(event) => setDraft((current) => ({ ...current, visibility: event.target.value }))}
+            onChange={(event) => setDraft((current) => ({ ...current, visibility: event.target.value as ExternalCalendarVisibility }))}
+            disabled={!canManage || !permissions.canManageEvents}
             className="h-10 rounded-xl border border-stone-200 bg-white px-3 text-base font-semibold text-stone-700 outline-none"
           >
-            <option value="admin">Admin uniquement</option>
+            {permissions.canManageEvents && <option value="admin_only">Admin uniquement</option>}
+            {permissions.canManageEvents && <option value="team">Toute l'équipe</option>}
+            <option value="private">Privé</option>
           </select>
         </div>
         {rowError && <p className="text-sm font-semibold text-rose-600">{rowError}</p>}
         <div className="flex justify-end gap-2">
-          {hasChanges && (
+          {canManage && hasChanges && (
             <button
               type="button"
               onClick={() => void handleSave()}
@@ -9263,11 +9424,21 @@ function ExternalCalendarEditorRow({
           <button
             type="button"
             onClick={() => void handleSync()}
-            disabled={syncing || saving || !draft.icsUrl.trim()}
+            disabled={!canManage || syncing || saving || !draft.icsUrl.trim()}
             className="rounded-full border border-indigo-200 bg-indigo-50 px-3 py-1.5 text-base font-semibold text-indigo-700 transition hover:bg-indigo-100 disabled:border-stone-200 disabled:bg-white disabled:text-stone-300"
           >
             {syncing ? "Synchronisation..." : "Synchroniser"}
           </button>
+          {canManage && (
+            <button
+              type="button"
+              onClick={() => void handleDelete()}
+              disabled={deleting || syncing || saving}
+              className="rounded-full border border-[#bb2720]/20 bg-white px-3 py-1.5 text-base font-semibold text-[#bb2720] transition hover:bg-[#bb2720]/[0.05] disabled:text-stone-300"
+            >
+              {deleting ? "Suppression..." : "Supprimer"}
+            </button>
+          )}
         </div>
       </div>
     </div>

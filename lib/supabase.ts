@@ -292,6 +292,8 @@ export type Database = {
           ics_url: string;
           color: string | null;
           visibility: string | null;
+          created_by_profile_id: string | null;
+          created_by_name: string | null;
           created_at: string;
         };
         Insert: {
@@ -300,6 +302,8 @@ export type Database = {
           ics_url: string;
           color?: string | null;
           visibility?: string | null;
+          created_by_profile_id?: string | null;
+          created_by_name?: string | null;
           created_at?: string;
         };
         Update: Partial<Database["public"]["Tables"]["external_calendars"]["Insert"]>;
