@@ -343,40 +343,52 @@ const realtimeTableNames = [
 
 const externalCalendarColorOptions = [
   {
-    value: "sky",
-    label: "Bleu",
-    swatchClassName: "bg-sky-400",
-    selectedClassName: "ring-sky-300",
+    value: "rose",
+    label: "Rouge",
+    swatchClassName: "bg-[#ff3b30]",
+    selectedClassName: "ring-[#ff3b30]/35",
   },
   {
-    value: "indigo",
-    label: "Violet",
-    swatchClassName: "bg-indigo-400",
-    selectedClassName: "ring-indigo-300",
+    value: "orange",
+    label: "Orange",
+    swatchClassName: "bg-[#ff9500]",
+    selectedClassName: "ring-[#ff9500]/35",
+  },
+  {
+    value: "yellow",
+    label: "Jaune",
+    swatchClassName: "bg-[#ffcc00]",
+    selectedClassName: "ring-[#ffcc00]/35",
   },
   {
     value: "emerald",
     label: "Vert",
-    swatchClassName: "bg-emerald-400",
-    selectedClassName: "ring-emerald-300",
+    swatchClassName: "bg-[#34c759]",
+    selectedClassName: "ring-[#34c759]/35",
   },
   {
-    value: "amber",
-    label: "Jaune orange",
-    swatchClassName: "bg-amber-400",
-    selectedClassName: "ring-amber-300",
+    value: "sky",
+    label: "Bleu",
+    swatchClassName: "bg-[#007aff]",
+    selectedClassName: "ring-[#007aff]/35",
   },
   {
-    value: "rose",
-    label: "Rouge",
-    swatchClassName: "bg-rose-400",
-    selectedClassName: "ring-rose-300",
+    value: "indigo",
+    label: "Violet",
+    swatchClassName: "bg-[#af52de]",
+    selectedClassName: "ring-[#af52de]/35",
+  },
+  {
+    value: "brown",
+    label: "Marron",
+    swatchClassName: "bg-[#a2845e]",
+    selectedClassName: "ring-[#a2845e]/35",
   },
   {
     value: "stone",
     label: "Gris",
-    swatchClassName: "bg-stone-400",
-    selectedClassName: "ring-stone-300",
+    swatchClassName: "bg-[#8e8e93]",
+    selectedClassName: "ring-[#8e8e93]/35",
   },
 ] as const;
 
@@ -541,13 +553,33 @@ function getExternalCalendarTone(color: string | null) {
     };
   }
 
-  if (normalizedColor.includes("yellow") || normalizedColor.includes("jaune") || normalizedColor.includes("orange") || normalizedColor.includes("amber")) {
+  if (normalizedColor.includes("orange")) {
+    return {
+      dot: "bg-orange-400/85",
+      bg: "bg-orange-50/80",
+      stripe: "bg-orange-400",
+      title: "text-orange-950",
+      meta: "text-orange-700",
+    };
+  }
+
+  if (normalizedColor.includes("yellow") || normalizedColor.includes("jaune") || normalizedColor.includes("amber")) {
     return {
       dot: "bg-amber-400/85",
       bg: "bg-amber-50/80",
       stripe: "bg-amber-400",
       title: "text-amber-950",
       meta: "text-amber-700",
+    };
+  }
+
+  if (normalizedColor.includes("brown") || normalizedColor.includes("marron")) {
+    return {
+      dot: "bg-[#a2845e]/85",
+      bg: "bg-[#a2845e]/10",
+      stripe: "bg-[#a2845e]",
+      title: "text-stone-950",
+      meta: "text-stone-600",
     };
   }
 
@@ -9262,8 +9294,8 @@ function ExternalCalendarColorPalette({
         );
       })}
       <label
-        aria-label="Personnaliser"
-        title="Personnaliser"
+        aria-label="Personnaliser…"
+        title="Personnaliser…"
         className={cn(
           "relative flex h-6 w-6 items-center justify-center overflow-hidden rounded-full transition",
           disabled ? "cursor-default opacity-50" : "cursor-pointer",
@@ -9316,7 +9348,7 @@ function ExternalCalendarsSheet({
   const [draft, setDraft] = useState<{ name: string; icsUrl: string; color: string; visibility: ExternalCalendarVisibility }>({
     name: "",
     icsUrl: "",
-    color: "indigo",
+    color: "",
     visibility: defaultVisibility,
   });
   const [savingNew, setSavingNew] = useState(false);
@@ -9331,15 +9363,15 @@ function ExternalCalendarsSheet({
 
   async function handleCreate() {
     setLocalError(null);
-    if (!draft.name.trim() || !draft.icsUrl.trim()) {
-      setLocalError("Nom et URL ICS obligatoires.");
+    if (!draft.name.trim() || !draft.icsUrl.trim() || !draft.color.trim()) {
+      setLocalError("Nom, URL ICS et couleur obligatoires.");
       return;
     }
 
     setSavingNew(true);
     try {
       await onCreate(draft);
-      setDraft({ name: "", icsUrl: "", color: "indigo", visibility: defaultVisibility });
+      setDraft({ name: "", icsUrl: "", color: "", visibility: defaultVisibility });
     } catch (createError) {
       setLocalError(createError instanceof Error ? createError.message : "Impossible d'ajouter ce calendrier.");
     } finally {
@@ -9417,7 +9449,7 @@ function ExternalCalendarsSheet({
               <button
                 type="button"
                 onClick={() => void handleCreate()}
-                disabled={savingNew}
+                disabled={savingNew || !draft.name.trim() || !draft.icsUrl.trim() || !draft.color.trim()}
                 className="justify-self-end rounded-full border border-stone-200 bg-white px-3 py-1.5 text-base font-semibold text-stone-600 transition hover:bg-stone-100 disabled:text-stone-300"
               >
                 {savingNew ? "Ajout..." : "Ajouter"}
