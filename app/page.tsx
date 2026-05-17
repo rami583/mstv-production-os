@@ -7029,6 +7029,7 @@ function LinkValueRow({
   copyLabel,
   completed,
   onChange,
+  onCommit,
   onCopy,
   openable = false,
   editable = true,
@@ -7040,19 +7041,41 @@ function LinkValueRow({
   copyLabel: string;
   completed: boolean;
   onChange: (value: string) => void;
+  onCommit: (value: string) => Promise<void>;
   onCopy: () => void;
   openable?: boolean;
   editable?: boolean;
 }) {
-  const trimmedValue = value.trim();
+  const [localValue, setLocalValue] = useState(value);
+  const trimmedValue = localValue.trim();
   const canOpen = openable && Boolean(getValidUrl(trimmedValue));
   const rowTone = getLinkTone(completed ? "available" : "missing");
   const [editing, setEditing] = useState(false);
+  const [committing, setCommitting] = useState(false);
   const openTimerRef = useRef<number | null>(null);
+  const skipBlurCommitRef = useRef(false);
+
+  useEffect(() => {
+    if (!editing) setLocalValue(value);
+  }, [editing, value]);
 
   useEffect(() => () => {
     if (openTimerRef.current) window.clearTimeout(openTimerRef.current);
   }, []);
+
+  async function commitValue(nextValue = localValue) {
+    if (!editable || committing) return;
+    setCommitting(true);
+    try {
+      onChange(nextValue);
+      await onCommit(nextValue);
+      setEditing(false);
+    } catch {
+      setEditing(true);
+    } finally {
+      setCommitting(false);
+    }
+  }
 
   function openUrlFromRow() {
     if (!canOpen) return;
@@ -7083,20 +7106,44 @@ function LinkValueRow({
             onDoubleClick={editUrlFromRow}
             className={cn("min-w-0 flex-1 truncate bg-transparent text-left text-base font-semibold underline-offset-2 outline-none transition hover:underline", rowTone.text)}
           >
-            {value}
+            {localValue}
           </button>
         ) : editable ? (
           <input
-            value={value}
-            onChange={(event) => onChange(event.target.value)}
-            onBlur={() => setEditing(false)}
+            value={localValue}
+            disabled={committing}
+            onFocus={() => setEditing(true)}
+            onChange={(event) => {
+              setLocalValue(event.target.value);
+              onChange(event.target.value);
+            }}
+            onBlur={() => {
+              if (skipBlurCommitRef.current) {
+                skipBlurCommitRef.current = false;
+                return;
+              }
+              void commitValue();
+            }}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") {
+                event.preventDefault();
+                skipBlurCommitRef.current = true;
+                void commitValue().finally(() => event.currentTarget.blur());
+              }
+              if (event.key === "Escape") {
+                event.preventDefault();
+                setLocalValue(value);
+                setEditing(false);
+                event.currentTarget.blur();
+              }
+            }}
             autoFocus={editing}
             placeholder={placeholder}
             className={cn("min-w-0 flex-1 bg-transparent text-base font-semibold outline-none placeholder:text-sky-300", rowTone.text)}
           />
         ) : (
           <span className={cn("min-w-0 flex-1 truncate text-base font-semibold", rowTone.text)}>
-            {value || placeholder}
+            {localValue || placeholder}
           </span>
         )}
       </div>
@@ -7188,7 +7235,6 @@ function ContextDetailBlock({
   const canRenameSelectedDocumentGroup = selectedDocumentGroup ? canManageCreatedEntity(permissions, profile, selectedDocumentGroup) : false;
   const [linkEntryDrafts, setLinkEntryDrafts] = useState<LinkEntryDraft[]>(() => selectedLink ? createLinkEntryDrafts(selectedLink, selectedLinkIsPlatform) : []);
   const [lastSavedLinkEntrySignature, setLastSavedLinkEntrySignature] = useState(() => selectedLink ? serializeLinkEntryDrafts(createLinkEntryDrafts(selectedLink, selectedLinkIsPlatform), selectedLinkIsPlatform) : "[]");
-  const [savingLink, setSavingLink] = useState(false);
   const [linkSaveError, setLinkSaveError] = useState<string | null>(null);
   const [copiedLinkField, setCopiedLinkField] = useState<string | null>(null);
   const [addingOptionItem, setAddingOptionItem] = useState(false);
@@ -7201,40 +7247,19 @@ function ContextDetailBlock({
   const [draggingDocumentFiles, setDraggingDocumentFiles] = useState(false);
   const [uploadingDocumentFiles, setUploadingDocumentFiles] = useState(false);
   const [documentOpenError, setDocumentOpenError] = useState<string | null>(null);
-  const linkEntryDraftSignature = serializeLinkEntryDrafts(linkEntryDrafts, selectedLinkIsPlatform);
-  const hasUnsavedLinkChanges = selectedLink ? linkEntryDraftSignature !== lastSavedLinkEntrySignature : false;
+  const linkEntryDraftsRef = useRef(linkEntryDrafts);
+
+  useEffect(() => {
+    linkEntryDraftsRef.current = linkEntryDrafts;
+  }, [linkEntryDrafts]);
 
   useEffect(() => {
     const nextDrafts = selectedLink ? createLinkEntryDrafts(selectedLink, selectedLinkIsPlatform) : [];
     setLinkEntryDrafts(nextDrafts);
     setLastSavedLinkEntrySignature(selectedLink ? serializeLinkEntryDrafts(nextDrafts, selectedLinkIsPlatform) : "[]");
-    setSavingLink(false);
     setLinkSaveError(null);
     setCopiedLinkField(null);
   }, [selectedLinkId]);
-
-  useEffect(() => {
-    if (!selectedLink || !canEdit || !hasUnsavedLinkChanges) return;
-
-    const saveTimer = window.setTimeout(() => {
-      setSavingLink(true);
-      setLinkSaveError(null);
-      void onSaveLinkEntries(selectedLink, linkEntryDrafts)
-        .then((updatedLink) => {
-          const updatedDrafts = createLinkEntryDrafts(updatedLink, selectedLinkIsPlatform);
-          setLinkEntryDrafts(updatedDrafts);
-          setLastSavedLinkEntrySignature(serializeLinkEntries(updatedLink.entries, selectedLinkIsPlatform));
-        })
-        .catch((saveError) => {
-          setLinkSaveError(saveError instanceof Error ? saveError.message : "Impossible d'enregistrer le lien.");
-        })
-        .finally(() => {
-          setSavingLink(false);
-        });
-    }, 500);
-
-    return () => window.clearTimeout(saveTimer);
-  }, [canEdit, hasUnsavedLinkChanges, linkEntryDrafts, onSaveLinkEntries, selectedLink, selectedLinkIsPlatform]);
 
   useEffect(() => {
     if (!copiedLinkField) return;
@@ -7278,8 +7303,49 @@ function ContextDetailBlock({
       const nextDrafts = current.map((draft, draftIndex) => (
         draftIndex === index ? { ...draft, [field]: value } : draft
       ));
-      return normalizeLinkEntryDrafts(nextDrafts, selectedLinkIsPlatform);
+      linkEntryDraftsRef.current = nextDrafts;
+      return nextDrafts;
     });
+  }
+
+  async function saveLinkEntryDraft(index: number, field: "url" | "streamKey", value: string) {
+    if (!selectedLink || !canEdit) return;
+
+    const currentDrafts = linkEntryDraftsRef.current;
+    const currentDraft = currentDrafts[index];
+    if (currentDraft && !canEditLinkEntryDraft(currentDraft)) return;
+
+    const nextRawDrafts = currentDrafts.map((draft, draftIndex) => (
+      draftIndex === index ? { ...draft, [field]: value } : draft
+    ));
+    const nextDrafts = normalizeLinkEntryDrafts(nextRawDrafts, selectedLinkIsPlatform);
+    const nextSignature = serializeLinkEntryDrafts(nextDrafts, selectedLinkIsPlatform);
+
+    linkEntryDraftsRef.current = nextDrafts;
+    setLinkEntryDrafts(nextDrafts);
+
+    if (nextSignature === lastSavedLinkEntrySignature) return;
+
+    setLinkSaveError(null);
+
+    try {
+      console.info("Saving link entry draft", {
+        linkId: selectedLink.id,
+        entryId: currentDraft?.id ?? null,
+        field,
+        editable: currentDraft ? canEditLinkEntryDraft(currentDraft) : true,
+      });
+      const updatedLink = await onSaveLinkEntries(selectedLink, nextDrafts);
+      const updatedDrafts = createLinkEntryDrafts(updatedLink, selectedLinkIsPlatform);
+      const updatedSignature = serializeLinkEntryDrafts(updatedDrafts, selectedLinkIsPlatform);
+      linkEntryDraftsRef.current = updatedDrafts;
+      setLinkEntryDrafts(updatedDrafts);
+      setLastSavedLinkEntrySignature(updatedSignature);
+    } catch (saveError) {
+      console.error("Unable to save link entry draft", saveError);
+      setLinkSaveError(saveError instanceof Error ? saveError.message : "Impossible d'enregistrer le lien.");
+      throw saveError;
+    }
   }
 
   function canEditLinkEntryDraft(draft: LinkEntryDraft) {
@@ -7467,6 +7533,7 @@ function ContextDetailBlock({
                     copyLabel="Copier l'URL"
                     completed={entryCompleted}
                     onChange={(value) => updateLinkEntryDraft(index, "url", value)}
+                    onCommit={(value) => saveLinkEntryDraft(index, "url", value)}
                     onCopy={() => void copyLinkValue(draft.url, getCopiedLinkField(index, "url"))}
                     openable
                     editable={canEditEntry}
@@ -7480,6 +7547,7 @@ function ContextDetailBlock({
                       copyLabel="Copier la clé de stream"
                       completed={entryCompleted}
                       onChange={(value) => updateLinkEntryDraft(index, "streamKey", value)}
+                      onCommit={(value) => saveLinkEntryDraft(index, "streamKey", value)}
                       onCopy={() => void copyLinkValue(draft.streamKey, getCopiedLinkField(index, "streamKey"))}
                       editable={canEditEntry}
                     />
