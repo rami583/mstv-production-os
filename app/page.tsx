@@ -6305,14 +6305,11 @@ function SelectedDayEvents({
         return (
           <div
             key={`${marker.type}-${marker.label}-${marker.date ?? marker.start}`}
-            className={cn(
-              "relative grid min-h-20 w-full grid-cols-[3px_1fr] items-center gap-4 rounded-xl bg-white/70 px-4 py-4 text-left lg:gap-5 lg:px-5",
-              isPublicHoliday ? "bg-emerald-50/80" : "bg-amber-50/80",
-            )}
+            className={selectedDayStaticRowClassName}
           >
             <span className={cn("h-full min-h-14 rounded-full", isPublicHoliday ? "bg-emerald-400" : "bg-amber-400")} />
             <span className="min-w-0">
-              <span className={cn("block text-base font-semibold leading-snug", isPublicHoliday ? "text-emerald-950" : "text-amber-950")}>{marker.label}</span>
+              <span className="block text-base font-semibold leading-snug text-stone-950">{marker.label}</span>
               <span className={cn("block truncate text-base font-medium", isPublicHoliday ? "text-emerald-700" : "text-amber-700")}>
                 {isPublicHoliday ? "Jour férié" : "Vacances scolaires Zone C"}
               </span>
@@ -6326,6 +6323,10 @@ function SelectedDayEvents({
 
 const calendarEventSwipeActionWidth = 112;
 const calendarEventFullSwipeRatio = 0.65;
+const selectedDayRowClassName =
+  "grid min-h-20 w-full grid-cols-[3px_1fr_auto] items-center gap-4 rounded-xl bg-white/70 px-4 py-4 text-left transition hover:bg-white lg:gap-5 lg:px-5";
+const selectedDayStaticRowClassName =
+  "grid min-h-20 w-full grid-cols-[3px_1fr] items-center gap-4 rounded-xl bg-white/70 px-4 py-4 text-left lg:gap-5 lg:px-5";
 
 function ExternalCalendarEventRow({
   event,
@@ -6341,15 +6342,11 @@ function ExternalCalendarEventRow({
     <button
       type="button"
       onClick={() => onOpen(event)}
-      style={tone.bgStyle}
-      className={cn(
-        "grid min-h-20 w-full grid-cols-[3px_1fr_auto] items-center gap-4 rounded-xl px-4 py-4 text-left transition hover:bg-white lg:gap-5 lg:px-5",
-        tone.bg,
-      )}
+      className={selectedDayRowClassName}
     >
       <span style={tone.stripeStyle} className={cn("h-full min-h-14 rounded-full", tone.stripe)} />
       <span className="min-w-0">
-        <span className={cn("block text-base font-semibold leading-snug", tone.title)}>{event.title}</span>
+        <span className="block text-base font-semibold leading-snug text-stone-950">{event.title}</span>
         <span className={cn("block truncate text-base font-medium", tone.meta)}>
           {event.calendarName}
           {event.location ? ` · ${event.location}` : ""}
@@ -6549,14 +6546,15 @@ function SwipeableCalendarEventRow({
         tabIndex={0}
         style={{ transform: `translateX(${canSwipe ? visibleOffset : 0}px)`, touchAction: "pan-y" }}
         className={cn(
-          "relative z-10 grid min-h-20 w-full cursor-pointer grid-cols-[3px_1fr_auto] items-center gap-4 rounded-xl bg-white px-4 py-4 text-left hover:bg-white lg:gap-5 lg:px-5",
+          selectedDayRowClassName,
+          "relative z-10 cursor-pointer",
           !isDragging && "transition-transform duration-200 ease-out",
         )}
       >
         <span className="h-full min-h-14 rounded-full bg-[#bb2720]" />
         <span className="min-w-0">
           <span className="block text-base font-semibold leading-snug text-stone-950">{event.clientName}</span>
-          <span className="block truncate text-base text-stone-500">{event.eventName}</span>
+          <span className="block truncate text-base font-medium text-stone-500">{event.eventName}</span>
         </span>
         {timeRange && <span className="pl-2 text-right text-base font-medium text-stone-500">{timeRange}</span>}
       </div>
