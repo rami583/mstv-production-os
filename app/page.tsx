@@ -353,6 +353,13 @@ type PendingActivityPayload = {
   newValue?: ActivityValue;
 };
 
+type CachedAppData = {
+  events: ProductionEvent[];
+  externalCalendars: ExternalCalendar[];
+  externalCalendarEvents: ExternalCalendarEvent[];
+  cachedAt: string;
+};
+
 type CompletedByOverrideValue = "rami" | "antoine" | "arthur" | "tony" | "gauthier" | "externe";
 
 type CompletedByOverrideChoice = {
@@ -542,6 +549,54 @@ async function countUnresolvedPendingSyncActions() {
   return actions.filter((action) => action.status === "pending" || action.status === "syncing" || action.status === "failed").length;
 }
 
+function getLocalStorageJson<T>(key: string) {
+  if (typeof window === "undefined") return null;
+  try {
+    const value = window.localStorage.getItem(key);
+    return value ? (JSON.parse(value) as T) : null;
+  } catch (error) {
+    console.warn("Failed to read local cache.", { key, error });
+    return null;
+  }
+}
+
+function setLocalStorageJson(key: string, value: unknown) {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(key, JSON.stringify(value));
+  } catch (error) {
+    console.warn("Failed to write local cache.", { key, error });
+  }
+}
+
+function removeLocalStorageKey(key: string) {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.removeItem(key);
+  } catch (error) {
+    console.warn("Failed to clear local cache.", { key, error });
+  }
+}
+
+function cacheUserProfile(profile: UserProfile) {
+  setLocalStorageJson(`${cachedProfileKeyPrefix}${profile.id}`, profile);
+}
+
+function getCachedUserProfile(userId: string) {
+  return getLocalStorageJson<UserProfile>(`${cachedProfileKeyPrefix}${userId}`);
+}
+
+function cacheAppData(userId: string, data: Omit<CachedAppData, "cachedAt">) {
+  setLocalStorageJson(`${cachedAppDataKeyPrefix}${userId}`, {
+    ...data,
+    cachedAt: new Date().toISOString(),
+  } satisfies CachedAppData);
+}
+
+function getCachedAppData(userId: string) {
+  return getLocalStorageJson<CachedAppData>(`${cachedAppDataKeyPrefix}${userId}`);
+}
+
 const statusStyles: Record<EventStatus, string> = {
   Brouillon: "bg-stone-100 text-stone-600 ring-stone-200",
   "En préparation": "bg-amber-100 text-amber-800 ring-amber-200",
@@ -585,6 +640,8 @@ const eventDocumentsBucket = "event-documents";
 const nativeMstvIcsImportSource = "apple_ics_mstv";
 const pendingSyncDbName = "mstv-production-os-sync";
 const pendingSyncStoreName = "pending_actions";
+const cachedProfileKeyPrefix = "mstv.cachedProfile.";
+const cachedAppDataKeyPrefix = "mstv.cachedAppData.";
 const calendarArrowClassName =
   "flex h-9 w-9 items-center justify-center rounded-full text-base text-[#bb2720] transition hover:bg-[#bb2720]/[0.08] disabled:cursor-not-allowed disabled:text-stone-300 disabled:hover:bg-transparent";
 
@@ -2349,12 +2406,26 @@ export default function Home() {
 
       try {
         const nextProfile = await fetchOrCreateProfile(session);
+        cacheUserProfile(nextProfile);
         if (!cancelled) setProfile(nextProfile);
       } catch (profileError) {
         console.error("Failed to load authenticated profile. Apply supabase/migrations/013_auth_profiles.sql if needed.", profileError);
+        const cachedProfile = getCachedUserProfile(session.user.id);
+        if (cachedProfile && isNetworkOrUnavailableError(profileError)) {
+          if (!cancelled) {
+            setProfile(cachedProfile);
+            setAuthError(null);
+            setOnline(false);
+          }
+          return;
+        }
         if (!cancelled) {
           setProfile(null);
-          setAuthError("Impossible de charger le profil utilisateur.");
+          setAuthError(
+            isNetworkOrUnavailableError(profileError)
+              ? "Hors ligne. Connectez-vous une première fois avec du réseau pour préparer l'accès offline."
+              : "Impossible de charger le profil utilisateur.",
+          );
         }
       }
     }
@@ -2368,7 +2439,7 @@ export default function Home() {
 
       const { data, error } = await supabase.auth.getSession();
       if (error) {
-        setAuthError(error.message);
+        setAuthError(isNetworkOrUnavailableError(error) ? "Hors ligne. Aucune session locale disponible." : error.message);
       }
       await loadAuthenticatedProfile(data.session);
       if (!cancelled) setAuthLoading(false);
@@ -2573,6 +2644,13 @@ export default function Home() {
         fetchExternalCalendars(),
         fetchExternalCalendarEvents(),
       ]);
+      if (authSession?.user.id) {
+        cacheAppData(authSession.user.id, {
+          events: nextEvents,
+          externalCalendars: nextExternalCalendars,
+          externalCalendarEvents: nextExternalEvents,
+        });
+      }
       setEvents(nextEvents);
       setExternalCalendars(nextExternalCalendars);
       setExternalCalendarEvents(nextExternalEvents);
@@ -2582,7 +2660,21 @@ export default function Home() {
         return nextEvents[0]?.id ?? null;
       });
     } catch (supabaseError) {
-      setError(supabaseError instanceof Error ? supabaseError.message : "Impossible de charger les données.");
+      const cachedData = authSession?.user.id ? getCachedAppData(authSession.user.id) : null;
+      if (cachedData && isNetworkOrUnavailableError(supabaseError)) {
+        setEvents(cachedData.events);
+        setExternalCalendars(cachedData.externalCalendars);
+        setExternalCalendarEvents(cachedData.externalCalendarEvents);
+        setSelectedId((current) => {
+          if (nextSelectedId !== undefined) return nextSelectedId;
+          if (current && cachedData.events.some((event) => event.id === current)) return current;
+          return cachedData.events[0]?.id ?? null;
+        });
+        setError(null);
+        setOnline(false);
+      } else {
+        setError(supabaseError instanceof Error ? supabaseError.message : "Impossible de charger les données.");
+      }
     } finally {
       if (!options.silent) {
         setLoading(false);
@@ -5778,7 +5870,12 @@ export default function Home() {
 
   async function signOut() {
     if (!supabase) return;
+    const userId = authSession?.user.id ?? profile?.id ?? null;
     await supabase.auth.signOut();
+    if (userId) {
+      removeLocalStorageKey(`${cachedProfileKeyPrefix}${userId}`);
+      removeLocalStorageKey(`${cachedAppDataKeyPrefix}${userId}`);
+    }
     setAuthSession(null);
     setProfile(null);
     setEvents([]);
