@@ -360,6 +360,11 @@ type CachedAppData = {
   cachedAt: string;
 };
 
+type CachedAuthSession = {
+  session: Session;
+  cachedAt: string;
+};
+
 type CompletedByOverrideValue = "rami" | "antoine" | "arthur" | "tony" | "gauthier" | "externe";
 
 type CompletedByOverrideChoice = {
@@ -586,6 +591,17 @@ function getCachedUserProfile(userId: string) {
   return getLocalStorageJson<UserProfile>(`${cachedProfileKeyPrefix}${userId}`);
 }
 
+function cacheAuthSession(session: Session) {
+  setLocalStorageJson(cachedAuthSessionKey, {
+    session,
+    cachedAt: new Date().toISOString(),
+  } satisfies CachedAuthSession);
+}
+
+function getCachedAuthSession() {
+  return getLocalStorageJson<CachedAuthSession>(cachedAuthSessionKey)?.session ?? null;
+}
+
 function cacheAppData(userId: string, data: Omit<CachedAppData, "cachedAt">) {
   setLocalStorageJson(`${cachedAppDataKeyPrefix}${userId}`, {
     ...data,
@@ -640,6 +656,7 @@ const eventDocumentsBucket = "event-documents";
 const nativeMstvIcsImportSource = "apple_ics_mstv";
 const pendingSyncDbName = "mstv-production-os-sync";
 const pendingSyncStoreName = "pending_actions";
+const cachedAuthSessionKey = "mstv.cachedAuthSession";
 const cachedProfileKeyPrefix = "mstv.cachedProfile.";
 const cachedAppDataKeyPrefix = "mstv.cachedAppData.";
 const calendarArrowClassName =
@@ -2391,10 +2408,16 @@ export default function Home() {
     let cancelled = false;
 
     async function loadAuthenticatedProfile(session: Session | null) {
+      console.info("[MSTV offline boot] profile load start", {
+        hasSession: Boolean(session),
+        userId: session?.user.id ?? null,
+        online: typeof navigator === "undefined" ? true : navigator.onLine,
+      });
       setAuthSession(session);
       setAuthError(null);
 
       if (!session) {
+        console.info("[MSTV offline boot] no session available");
         setProfile(null);
         setEvents([]);
         setExternalCalendars([]);
@@ -2406,20 +2429,32 @@ export default function Home() {
 
       try {
         const nextProfile = await fetchOrCreateProfile(session);
+        console.info("[MSTV offline boot] live profile loaded", { userId: session.user.id });
+        cacheAuthSession(session);
         cacheUserProfile(nextProfile);
         if (!cancelled) setProfile(nextProfile);
       } catch (profileError) {
         console.error("Failed to load authenticated profile. Apply supabase/migrations/013_auth_profiles.sql if needed.", profileError);
         const cachedProfile = getCachedUserProfile(session.user.id);
-        if (cachedProfile && isNetworkOrUnavailableError(profileError)) {
+        console.info("[MSTV offline boot] live profile failed", {
+          userId: session.user.id,
+          networkLike: isNetworkOrUnavailableError(profileError),
+          cachedProfileFound: Boolean(cachedProfile),
+        });
+        if (cachedProfile) {
           if (!cancelled) {
+            console.info("[MSTV offline boot] cached profile fallback used", { userId: session.user.id });
+            cacheAuthSession(session);
             setProfile(cachedProfile);
             setAuthError(null);
-            setOnline(false);
+            if (isNetworkOrUnavailableError(profileError)) {
+              setOnline(false);
+            }
           }
           return;
         }
         if (!cancelled) {
+          console.info("[MSTV offline boot] fatal profile error, no cached profile", { userId: session.user.id });
           setProfile(null);
           setAuthError(
             isNetworkOrUnavailableError(profileError)
@@ -2437,17 +2472,71 @@ export default function Home() {
         return;
       }
 
-      const { data, error } = await supabase.auth.getSession();
-      if (error) {
-        setAuthError(isNetworkOrUnavailableError(error) ? "Hors ligne. Aucune session locale disponible." : error.message);
+      console.info("[MSTV offline boot] auth boot start", {
+        online: typeof navigator === "undefined" ? true : navigator.onLine,
+      });
+
+      try {
+        const { data, error } = await supabase.auth.getSession();
+        console.info("[MSTV offline boot] getSession result", {
+          sessionFound: Boolean(data.session),
+          hasError: Boolean(error),
+        });
+
+        if (data.session) {
+          cacheAuthSession(data.session);
+          await loadAuthenticatedProfile(data.session);
+          if (!cancelled) setAuthLoading(false);
+          return;
+        }
+
+        const cachedSession = getCachedAuthSession();
+        if (cachedSession && (error || isNetworkOrUnavailableError(error) || (typeof navigator !== "undefined" && !navigator.onLine))) {
+          console.info("[MSTV offline boot] cached session fallback used", { userId: cachedSession.user.id });
+          setOnline(false);
+          await loadAuthenticatedProfile(cachedSession);
+          if (!cancelled) setAuthLoading(false);
+          return;
+        }
+
+        if (error) {
+          await loadAuthenticatedProfile(null);
+          if (!cancelled) {
+            setAuthError(isNetworkOrUnavailableError(error) ? "Hors ligne. Aucune session locale disponible." : error.message);
+          }
+          if (!cancelled) setAuthLoading(false);
+          return;
+        }
+        await loadAuthenticatedProfile(null);
+      } catch (sessionError) {
+        console.error("[MSTV offline boot] getSession threw", sessionError);
+        const cachedSession = getCachedAuthSession();
+        if (cachedSession) {
+          console.info("[MSTV offline boot] cached session fallback used after getSession throw", { userId: cachedSession.user.id });
+          setOnline(false);
+          await loadAuthenticatedProfile(cachedSession);
+          if (!cancelled) setAuthLoading(false);
+          return;
+        }
+        if (!cancelled) {
+          setAuthError(
+            isNetworkOrUnavailableError(sessionError)
+              ? "Hors ligne. Aucune session locale disponible."
+              : sessionError instanceof Error
+                ? sessionError.message
+                : "Impossible de charger la session utilisateur.",
+          );
+        }
       }
-      await loadAuthenticatedProfile(data.session);
       if (!cancelled) setAuthLoading(false);
     }
 
     const { data: authListener } = supabase?.auth.onAuthStateChange((authEvent, session) => {
       if (authEvent === "PASSWORD_RECOVERY") {
         setPasswordRecoveryOpen(true);
+      }
+      if (session) {
+        cacheAuthSession(session);
       }
       void loadAuthenticatedProfile(session);
     }) ?? { data: { subscription: null } };
@@ -2512,6 +2601,7 @@ export default function Home() {
         void (async () => {
           try {
             const nextProfile = await fetchOrCreateProfile(currentSession);
+            cacheUserProfile(nextProfile);
             if (!disposed) {
               setProfile(nextProfile);
             }
@@ -5876,6 +5966,7 @@ export default function Home() {
       removeLocalStorageKey(`${cachedProfileKeyPrefix}${userId}`);
       removeLocalStorageKey(`${cachedAppDataKeyPrefix}${userId}`);
     }
+    removeLocalStorageKey(cachedAuthSessionKey);
     setAuthSession(null);
     setProfile(null);
     setEvents([]);
