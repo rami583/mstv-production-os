@@ -380,6 +380,12 @@ type CachedProfileMeta = {
   cachedAt: string;
 };
 
+type CachedAuthState = {
+  session: Session;
+  profile: UserProfile;
+  appData: CachedAppData | null;
+};
+
 type CompletedByOverrideValue = "rami" | "antoine" | "arthur" | "tony" | "gauthier" | "externe";
 
 type CompletedByOverrideChoice = {
@@ -638,6 +644,20 @@ function readOfflineDebugInfo(userId: string | null, bootPath: OfflineBootPath):
     lastCacheWriteAt: profileWriteTime ?? getCachedAuthSessionWriteTime(),
     online: typeof navigator === "undefined" ? true : navigator.onLine,
     bootPath,
+  };
+}
+
+function readCachedAuthState(): CachedAuthState | null {
+  const cachedSession = getCachedAuthSession();
+  if (!cachedSession) return null;
+
+  const cachedProfile = getCachedUserProfile(cachedSession.user.id);
+  if (!cachedProfile) return null;
+
+  return {
+    session: cachedSession,
+    profile: cachedProfile,
+    appData: getCachedAppData(cachedSession.user.id),
   };
 }
 
@@ -2337,14 +2357,15 @@ async function fetchExternalCalendarEvents() {
 
 export default function Home() {
   const today = useMemo(() => new Date(), []);
-  const [authSession, setAuthSession] = useState<Session | null>(null);
-  const [profile, setProfile] = useState<UserProfile | null>(null);
-  const [authLoading, setAuthLoading] = useState(true);
+  const initialCachedAuth = useMemo(() => readCachedAuthState(), []);
+  const [authSession, setAuthSession] = useState<Session | null>(() => initialCachedAuth?.session ?? null);
+  const [profile, setProfile] = useState<UserProfile | null>(() => initialCachedAuth?.profile ?? null);
+  const [authLoading, setAuthLoading] = useState(() => !initialCachedAuth);
   const [authError, setAuthError] = useState<string | null>(null);
   const [passwordRecoveryOpen, setPasswordRecoveryOpen] = useState(false);
   const [screen, setScreen] = useState<Screen>("calendar");
-  const [events, setEvents] = useState<ProductionEvent[]>([]);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [events, setEvents] = useState<ProductionEvent[]>(() => initialCachedAuth?.appData?.events ?? []);
+  const [selectedId, setSelectedId] = useState<string | null>(() => initialCachedAuth?.appData?.events[0]?.id ?? null);
   const [visibleMonth, setVisibleMonth] = useState(() => new Date(today.getFullYear(), today.getMonth(), 1));
   const [selectedDateKey, setSelectedDateKey] = useState(formatDateKey(today));
   const [createMenuOpen, setCreateMenuOpen] = useState(false);
@@ -2372,8 +2393,8 @@ export default function Home() {
   const [managedProfilesLoading, setManagedProfilesLoading] = useState(false);
   const [managedProfilesError, setManagedProfilesError] = useState<string | null>(null);
   const [updatingProfileId, setUpdatingProfileId] = useState<string | null>(null);
-  const [externalCalendars, setExternalCalendars] = useState<ExternalCalendar[]>([]);
-  const [externalCalendarEvents, setExternalCalendarEvents] = useState<ExternalCalendarEvent[]>([]);
+  const [externalCalendars, setExternalCalendars] = useState<ExternalCalendar[]>(() => initialCachedAuth?.appData?.externalCalendars ?? []);
+  const [externalCalendarEvents, setExternalCalendarEvents] = useState<ExternalCalendarEvent[]>(() => initialCachedAuth?.appData?.externalCalendarEvents ?? []);
   const [externalCalendarSettingsLoading, setExternalCalendarSettingsLoading] = useState(false);
   const [externalCalendarSettingsError, setExternalCalendarSettingsError] = useState<string | null>(null);
   const [syncingExternalCalendarId, setSyncingExternalCalendarId] = useState<string | null>(null);
@@ -2381,8 +2402,8 @@ export default function Home() {
   const [pendingSyncCount, setPendingSyncCount] = useState(0);
   const [syncingPendingActions, setSyncingPendingActions] = useState(false);
   const [pendingSyncError, setPendingSyncError] = useState<string | null>(null);
-  const [offlineBootPath, setOfflineBootPath] = useState<OfflineBootPath>("initial");
-  const [offlineDebugInfo, setOfflineDebugInfo] = useState<OfflineDebugInfo>(() => readOfflineDebugInfo(null, "initial"));
+  const [offlineBootPath, setOfflineBootPath] = useState<OfflineBootPath>(() => initialCachedAuth ? "cached" : "initial");
+  const [offlineDebugInfo, setOfflineDebugInfo] = useState<OfflineDebugInfo>(() => readOfflineDebugInfo(initialCachedAuth?.session.user.id ?? null, initialCachedAuth ? "cached" : "initial"));
   const [offlineDebugOpen, setOfflineDebugOpen] = useState(false);
   const [offlinePrepareStatus, setOfflinePrepareStatus] = useState<"idle" | "preparing" | "ready" | "error">("idle");
   const [offlinePrepareMessage, setOfflinePrepareMessage] = useState<string | null>(null);
@@ -2394,7 +2415,7 @@ export default function Home() {
   const [activityLoading, setActivityLoading] = useState(false);
   const [activityError, setActivityError] = useState<string | null>(null);
   const [restoringActivityId, setRestoringActivityId] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(() => !initialCachedAuth);
   const [error, setError] = useState<string | null>(null);
   const [isTimelineTimeEditing, setIsTimelineTimeEditing] = useState(false);
   const [keyboardVisible, setKeyboardVisible] = useState(false);
@@ -2410,6 +2431,26 @@ export default function Home() {
   function setBootPath(path: OfflineBootPath, userId: string | null = authSession?.user.id ?? profile?.id ?? null) {
     setOfflineBootPath(path);
     setOfflineDebugInfo(readOfflineDebugInfo(userId, path));
+  }
+
+  function hydrateFromCachedAuthState(cachedState: CachedAuthState) {
+    setAuthSession(cachedState.session);
+    setProfile(cachedState.profile);
+    setAuthError(null);
+    setBootPath("cached", cachedState.session.user.id);
+
+    if (cachedState.appData) {
+      setEvents(cachedState.appData.events);
+      setExternalCalendars(cachedState.appData.externalCalendars);
+      setExternalCalendarEvents(cachedState.appData.externalCalendarEvents);
+      setSelectedId((current) => {
+        if (current && cachedState.appData?.events.some((event) => event.id === current)) return current;
+        return cachedState.appData?.events[0]?.id ?? null;
+      });
+    }
+
+    setLoading(false);
+    setAuthLoading(false);
   }
 
   const chronologicalEvents = useMemo(() => [...events].sort((a, b) => eventSortValue(a) - eventSortValue(b)), [events]);
@@ -2534,6 +2575,19 @@ export default function Home() {
         return;
       }
 
+      const cachedState = readCachedAuthState();
+      if (cachedState) {
+        console.info("[MSTV offline boot] cache-first auth state used", {
+          userId: cachedState.session.user.id,
+          online: typeof navigator === "undefined" ? true : navigator.onLine,
+        });
+        hydrateFromCachedAuthState(cachedState);
+        if (typeof navigator !== "undefined" && !navigator.onLine) {
+          setOnline(false);
+          return;
+        }
+      }
+
       console.info("[MSTV offline boot] auth boot start", {
         online: typeof navigator === "undefined" ? true : navigator.onLine,
       });
@@ -2623,8 +2677,24 @@ export default function Home() {
 
   useEffect(() => {
     if (!authSession || !profile) return;
+    if (!online) {
+      const cachedData = getCachedAppData(authSession.user.id);
+      if (cachedData) {
+        setEvents(cachedData.events);
+        setExternalCalendars(cachedData.externalCalendars);
+        setExternalCalendarEvents(cachedData.externalCalendarEvents);
+        setSelectedId((current) => {
+          if (current && cachedData.events.some((event) => event.id === current)) return current;
+          return cachedData.events[0]?.id ?? null;
+        });
+      }
+      setLoading(false);
+      setError(null);
+      setBootPath("cached", authSession.user.id);
+      return;
+    }
     void reloadData();
-  }, [authSession?.user.id, profile?.id]);
+  }, [authSession?.user.id, profile?.id, online]);
 
   useEffect(() => {
     if (!historyOpen || !selectedEvent) return;
@@ -2647,7 +2717,7 @@ export default function Home() {
   }, [externalCalendarSettingsOpen]);
 
   useEffect(() => {
-    if (!authSession || !profile || !supabase) return;
+    if (!authSession || !profile || !supabase || !online) return;
 
     const currentSession = authSession;
     const realtimeClient = supabase;
