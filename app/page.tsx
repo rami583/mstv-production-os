@@ -341,6 +341,45 @@ const realtimeTableNames = [
   "external_calendar_events",
 ] as const;
 
+const externalCalendarColorOptions = [
+  {
+    value: "sky",
+    label: "Bleu",
+    swatchClassName: "bg-sky-400",
+    selectedClassName: "ring-sky-300",
+  },
+  {
+    value: "indigo",
+    label: "Violet",
+    swatchClassName: "bg-indigo-400",
+    selectedClassName: "ring-indigo-300",
+  },
+  {
+    value: "emerald",
+    label: "Vert",
+    swatchClassName: "bg-emerald-400",
+    selectedClassName: "ring-emerald-300",
+  },
+  {
+    value: "amber",
+    label: "Jaune orange",
+    swatchClassName: "bg-amber-400",
+    selectedClassName: "ring-amber-300",
+  },
+  {
+    value: "rose",
+    label: "Rouge",
+    swatchClassName: "bg-rose-400",
+    selectedClassName: "ring-rose-300",
+  },
+  {
+    value: "stone",
+    label: "Gris",
+    swatchClassName: "bg-stone-400",
+    selectedClassName: "ring-stone-300",
+  },
+] as const;
+
 type DuplicateEventRequest = {
   event: ProductionEvent;
   date: string;
@@ -465,6 +504,16 @@ function getExternalCalendarTone(color: string | null) {
     };
   }
 
+  if (normalizedColor.includes("yellow") || normalizedColor.includes("jaune") || normalizedColor.includes("orange") || normalizedColor.includes("amber")) {
+    return {
+      dot: "bg-amber-400/85",
+      bg: "bg-amber-50/80",
+      stripe: "bg-amber-400",
+      title: "text-amber-950",
+      meta: "text-amber-700",
+    };
+  }
+
   if (normalizedColor.includes("red") || normalizedColor.includes("rouge") || normalizedColor.includes("rose")) {
     return {
       dot: "bg-rose-400/85",
@@ -472,6 +521,16 @@ function getExternalCalendarTone(color: string | null) {
       stripe: "bg-rose-400",
       title: "text-rose-950",
       meta: "text-rose-700",
+    };
+  }
+
+  if (normalizedColor.includes("grey") || normalizedColor.includes("gray") || normalizedColor.includes("gris") || normalizedColor.includes("stone")) {
+    return {
+      dot: "bg-stone-400/85",
+      bg: "bg-stone-100/80",
+      stripe: "bg-stone-400",
+      title: "text-stone-950",
+      meta: "text-stone-600",
     };
   }
 
@@ -9124,6 +9183,42 @@ function UserManagementSheet({
   );
 }
 
+function ExternalCalendarColorPalette({
+  value,
+  onChange,
+  disabled = false,
+}: {
+  value: string;
+  onChange: (value: string) => void;
+  disabled?: boolean;
+}) {
+  return (
+    <div className="flex h-10 items-center gap-2 rounded-xl border border-stone-200 bg-white px-3" aria-label="Couleur du calendrier">
+      {externalCalendarColorOptions.map((colorOption) => {
+        const isSelected = value === colorOption.value;
+        return (
+          <button
+            key={colorOption.value}
+            type="button"
+            onClick={() => onChange(colorOption.value)}
+            disabled={disabled}
+            aria-label={colorOption.label}
+            aria-pressed={isSelected}
+            title={colorOption.label}
+            className={cn(
+              "flex h-6 w-6 items-center justify-center rounded-full transition disabled:cursor-default disabled:opacity-50",
+              colorOption.swatchClassName,
+              isSelected ? `ring-2 ring-offset-2 ring-offset-white ${colorOption.selectedClassName}` : "ring-0 hover:ring-2 hover:ring-stone-200 hover:ring-offset-2 hover:ring-offset-white",
+            )}
+          >
+            {isSelected && <Check className="h-3.5 w-3.5 text-white" strokeWidth={3} />}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
 function ExternalCalendarsSheet({
   calendars,
   events,
@@ -9238,17 +9333,11 @@ function ExternalCalendarsSheet({
                 inputMode="url"
                 className="h-10 rounded-xl border border-stone-200 bg-white px-3 text-base font-medium text-stone-950 outline-none transition placeholder:text-stone-300 focus:border-[#bb2720]/40"
               />
-              <div className="grid grid-cols-2 gap-2">
-                <select
+              <div className="grid grid-cols-1 gap-2 sm:grid-cols-[auto_1fr]">
+                <ExternalCalendarColorPalette
                   value={draft.color}
-                  onChange={(event) => setDraft((current) => ({ ...current, color: event.target.value }))}
-                  className="h-10 rounded-xl border border-stone-200 bg-white px-3 text-base font-semibold text-stone-700 outline-none"
-                >
-                  <option value="indigo">Bleu/violet</option>
-                  <option value="sky">Bleu doux</option>
-                  <option value="emerald">Vert doux</option>
-                  <option value="rose">Rouge doux</option>
-                </select>
+                  onChange={(nextColor) => setDraft((current) => ({ ...current, color: nextColor }))}
+                />
                 <select
                   value={draft.visibility}
                   onChange={(event) => setDraft((current) => ({ ...current, visibility: event.target.value as ExternalCalendarVisibility }))}
@@ -9386,18 +9475,12 @@ function ExternalCalendarEditorRow({
           readOnly={!canManage}
           className="h-10 rounded-xl border border-stone-200 bg-white px-3 text-base font-medium text-stone-950 outline-none transition placeholder:text-stone-300 focus:border-[#bb2720]/40"
         />
-        <div className="grid grid-cols-2 gap-2">
-          <select
+        <div className="grid grid-cols-1 gap-2 sm:grid-cols-[auto_1fr]">
+          <ExternalCalendarColorPalette
             value={draft.color}
-            onChange={(event) => setDraft((current) => ({ ...current, color: event.target.value }))}
+            onChange={(nextColor) => setDraft((current) => ({ ...current, color: nextColor }))}
             disabled={!canManage}
-            className="h-10 rounded-xl border border-stone-200 bg-white px-3 text-base font-semibold text-stone-700 outline-none"
-          >
-            <option value="indigo">Bleu/violet</option>
-            <option value="sky">Bleu doux</option>
-            <option value="emerald">Vert doux</option>
-            <option value="rose">Rouge doux</option>
-          </select>
+          />
           <select
             value={draft.visibility}
             onChange={(event) => setDraft((current) => ({ ...current, visibility: event.target.value as ExternalCalendarVisibility }))}
