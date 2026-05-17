@@ -24,6 +24,8 @@ export type Database = {
           quote_version: string | null;
           source_quote_text: string | null;
           last_quote_imported_at: string | null;
+          imported_from: string | null;
+          external_import_id: string | null;
           created_at: string;
           updated_at: string;
         };
@@ -43,6 +45,8 @@ export type Database = {
           quote_version?: string | null;
           source_quote_text?: string | null;
           last_quote_imported_at?: string | null;
+          imported_from?: string | null;
+          external_import_id?: string | null;
           created_at?: string;
           updated_at?: string;
         };

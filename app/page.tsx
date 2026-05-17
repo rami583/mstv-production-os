@@ -253,6 +253,8 @@ type ProductionEvent = {
   quoteVersion: string | null;
   sourceQuoteText: string | null;
   lastQuoteImportedAt: string | null;
+  importedFrom: string | null;
+  externalImportId: string | null;
   createdAt: string;
   updatedAt: string;
   options: EventOption[];
@@ -309,6 +311,20 @@ type QuoteImportDifference = {
   label: string;
   previousValue: string;
   nextValue: string;
+};
+
+type NativeMstvIcsReviewEvent = {
+  externalImportId: string;
+  sourceTitle: string;
+  clientName: string;
+  eventName: string;
+  date: string;
+  startTime: string;
+  endTime: string;
+  location: string | null;
+  description: string | null;
+  skipped: boolean;
+  skipReason: string | null;
 };
 
 type CompletedByOverrideValue = "rami" | "antoine" | "arthur" | "tony" | "gauthier" | "guillaume" | "externe";
@@ -456,6 +472,7 @@ const defaultOptions = [
 
 const platformLinkLabels = new Set(["plateforme", "plateforme de diffusion", "evenement plateforme", "event plateforme"]);
 const eventDocumentsBucket = "event-documents";
+const nativeMstvIcsImportSource = "apple_ics_mstv";
 const calendarArrowClassName =
   "flex h-9 w-9 items-center justify-center rounded-full text-base text-[#bb2720] transition hover:bg-[#bb2720]/[0.08] disabled:cursor-not-allowed disabled:text-stone-300 disabled:hover:bg-transparent";
 
@@ -793,6 +810,59 @@ function parseIcsEvents(icsText: string) {
   }
 
   return events;
+}
+
+function getLocalDateKeyFromIso(isoValue: string) {
+  return formatDateKey(new Date(isoValue));
+}
+
+function getLocalTimeFromIso(isoValue: string | null, allDay = false) {
+  if (!isoValue || allDay) return "";
+  const date = new Date(isoValue);
+  if (Number.isNaN(date.getTime())) return "";
+  return `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
+}
+
+function parseNativeMstvIcsTitle(title: string) {
+  const cleanTitle = title.trim().replace(/\s+/g, " ");
+  const separators = [" - ", " – ", " — ", " | ", " : ", " / "];
+
+  for (const separator of separators) {
+    const separatorIndex = cleanTitle.indexOf(separator);
+    if (separatorIndex > 0) {
+      const clientName = cleanTitle.slice(0, separatorIndex).trim();
+      const eventName = cleanTitle.slice(separatorIndex + separator.length).trim();
+      if (clientName && eventName) return { clientName, eventName };
+    }
+  }
+
+  return {
+    clientName: cleanTitle || "Événement importé",
+    eventName: "Événement importé",
+  };
+}
+
+function buildNativeMstvIcsReviewEvents(icsText: string, existingImportIds: Set<string>): NativeMstvIcsReviewEvent[] {
+  return parseIcsEvents(icsText)
+    .map((event) => {
+      const parsedTitle = parseNativeMstvIcsTitle(event.title);
+      const alreadyImported = existingImportIds.has(event.externalEventId);
+
+      return {
+        externalImportId: event.externalEventId,
+        sourceTitle: event.title,
+        clientName: parsedTitle.clientName,
+        eventName: parsedTitle.eventName,
+        date: getLocalDateKeyFromIso(event.startTime),
+        startTime: getLocalTimeFromIso(event.startTime, event.allDay),
+        endTime: getLocalTimeFromIso(event.endTime, event.allDay),
+        location: event.location,
+        description: event.description,
+        skipped: alreadyImported,
+        skipReason: alreadyImported ? "Déjà importé" : null,
+      };
+    })
+    .sort((a, b) => `${a.date}T${a.startTime || "00:00"}`.localeCompare(`${b.date}T${b.startTime || "00:00"}`));
 }
 
 function formatTime(time: string | null) {
@@ -1741,6 +1811,8 @@ function mapEvent(row: EventQueryRow): ProductionEvent {
     quoteVersion: row.quote_version ?? null,
     sourceQuoteText: row.source_quote_text ?? null,
     lastQuoteImportedAt: row.last_quote_imported_at ?? null,
+    importedFrom: row.imported_from ?? null,
+    externalImportId: row.external_import_id ?? null,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     options,
@@ -2044,6 +2116,7 @@ export default function Home() {
   const [createModalOpen, setCreateModalOpen] = useState(false);
   const [quoteImportOpen, setQuoteImportOpen] = useState(false);
   const [quoteImportFile, setQuoteImportFile] = useState<File | null>(null);
+  const [nativeMstvIcsImportOpen, setNativeMstvIcsImportOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
   const [yearOverviewOpen, setYearOverviewOpen] = useState(false);
   const [globalQuoteDragActive, setGlobalQuoteDragActive] = useState(false);
@@ -2756,6 +2829,12 @@ export default function Home() {
     setCreateMenuOpen(false);
   }
 
+  function openNativeMstvIcsImport() {
+    if (!permissions.canManageEvents) return;
+    setNativeMstvIcsImportOpen(true);
+    setCreateMenuOpen(false);
+  }
+
   async function createEvent(input: CreateEventInput) {
     assertCanManageEvents();
     if (!supabase) {
@@ -2859,6 +2938,76 @@ export default function Home() {
     setScreen("detail");
   }
 
+  async function importNativeMstvIcsEvents(reviewEvents: NativeMstvIcsReviewEvent[]) {
+    assertCanManageEvents();
+    if (!supabase) {
+      throw new Error("Configuration Supabase manquante.");
+    }
+
+    const importableEvents = reviewEvents.filter((event) => !event.skipped);
+    if (importableEvents.length === 0) return { importedCount: 0, skippedCount: reviewEvents.length };
+
+    let firstImportedEvent: EventRow | null = null;
+    let importedCount = 0;
+    let duplicateCount = 0;
+
+    for (const event of importableEvents) {
+      const { data, error: eventError } = await supabase
+        .from("events")
+        .insert({
+          client_name: event.clientName,
+          event_name: event.eventName,
+          date: event.date,
+          client_arrival_time: null,
+          start_time: event.startTime || null,
+          end_time: event.endTime || null,
+          end_of_day_time: null,
+          imported_from: nativeMstvIcsImportSource,
+          external_import_id: event.externalImportId,
+        })
+        .select()
+        .single();
+
+      if (eventError) {
+        if (eventError.code === "23505") {
+          duplicateCount += 1;
+          continue;
+        }
+        throw eventError;
+      }
+
+      importedCount += 1;
+      firstImportedEvent = firstImportedEvent ?? data;
+
+      await logEventActivity({
+        eventId: data.id,
+        actionType: "event_imported_from_apple_ics",
+        entityType: "event",
+        entityId: data.id,
+        description: "Événement importé depuis calendrier Apple",
+        newValue: {
+          source: nativeMstvIcsImportSource,
+          externalImportId: event.externalImportId,
+          sourceTitle: event.sourceTitle,
+          location: event.location,
+          description: event.description,
+        },
+      });
+    }
+
+    await reloadData(firstImportedEvent?.id ?? undefined);
+    if (firstImportedEvent) {
+      setSelectedDateKey(firstImportedEvent.date);
+      setVisibleMonth(new Date(`${firstImportedEvent.date}T12:00:00`));
+      setScreen("detail");
+    }
+
+    return {
+      importedCount,
+      skippedCount: reviewEvents.filter((event) => event.skipped).length + duplicateCount,
+    };
+  }
+
   async function updateEvent(event: ProductionEvent, input: CreateEventInput, nextScreen: Screen = "calendar") {
     assertCanManageEvents();
     if (!supabase) {
@@ -2901,6 +3050,8 @@ export default function Home() {
       quoteVersion: data.quote_version ?? null,
       sourceQuoteText: data.source_quote_text ?? null,
       lastQuoteImportedAt: data.last_quote_imported_at ?? null,
+      importedFrom: data.imported_from ?? null,
+      externalImportId: data.external_import_id ?? null,
       updatedAt: data.updated_at,
     };
 
@@ -4581,6 +4732,7 @@ export default function Home() {
             if (!permissions.canManageEvents) return;
             openQuoteImport();
           }}
+          onImportNativeMstvCalendar={openNativeMstvIcsImport}
           onSearch={() => setSearchOpen(true)}
           canOpenHistory={permissions.canManageEvents && screen === "detail" && Boolean(selectedEvent)}
           onOpenHistory={openHistory}
@@ -4599,6 +4751,7 @@ export default function Home() {
           }}
           canCreateEvent={permissions.canManageEvents}
           canImportQuote={permissions.canManageEvents}
+          canImportNativeMstvCalendar={permissions.canManageEvents}
           canDuplicateEvent={permissions.canManageEvents && screen === "detail" && Boolean(selectedEvent)}
           onDuplicateEvent={() => {
             if (selectedEvent && !selectedEvent.deletedAt) {
@@ -4723,6 +4876,7 @@ export default function Home() {
             if (!permissions.canManageEvents) return;
             openQuoteImport();
           }}
+          onImportNativeMstvCalendar={openNativeMstvIcsImport}
           onSearch={() => setSearchOpen(true)}
           onCreateEvent={() => {
             if (!permissions.canManageEvents) return;
@@ -4737,6 +4891,7 @@ export default function Home() {
           }}
           canCreateEvent={permissions.canManageEvents}
           canImportQuote={permissions.canManageEvents}
+          canImportNativeMstvCalendar={permissions.canManageEvents}
           canOpenTrash={permissions.canRestoreEvents || permissions.canPermanentDeleteEvents}
           onSelectMonth={selectYearOverviewMonth}
         />
@@ -4782,6 +4937,16 @@ export default function Home() {
             await updateEventFromQuote(event, input);
             setQuoteImportOpen(false);
             setQuoteImportFile(null);
+          }}
+        />
+      )}
+
+      {nativeMstvIcsImportOpen && (
+        <NativeMstvIcsImportModal
+          onClose={() => setNativeMstvIcsImportOpen(false)}
+          onImport={async (reviewEvents) => {
+            await importNativeMstvIcsEvents(reviewEvents);
+            setNativeMstvIcsImportOpen(false);
           }}
         />
       )}
@@ -4951,6 +5116,7 @@ function AppHeader({
   canManageExternalCalendars,
   onOpenExternalCalendars,
   onImportQuote,
+  onImportNativeMstvCalendar,
   onSearch,
   canOpenHistory,
   onOpenHistory,
@@ -4961,6 +5127,7 @@ function AppHeader({
   onCreateEvent,
   canCreateEvent,
   canImportQuote,
+  canImportNativeMstvCalendar,
   canDuplicateEvent,
   onDuplicateEvent,
   canDeleteEvent,
@@ -4983,6 +5150,7 @@ function AppHeader({
   canManageExternalCalendars: boolean;
   onOpenExternalCalendars: () => void;
   onImportQuote: () => void;
+  onImportNativeMstvCalendar: () => void;
   onSearch: () => void;
   canOpenHistory: boolean;
   onOpenHistory: () => void;
@@ -4993,13 +5161,14 @@ function AppHeader({
   onCreateEvent: () => void;
   canCreateEvent: boolean;
   canImportQuote: boolean;
+  canImportNativeMstvCalendar: boolean;
   canDuplicateEvent: boolean;
   onDuplicateEvent: () => void;
   canDeleteEvent: boolean;
   onDeleteEvent: () => void;
 }) {
   const menuWrapperRef = useRef<HTMLDivElement | null>(null);
-  const hasCreateMenuActions = canImportQuote || canCreateEvent || canDuplicateEvent || canDeleteEvent || canOpenTrash;
+  const hasCreateMenuActions = canImportQuote || canImportNativeMstvCalendar || canCreateEvent || canDuplicateEvent || canDeleteEvent || canOpenTrash;
 
   useEffect(() => {
     if (!createMenuOpen) return;
@@ -5076,9 +5245,11 @@ function AppHeader({
             {createMenuOpen && (
               <CreateMenu
                 onImportQuote={onImportQuote}
+                onImportNativeMstvCalendar={onImportNativeMstvCalendar}
                 onCreateEvent={onCreateEvent}
                 onOpenTrash={onOpenTrash}
                 canImportQuote={canImportQuote}
+                canImportNativeMstvCalendar={canImportNativeMstvCalendar}
                 canCreateEvent={canCreateEvent}
                 canOpenTrash={canOpenTrash}
                 canDuplicateEvent={canDuplicateEvent}
@@ -5105,9 +5276,11 @@ function AppHeader({
 
 function CreateMenu({
   onImportQuote,
+  onImportNativeMstvCalendar,
   onCreateEvent,
   onOpenTrash,
   canImportQuote,
+  canImportNativeMstvCalendar,
   canCreateEvent,
   canOpenTrash,
   canDuplicateEvent,
@@ -5116,9 +5289,11 @@ function CreateMenu({
   onDeleteEvent,
 }: {
   onImportQuote: () => void;
+  onImportNativeMstvCalendar: () => void;
   onCreateEvent: () => void;
   onOpenTrash: () => void;
   canImportQuote: boolean;
+  canImportNativeMstvCalendar: boolean;
   canCreateEvent: boolean;
   canOpenTrash: boolean;
   canDuplicateEvent: boolean;
@@ -5126,7 +5301,7 @@ function CreateMenu({
   canDeleteEvent: boolean;
   onDeleteEvent: () => void;
 }) {
-  const hasActions = canImportQuote || canCreateEvent || canDuplicateEvent || canDeleteEvent || canOpenTrash;
+  const hasActions = canImportQuote || canImportNativeMstvCalendar || canCreateEvent || canDuplicateEvent || canDeleteEvent || canOpenTrash;
 
   return (
     <div className="absolute right-1 top-14 z-40 w-56 rounded-2xl border border-stone-200 bg-white/95 p-1.5 backdrop-blur-xl">
@@ -5141,6 +5316,14 @@ function CreateMenu({
           className="block w-full rounded-xl px-4 py-3 text-right text-base font-medium text-stone-700 transition hover:bg-[#bb2720]/[0.05] hover:text-stone-950"
         >
           Importer un devis
+        </button>
+      )}
+      {canImportNativeMstvCalendar && (
+        <button
+          onClick={onImportNativeMstvCalendar}
+          className="block w-full rounded-xl px-4 py-3 text-right text-base font-medium text-stone-700 transition hover:bg-[#bb2720]/[0.05] hover:text-stone-950"
+        >
+          Importer calendrier MSTV
         </button>
       )}
       {canCreateEvent && (
@@ -5309,12 +5492,14 @@ function YearOverviewOverlay({
   onOpenExternalCalendars,
   onGoToday,
   onImportQuote,
+  onImportNativeMstvCalendar,
   onSearch,
   onCreateEvent,
   onOpenTrash,
   onSelectMonth,
   canCreateEvent,
   canImportQuote,
+  canImportNativeMstvCalendar,
   canOpenTrash,
 }: {
   initialYear: number;
@@ -5333,12 +5518,14 @@ function YearOverviewOverlay({
   onOpenExternalCalendars: () => void;
   onGoToday: () => void;
   onImportQuote: () => void;
+  onImportNativeMstvCalendar: () => void;
   onSearch: () => void;
   onCreateEvent: () => void;
   onOpenTrash: () => void;
   onSelectMonth: (year: number, monthIndex: number) => void;
   canCreateEvent: boolean;
   canImportQuote: boolean;
+  canImportNativeMstvCalendar: boolean;
   canOpenTrash: boolean;
 }) {
   const [displayYear, setDisplayYear] = useState(initialYear);
@@ -5529,6 +5716,7 @@ function YearOverviewOverlay({
           canManageExternalCalendars={canManageExternalCalendars}
           onOpenExternalCalendars={onOpenExternalCalendars}
           onImportQuote={onImportQuote}
+          onImportNativeMstvCalendar={onImportNativeMstvCalendar}
           onSearch={onSearch}
           canOpenHistory={false}
           onOpenHistory={() => undefined}
@@ -5539,6 +5727,7 @@ function YearOverviewOverlay({
           onCreateEvent={onCreateEvent}
           canCreateEvent={canCreateEvent}
           canImportQuote={canImportQuote}
+          canImportNativeMstvCalendar={canImportNativeMstvCalendar}
           canDuplicateEvent={false}
           onDuplicateEvent={() => undefined}
           canDeleteEvent={false}
@@ -8702,6 +8891,180 @@ function CreateEventModal({
           />
         )}
       </form>
+    </div>
+  );
+}
+
+function NativeMstvIcsImportModal({
+  onClose,
+  onImport,
+}: {
+  onClose: () => void;
+  onImport: (events: NativeMstvIcsReviewEvent[]) => Promise<void>;
+}) {
+  const [fileName, setFileName] = useState("");
+  const [reviewEvents, setReviewEvents] = useState<NativeMstvIcsReviewEvent[]>([]);
+  const [step, setStep] = useState<"upload" | "review">("upload");
+  const [parsing, setParsing] = useState(false);
+  const [importing, setImporting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const importableCount = reviewEvents.filter((event) => !event.skipped).length;
+  const skippedCount = reviewEvents.length - importableCount;
+
+  async function loadExistingImportIds() {
+    if (!supabase) throw new Error("Configuration Supabase manquante.");
+
+    const { data, error: loadError } = await supabase
+      .from("events")
+      .select("external_import_id")
+      .eq("imported_from", nativeMstvIcsImportSource)
+      .not("external_import_id", "is", null);
+
+    if (loadError) throw loadError;
+    return new Set((data ?? []).map((row) => row.external_import_id).filter(Boolean));
+  }
+
+  async function handleFile(file: File | null) {
+    if (!file) return;
+    if (!file.name.toLowerCase().endsWith(".ics") && file.type !== "text/calendar") {
+      setError("Importez un fichier .ics exporté depuis Apple Calendar.");
+      return;
+    }
+
+    setParsing(true);
+    setError(null);
+    setFileName(file.name);
+
+    try {
+      const icsText = await file.text();
+      if (!icsText.includes("BEGIN:VCALENDAR") || !icsText.includes("BEGIN:VEVENT")) {
+        throw new Error("Ce fichier ne ressemble pas à un calendrier ICS valide.");
+      }
+
+      const existingImportIds = await loadExistingImportIds();
+      const nextReviewEvents = buildNativeMstvIcsReviewEvents(icsText, existingImportIds);
+      if (nextReviewEvents.length === 0) {
+        throw new Error("Aucun événement lisible trouvé dans ce fichier ICS.");
+      }
+
+      setReviewEvents(nextReviewEvents);
+      setStep("review");
+    } catch (parseError) {
+      console.error("Native MSTV ICS import parsing failed", parseError);
+      setError(parseError instanceof Error ? parseError.message : "Impossible de lire ce calendrier ICS.");
+    } finally {
+      setParsing(false);
+    }
+  }
+
+  async function confirmImport() {
+    setImporting(true);
+    setError(null);
+
+    try {
+      await onImport(reviewEvents);
+    } catch (importError) {
+      console.error("Native MSTV ICS import failed", importError);
+      setError(importError instanceof Error ? importError.message : "Impossible d'importer ce calendrier.");
+    } finally {
+      setImporting(false);
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-end bg-stone-950/10 p-3 sm:items-center sm:justify-center sm:p-6">
+      <div className="flex max-h-[86vh] w-full flex-col rounded-3xl border border-stone-200 bg-white p-5 sm:max-w-2xl sm:p-6">
+        <div className="mb-5 flex items-start justify-between gap-4">
+          <div className="min-w-0">
+            <h2 className="text-base font-semibold text-stone-950">Importer calendrier MSTV</h2>
+            <p className="mt-1 text-base font-medium text-stone-500">
+              {step === "review" ? `${reviewEvents.length} événement${reviewEvents.length > 1 ? "s" : ""} détecté${reviewEvents.length > 1 ? "s" : ""}` : "Migration Apple Calendar en événements MSTV natifs."}
+            </p>
+            {fileName && <p className="mt-1 truncate text-sm font-semibold text-stone-400">{fileName}</p>}
+          </div>
+          <button type="button" onClick={onClose} className="rounded-full border border-stone-200 px-3 py-1.5 text-base font-semibold text-stone-600">
+            Fermer
+          </button>
+        </div>
+
+        {error && <div className="mb-3 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-base font-medium text-rose-700">{error}</div>}
+
+        {step === "upload" ? (
+          <label
+            onDragOver={(event) => event.preventDefault()}
+            onDrop={(event) => {
+              event.preventDefault();
+              void handleFile(event.dataTransfer.files.item(0));
+            }}
+            className="flex min-h-44 cursor-pointer flex-col items-center justify-center rounded-3xl border border-dashed border-stone-300 bg-stone-50 px-4 py-8 text-center transition hover:bg-stone-100/70"
+          >
+            <FileText className="mb-3 h-7 w-7 text-stone-500" />
+            <span className="text-base font-semibold text-stone-800">{parsing ? "Lecture du calendrier..." : "Déposez le fichier .ics ici"}</span>
+            <span className="mt-1 text-base font-medium text-stone-500">ou cliquez pour sélectionner le fichier exporté</span>
+            <input
+              type="file"
+              accept=".ics,text/calendar"
+              disabled={parsing}
+              onChange={(event) => {
+                void handleFile(event.target.files?.item(0) ?? null);
+                event.target.value = "";
+              }}
+              className="hidden"
+            />
+          </label>
+        ) : (
+          <>
+            <div className="mb-3 grid grid-cols-2 gap-2">
+              <div className="rounded-2xl border border-emerald-200 bg-emerald-50 px-3 py-2">
+                <p className="text-sm font-semibold text-emerald-700">À importer</p>
+                <p className="text-lg font-semibold text-emerald-950">{importableCount}</p>
+              </div>
+              <div className="rounded-2xl border border-stone-200 bg-stone-50 px-3 py-2">
+                <p className="text-sm font-semibold text-stone-500">Ignorés</p>
+                <p className="text-lg font-semibold text-stone-800">{skippedCount}</p>
+              </div>
+            </div>
+            <div className="no-scrollbar min-h-0 flex-1 overflow-y-auto overscroll-contain rounded-2xl border border-stone-200">
+              {reviewEvents.map((event) => (
+                <div key={event.externalImportId} className="grid gap-2 border-b border-stone-100 px-3 py-3 last:border-b-0 sm:grid-cols-[1fr_auto] sm:items-start">
+                  <div className="min-w-0">
+                    <div className="flex min-w-0 items-center gap-2">
+                      <p className="truncate text-base font-semibold text-stone-950">{event.sourceTitle}</p>
+                      {event.skipped && <span className="shrink-0 rounded-full bg-stone-100 px-2 py-0.5 text-xs font-semibold text-stone-500">{event.skipReason}</span>}
+                    </div>
+                    <p className="mt-0.5 text-base font-medium text-stone-600">
+                      {event.clientName} · {event.eventName}
+                    </p>
+                    {(event.location || event.description) && (
+                      <p className="mt-1 line-clamp-2 text-sm font-medium text-stone-400">
+                        {[event.location, event.description].filter(Boolean).join(" · ")}
+                      </p>
+                    )}
+                  </div>
+                  <div className="text-left text-base font-semibold text-stone-500 sm:text-right">
+                    <p>{formatFullDate(event.date)}</p>
+                    <p>{formatTimeRange(event.startTime, event.endTime) || "Journée"}</p>
+                  </div>
+                </div>
+              ))}
+            </div>
+            <div className="mt-4 flex justify-end gap-2">
+              <button type="button" onClick={() => setStep("upload")} disabled={importing} className="rounded-full border border-stone-200 bg-white px-4 py-2 text-base font-semibold text-stone-600 disabled:text-stone-300">
+                Changer de fichier
+              </button>
+              <button
+                type="button"
+                onClick={() => void confirmImport()}
+                disabled={importing || importableCount === 0}
+                className="rounded-full bg-[#bb2720] px-4 py-2 text-base font-semibold text-white disabled:bg-stone-300"
+              >
+                {importing ? "Import..." : "Importer"}
+              </button>
+            </div>
+          </>
+        )}
+      </div>
     </div>
   );
 }
