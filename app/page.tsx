@@ -327,6 +327,32 @@ type NativeMstvIcsReviewEvent = {
   skipReason: string | null;
 };
 
+type PendingSyncStatus = "pending" | "syncing" | "synced" | "failed";
+
+type PendingSyncAction = {
+  id: string;
+  actionType: string;
+  entityType: string;
+  entityId: string;
+  payload: Record<string, unknown>;
+  createdAt: string;
+  updatedAt: string;
+  userId: string | null;
+  status: PendingSyncStatus;
+  retryCount: number;
+  lastError: string | null;
+};
+
+type PendingActivityPayload = {
+  eventId: string;
+  actionType: string;
+  entityType?: string | null;
+  entityId?: string | null;
+  description: string;
+  previousValue?: ActivityValue;
+  newValue?: ActivityValue;
+};
+
 type CompletedByOverrideValue = "rami" | "antoine" | "arthur" | "tony" | "gauthier" | "externe";
 
 type CompletedByOverrideChoice = {
@@ -441,6 +467,81 @@ function getSwipeThreshold(viewportWidth: number) {
   return Math.min(PAGE_SWIPE_THRESHOLD_MAX, Math.max(PAGE_SWIPE_THRESHOLD_MIN, viewportWidth * PAGE_SWIPE_THRESHOLD_RATIO));
 }
 
+function createLocalId() {
+  return globalThis.crypto?.randomUUID?.() ?? `local-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+function isNetworkOrUnavailableError(error: unknown) {
+  if (typeof navigator !== "undefined" && !navigator.onLine) return true;
+  const message = error instanceof Error ? error.message : String(error ?? "");
+  return /failed to fetch|network|load failed|fetch failed|internet|offline|timeout|unavailable/i.test(message);
+}
+
+function openPendingSyncDb() {
+  return new Promise<IDBDatabase>((resolve, reject) => {
+    if (typeof indexedDB === "undefined") {
+      reject(new Error("IndexedDB indisponible."));
+      return;
+    }
+
+    const request = indexedDB.open(pendingSyncDbName, 1);
+    request.onupgradeneeded = () => {
+      const database = request.result;
+      if (!database.objectStoreNames.contains(pendingSyncStoreName)) {
+        const store = database.createObjectStore(pendingSyncStoreName, { keyPath: "id" });
+        store.createIndex("status", "status", { unique: false });
+        store.createIndex("createdAt", "createdAt", { unique: false });
+      }
+    };
+    request.onerror = () => reject(request.error ?? new Error("Impossible d'ouvrir la file locale."));
+    request.onsuccess = () => resolve(request.result);
+  });
+}
+
+async function withPendingSyncStore<T>(mode: IDBTransactionMode, callback: (store: IDBObjectStore) => IDBRequest<T> | void) {
+  const database = await openPendingSyncDb();
+  return new Promise<T | undefined>((resolve, reject) => {
+    const transaction = database.transaction(pendingSyncStoreName, mode);
+    const store = transaction.objectStore(pendingSyncStoreName);
+    const request = callback(store);
+    let requestResult: T | undefined;
+
+    if (request) {
+      request.onsuccess = () => {
+        requestResult = request.result;
+      };
+      request.onerror = () => reject(request.error ?? new Error("Erreur IndexedDB."));
+    }
+
+    transaction.oncomplete = () => {
+      database.close();
+      resolve(requestResult);
+    };
+    transaction.onerror = () => {
+      database.close();
+      reject(transaction.error ?? new Error("Erreur IndexedDB."));
+    };
+  });
+}
+
+async function getPendingSyncActions() {
+  const actions = await withPendingSyncStore<PendingSyncAction[]>("readonly", (store) => store.getAll());
+  return (actions ?? []).sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+}
+
+async function putPendingSyncAction(action: PendingSyncAction) {
+  await withPendingSyncStore("readwrite", (store) => store.put(action));
+}
+
+async function deletePendingSyncAction(actionId: string) {
+  await withPendingSyncStore("readwrite", (store) => store.delete(actionId));
+}
+
+async function countUnresolvedPendingSyncActions() {
+  const actions = await getPendingSyncActions();
+  return actions.filter((action) => action.status === "pending" || action.status === "syncing" || action.status === "failed").length;
+}
+
 const statusStyles: Record<EventStatus, string> = {
   Brouillon: "bg-stone-100 text-stone-600 ring-stone-200",
   "En préparation": "bg-amber-100 text-amber-800 ring-amber-200",
@@ -482,6 +583,8 @@ const defaultOptions = [
 const platformLinkLabels = new Set(["plateforme", "plateforme de diffusion", "evenement plateforme", "event plateforme"]);
 const eventDocumentsBucket = "event-documents";
 const nativeMstvIcsImportSource = "apple_ics_mstv";
+const pendingSyncDbName = "mstv-production-os-sync";
+const pendingSyncStoreName = "pending_actions";
 const calendarArrowClassName =
   "flex h-9 w-9 items-center justify-center rounded-full text-base text-[#bb2720] transition hover:bg-[#bb2720]/[0.08] disabled:cursor-not-allowed disabled:text-stone-300 disabled:hover:bg-transparent";
 
@@ -2160,6 +2263,10 @@ export default function Home() {
   const [externalCalendarSettingsLoading, setExternalCalendarSettingsLoading] = useState(false);
   const [externalCalendarSettingsError, setExternalCalendarSettingsError] = useState<string | null>(null);
   const [syncingExternalCalendarId, setSyncingExternalCalendarId] = useState<string | null>(null);
+  const [online, setOnline] = useState(() => typeof navigator === "undefined" ? true : navigator.onLine);
+  const [pendingSyncCount, setPendingSyncCount] = useState(0);
+  const [syncingPendingActions, setSyncingPendingActions] = useState(false);
+  const [pendingSyncError, setPendingSyncError] = useState<string | null>(null);
   const [deletedEvents, setDeletedEvents] = useState<ProductionEvent[]>([]);
   const [trashLoading, setTrashLoading] = useState(false);
   const [trashError, setTrashError] = useState<string | null>(null);
@@ -2174,6 +2281,7 @@ export default function Home() {
   const [keyboardVisible, setKeyboardVisible] = useState(false);
   const [keyboardHeight, setKeyboardHeight] = useState(0);
   const timelineTimeSaveRef = useRef<(() => Promise<void>) | null>(null);
+  const processingPendingActionsRef = useRef(false);
   const todayKey = formatDateKey(today);
 
   const chronologicalEvents = useMemo(() => [...events].sort((a, b) => eventSortValue(a) - eventSortValue(b)), [events]);
@@ -2195,6 +2303,32 @@ export default function Home() {
       ),
     [externalCalendarEvents, permissions, profile],
   );
+
+  useEffect(() => {
+    void refreshPendingSyncState();
+
+    function handleOnline() {
+      setOnline(true);
+      void processPendingSyncQueue();
+    }
+
+    function handleOffline() {
+      setOnline(false);
+    }
+
+    window.addEventListener("online", handleOnline);
+    window.addEventListener("offline", handleOffline);
+    return () => {
+      window.removeEventListener("online", handleOnline);
+      window.removeEventListener("offline", handleOffline);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (online && authSession) {
+      void processPendingSyncQueue();
+    }
+  }, [authSession, online]);
 
   useEffect(() => {
     let cancelled = false;
@@ -2702,6 +2836,256 @@ export default function Home() {
     }
   }
 
+  async function writeQueuedActivity(activity: PendingActivityPayload | null | undefined) {
+    if (!supabase || !activity) return;
+    const description = actorName ? `${activity.description} par ${actorName}` : activity.description;
+
+    const { error: logError } = await supabase.from("event_activity_log").insert({
+      event_id: activity.eventId,
+      action_type: activity.actionType,
+      entity_type: activity.entityType ?? null,
+      entity_id: activity.entityId ?? null,
+      description,
+      previous_value: activity.previousValue ?? null,
+      new_value: activity.newValue ?? null,
+      created_by: actorName,
+    });
+
+    if (logError) {
+      console.warn("Failed to replay queued activity log.", logError);
+    }
+  }
+
+  async function executePendingSyncAction(action: PendingSyncAction) {
+    if (!supabase) throw new Error("Configuration Supabase manquante.");
+    const activity = action.payload.activity as PendingActivityPayload | null | undefined;
+
+    if (action.actionType === "event_insert") {
+      const values = action.payload.values as Database["public"]["Tables"]["events"]["Insert"];
+      const { error: insertError } = await supabase.from("events").insert(values);
+      if (insertError) throw insertError;
+      await writeQueuedActivity(activity);
+      return;
+    }
+
+    if (action.actionType === "event_update") {
+      const values = action.payload.values as Database["public"]["Tables"]["events"]["Update"];
+      const { error: updateError } = await supabase.from("events").update(values).eq("id", action.entityId);
+      if (updateError) throw updateError;
+      await writeQueuedActivity(activity);
+      return;
+    }
+
+    if (action.actionType === "event_soft_delete") {
+      const values = action.payload.values as Database["public"]["Tables"]["events"]["Update"];
+      const { error: updateError } = await supabase.from("events").update(values).eq("id", action.entityId);
+      if (updateError) throw updateError;
+      await writeQueuedActivity(activity);
+      return;
+    }
+
+    if (action.actionType === "event_restore") {
+      const values = action.payload.values as Database["public"]["Tables"]["events"]["Update"];
+      const { error: updateError } = await supabase.from("events").update(values).eq("id", action.entityId);
+      if (updateError) throw updateError;
+      await writeQueuedActivity(activity);
+      return;
+    }
+
+    if (action.actionType === "option_update") {
+      const values = action.payload.values as Database["public"]["Tables"]["event_options"]["Update"];
+      const { error: updateError } = await supabase.from("event_options").update(values).eq("id", action.entityId);
+      if (updateError) throw updateError;
+      await writeQueuedActivity(activity);
+      return;
+    }
+
+    if (action.actionType === "option_insert") {
+      const values = action.payload.values as Database["public"]["Tables"]["event_options"]["Insert"];
+      const { error: insertError } = await supabase.from("event_options").insert(values);
+      if (insertError) throw insertError;
+      await writeQueuedActivity(activity);
+      return;
+    }
+
+    if (action.actionType === "option_delete") {
+      const { error: deleteError } = await supabase.from("event_options").delete().eq("id", action.entityId);
+      if (deleteError) throw deleteError;
+      await writeQueuedActivity(activity);
+      return;
+    }
+
+    if (action.actionType === "option_item_insert") {
+      const values = action.payload.values as Database["public"]["Tables"]["event_option_items"]["Insert"];
+      const { error: insertError } = await supabase.from("event_option_items").insert(values);
+      if (insertError) throw insertError;
+      await writeQueuedActivity(activity);
+      return;
+    }
+
+    if (action.actionType === "option_item_delete") {
+      const { error: deleteError } = await supabase.from("event_option_items").delete().eq("id", action.entityId);
+      if (deleteError) throw deleteError;
+      await writeQueuedActivity(activity);
+      return;
+    }
+
+    if (action.actionType === "link_insert") {
+      const values = action.payload.values as Database["public"]["Tables"]["event_links"]["Insert"];
+      const { error: insertError } = await supabase.from("event_links").insert(values);
+      if (insertError) throw insertError;
+      await writeQueuedActivity(activity);
+      return;
+    }
+
+    if (action.actionType === "link_update") {
+      const values = action.payload.values as Database["public"]["Tables"]["event_links"]["Update"];
+      const { error: updateError } = await supabase.from("event_links").update(values).eq("id", action.entityId);
+      if (updateError) throw updateError;
+      await writeQueuedActivity(activity);
+      return;
+    }
+
+    if (action.actionType === "link_delete") {
+      const { error: deleteError } = await supabase.from("event_links").delete().eq("id", action.entityId);
+      if (deleteError) throw deleteError;
+      await writeQueuedActivity(activity);
+      return;
+    }
+
+    if (action.actionType === "link_entries_replace") {
+      const deletedEntryIds = action.payload.deletedEntryIds as string[] | undefined;
+      const rows = action.payload.rows as Database["public"]["Tables"]["event_link_entries"]["Insert"][] | undefined;
+      const linkValues = action.payload.linkValues as Database["public"]["Tables"]["event_links"]["Update"] | undefined;
+
+      if (deletedEntryIds?.length) {
+        const { error: deleteError } = await supabase.from("event_link_entries").delete().in("id", deletedEntryIds);
+        if (deleteError) throw deleteError;
+      }
+      if (rows?.length) {
+        const { error: upsertError } = await supabase.from("event_link_entries").upsert(rows, { onConflict: "id" });
+        if (upsertError) throw upsertError;
+      }
+      if (linkValues) {
+        const { error: updateError } = await supabase.from("event_links").update(linkValues).eq("id", action.entityId);
+        if (updateError) throw updateError;
+      }
+      await writeQueuedActivity(activity);
+      return;
+    }
+
+    if (action.actionType === "document_group_insert") {
+      const values = action.payload.values as Database["public"]["Tables"]["event_document_groups"]["Insert"];
+      const { error: insertError } = await supabase.from("event_document_groups").insert(values);
+      if (insertError) throw insertError;
+      await writeQueuedActivity(activity);
+      return;
+    }
+
+    if (action.actionType === "document_group_update") {
+      const values = action.payload.values as Database["public"]["Tables"]["event_document_groups"]["Update"];
+      const { error: updateError } = await supabase.from("event_document_groups").update(values).eq("id", action.entityId);
+      if (updateError) throw updateError;
+      await writeQueuedActivity(activity);
+      return;
+    }
+
+    if (action.actionType === "document_group_delete") {
+      const { error: deleteError } = await supabase.from("event_document_groups").delete().eq("id", action.entityId);
+      if (deleteError) throw deleteError;
+      await writeQueuedActivity(activity);
+    }
+  }
+
+  async function refreshPendingSyncState() {
+    try {
+      setPendingSyncCount(await countUnresolvedPendingSyncActions());
+    } catch (countError) {
+      console.warn("Unable to count pending sync actions.", countError);
+    }
+  }
+
+  async function enqueuePendingSyncAction(input: {
+    actionType: string;
+    entityType: string;
+    entityId: string;
+    payload: Record<string, unknown>;
+  }) {
+    const now = new Date().toISOString();
+    const action: PendingSyncAction = {
+      id: createLocalId(),
+      actionType: input.actionType,
+      entityType: input.entityType,
+      entityId: input.entityId,
+      payload: {
+        ...input.payload,
+        clientTimestamp: now,
+      },
+      createdAt: now,
+      updatedAt: now,
+      userId: profile?.id ?? null,
+      status: "pending",
+      retryCount: 0,
+      lastError: null,
+    };
+
+    await putPendingSyncAction(action);
+    setPendingSyncError(null);
+    await refreshPendingSyncState();
+    if (online) {
+      void processPendingSyncQueue();
+    }
+  }
+
+  async function processPendingSyncQueue() {
+    if (!online || processingPendingActionsRef.current || !supabase) return;
+    processingPendingActionsRef.current = true;
+    setSyncingPendingActions(true);
+    setPendingSyncError(null);
+
+    try {
+      const actions = (await getPendingSyncActions()).filter((action) => action.status === "pending" || action.status === "failed");
+      let syncedSomething = false;
+
+      for (const action of actions) {
+        const syncingAction: PendingSyncAction = {
+          ...action,
+          status: "syncing",
+          updatedAt: new Date().toISOString(),
+        };
+        await putPendingSyncAction(syncingAction);
+        await refreshPendingSyncState();
+
+        try {
+          await executePendingSyncAction(syncingAction);
+          await deletePendingSyncAction(syncingAction.id);
+          syncedSomething = true;
+        } catch (syncError) {
+          const message = syncError instanceof Error ? syncError.message : "Synchronisation impossible.";
+          await putPendingSyncAction({
+            ...syncingAction,
+            status: "failed",
+            retryCount: syncingAction.retryCount + 1,
+            lastError: message,
+            updatedAt: new Date().toISOString(),
+          });
+          setPendingSyncError(message);
+          if (isNetworkOrUnavailableError(syncError)) break;
+        } finally {
+          await refreshPendingSyncState();
+        }
+      }
+
+      if (syncedSomething) {
+        await reloadData(selectedId, { silent: true });
+      }
+    } finally {
+      processingPendingActionsRef.current = false;
+      setSyncingPendingActions(false);
+      await refreshPendingSyncState();
+    }
+  }
+
   function assertCanManageEvents() {
     if (!permissions.canManageEvents) {
       throw new Error("Action réservée aux admins.");
@@ -2860,27 +3244,21 @@ export default function Home() {
     }
 
     const normalizedInput = normalizeEventTimeInput(input);
-
-    const { data: event, error: eventError } = await supabase
-      .from("events")
-      .insert({
-        client_name: normalizedInput.clientName,
-        event_name: normalizedInput.eventName,
-        date: normalizedInput.date,
-        client_arrival_time: normalizedInput.clientArrivalTime || null,
-        start_time: normalizedInput.startTime || null,
-        end_time: normalizedInput.endTime || null,
-        end_of_day_time: normalizedInput.endOfDayTime || null,
-        quote_reference: normalizedInput.quoteReference?.trim() || null,
-        quote_version: normalizedInput.quoteVersion?.trim() || null,
-        source_quote_text: normalizedInput.sourceQuoteText?.trim() || null,
-        last_quote_imported_at: normalizedInput.sourceQuoteText || normalizedInput.quoteReference ? new Date().toISOString() : null,
-      })
-      .select()
-      .single();
-
-    if (eventError) throw eventError;
-
+    const eventId = createLocalId();
+    const eventInsertPayload: Database["public"]["Tables"]["events"]["Insert"] = {
+      id: eventId,
+      client_name: normalizedInput.clientName,
+      event_name: normalizedInput.eventName,
+      date: normalizedInput.date,
+      client_arrival_time: normalizedInput.clientArrivalTime || null,
+      start_time: normalizedInput.startTime || null,
+      end_time: normalizedInput.endTime || null,
+      end_of_day_time: normalizedInput.endOfDayTime || null,
+      quote_reference: normalizedInput.quoteReference?.trim() || null,
+      quote_version: normalizedInput.quoteVersion?.trim() || null,
+      source_quote_text: normalizedInput.sourceQuoteText?.trim() || null,
+      last_quote_imported_at: normalizedInput.sourceQuoteText || normalizedInput.quoteReference ? new Date().toISOString() : null,
+    };
     const optionDefinitions = uniqueLabels(normalizedInput.optionLabels ?? []).map((label) => {
       const defaultOption = defaultOptions.find((option) => normalizeLabel(option.label) === normalizeLabel(label));
       return {
@@ -2888,6 +3266,115 @@ export default function Home() {
         details: defaultOption?.details ?? "",
       };
     });
+    const createdAt = new Date().toISOString();
+    const activity: PendingActivityPayload = {
+      eventId,
+      actionType: "event_created",
+      entityType: "event",
+      entityId: eventId,
+      description: "Événement créé",
+      newValue: {
+        clientName: normalizedInput.clientName,
+        eventName: normalizedInput.eventName,
+        date: normalizedInput.date,
+      },
+    };
+
+    async function queueOfflineEventCreate() {
+      const offlineOptions: EventOption[] = optionDefinitions.map((option) => ({
+        id: createLocalId(),
+        eventId,
+        label: option.label,
+        status: "incomplete",
+        details: option.details,
+        completedByProfileId: null,
+        completedByLabel: null,
+        completedByInitials: null,
+        completedAt: null,
+        createdAt,
+        ...mapCreatorMetadata({
+          created_by_profile_id: profile?.id ?? null,
+          created_by_role: profile?.role ?? null,
+          created_by_name: actorName,
+        }),
+        items: [],
+      }));
+      const offlineEvent: ProductionEvent = {
+        id: eventId,
+        clientName: normalizedInput.clientName,
+        eventName: normalizedInput.eventName,
+        date: normalizedInput.date,
+        clientArrivalTime: normalizedInput.clientArrivalTime || null,
+        startTime: normalizedInput.startTime || null,
+        endTime: normalizedInput.endTime || null,
+        endOfDayTime: normalizedInput.endOfDayTime || null,
+        status: "Brouillon",
+        deletedAt: null,
+        deletedBy: null,
+        quoteReference: normalizedInput.quoteReference ?? null,
+        quoteVersion: normalizedInput.quoteVersion ?? null,
+        sourceQuoteText: normalizedInput.sourceQuoteText ?? null,
+        lastQuoteImportedAt: eventInsertPayload.last_quote_imported_at ?? null,
+        importedFrom: null,
+        externalImportId: null,
+        createdAt,
+        updatedAt: createdAt,
+        options: offlineOptions,
+        links: [],
+        documentGroups: [],
+      };
+
+      setEvents((current) => [...current, offlineEvent].sort((a, b) => eventSortValue(a) - eventSortValue(b)));
+      setSelectedId(eventId);
+      setSelectedDateKey(normalizedInput.date);
+      setVisibleMonth(new Date(`${normalizedInput.date}T12:00:00`));
+      setScreen("detail");
+
+      await enqueuePendingSyncAction({
+        actionType: "event_insert",
+        entityType: "event",
+        entityId: eventId,
+        payload: { values: eventInsertPayload, activity },
+      });
+      for (const option of offlineOptions) {
+        await enqueuePendingSyncAction({
+          actionType: "option_insert",
+          entityType: "option",
+          entityId: option.id,
+          payload: {
+            values: {
+              id: option.id,
+              event_id: eventId,
+              label: option.label,
+              status: option.status,
+              details: option.details,
+              created_by_profile_id: option.createdByProfileId,
+              created_by_role: option.createdByRole,
+              created_by_name: option.createdByName,
+            } satisfies Database["public"]["Tables"]["event_options"]["Insert"],
+          },
+        });
+      }
+    }
+
+    if (!online) {
+      await queueOfflineEventCreate();
+      return;
+    }
+
+    const { data: event, error: eventError } = await supabase
+      .from("events")
+      .insert(eventInsertPayload)
+      .select()
+      .single();
+
+    if (eventError) {
+      if (isNetworkOrUnavailableError(eventError)) {
+        await queueOfflineEventCreate();
+        return;
+      }
+      throw eventError;
+    }
 
     let insertedOptions: EventOptionRow[] = [];
 
@@ -3393,15 +3880,61 @@ export default function Home() {
     const updatePayload: Database["public"]["Tables"]["events"]["Update"] = {
       [column]: nextValue,
     };
+    const optimisticUpdatedAt = new Date().toISOString();
 
-    const { data, error: updateError } = await supabase
-      .from("events")
-      .update(updatePayload)
-      .eq("id", event.id)
-      .select()
-      .single();
+    function applyOptimisticUpdate(updatedValue: string | null, updatedAt: string) {
+      setEvents((current) =>
+        current.map((item) =>
+          item.id === event.id
+            ? {
+                ...item,
+                [field]: updatedValue,
+                updatedAt,
+              }
+            : item,
+        ),
+      );
+    }
 
-    if (updateError) throw updateError;
+    const activity: PendingActivityPayload | null =
+      previousValue !== nextValue
+        ? {
+            eventId: event.id,
+            actionType: "event_time_changed",
+            entityType: "event",
+            entityId: event.id,
+            description: `${activityDescription} · ${getEventTimeFieldLabel(field)}`,
+            previousValue: { field, value: previousValue },
+            newValue: { field, value: nextValue },
+          }
+        : null;
+
+    if (!online) {
+      applyOptimisticUpdate(nextValue, optimisticUpdatedAt);
+      await enqueuePendingSyncAction({
+        actionType: "event_update",
+        entityType: "event",
+        entityId: event.id,
+        payload: { values: updatePayload, activity },
+      });
+      return;
+    }
+
+    const { data, error: updateError } = await supabase.from("events").update(updatePayload).eq("id", event.id).select().single();
+
+    if (updateError) {
+      if (isNetworkOrUnavailableError(updateError)) {
+        applyOptimisticUpdate(nextValue, optimisticUpdatedAt);
+        await enqueuePendingSyncAction({
+          actionType: "event_update",
+          entityType: "event",
+          entityId: event.id,
+          payload: { values: updatePayload, activity },
+        });
+        return;
+      }
+      throw updateError;
+    }
 
     const updatedValue = toTimeInputValue(data[column]) || null;
 
@@ -3444,14 +3977,65 @@ export default function Home() {
       throw new Error("La date est obligatoire.");
     }
 
-    const { data, error: updateError } = await supabase
-      .from("events")
-      .update({ date: normalizedDate })
-      .eq("id", event.id)
-      .select()
-      .single();
+    const optimisticUpdatedAt = new Date().toISOString();
+    const updatePayload: Database["public"]["Tables"]["events"]["Update"] = { date: normalizedDate };
+    const activity: PendingActivityPayload | null =
+      event.date !== normalizedDate
+        ? {
+            eventId: event.id,
+            actionType: "event_date_changed",
+            entityType: "event",
+            entityId: event.id,
+            description: activityDescription,
+            previousValue: { date: event.date },
+            newValue: { date: normalizedDate },
+          }
+        : null;
 
-    if (updateError) throw updateError;
+    function applyOptimisticDate(date: string, updatedAt: string) {
+      setEvents((current) =>
+        current.map((item) =>
+          item.id === event.id
+            ? {
+                ...item,
+                date,
+                updatedAt,
+              }
+            : item,
+        ),
+      );
+      setSelectedId(event.id);
+      setSelectedDateKey(date);
+      setVisibleMonth(new Date(`${date}T12:00:00`));
+      setScreen("detail");
+    }
+
+    if (!online) {
+      applyOptimisticDate(normalizedDate, optimisticUpdatedAt);
+      await enqueuePendingSyncAction({
+        actionType: "event_update",
+        entityType: "event",
+        entityId: event.id,
+        payload: { values: updatePayload, activity },
+      });
+      return;
+    }
+
+    const { data, error: updateError } = await supabase.from("events").update(updatePayload).eq("id", event.id).select().single();
+
+    if (updateError) {
+      if (isNetworkOrUnavailableError(updateError)) {
+        applyOptimisticDate(normalizedDate, optimisticUpdatedAt);
+        await enqueuePendingSyncAction({
+          actionType: "event_update",
+          entityType: "event",
+          entityId: event.id,
+          payload: { values: updatePayload, activity },
+        });
+        return;
+      }
+      throw updateError;
+    }
 
     setEvents((current) =>
       current.map((item) =>
@@ -3505,14 +4089,8 @@ export default function Home() {
             completed_by_initials: null,
             completed_at: null,
           };
-    const { error: updateError } = await supabase.from("event_options").update(updatePayload).eq("id", option.id);
-
-    if (updateError) {
-      setError(updateError.message);
-      return;
-    }
-
-    setEvents((current) =>
+    function applyOptimisticOption() {
+      setEvents((current) =>
       current.map((event) =>
         event.id === option.eventId
           ? {
@@ -3532,14 +4110,14 @@ export default function Home() {
             }
         : event,
       ),
-    );
+      );
+    }
 
     const description =
       nextStatus === "completed"
         ? `Option ${option.label} marquée comme Fait par ${completerLabel ?? completerInitials}`
         : `Option ${option.label} repassée À faire`;
-
-    await logEventActivity({
+    const activity: PendingActivityPayload = {
       eventId: option.eventId,
       actionType: "option_status_changed",
       entityType: "option",
@@ -3559,6 +4137,40 @@ export default function Home() {
         completedByInitials: updatePayload.completed_by_initials ?? null,
         completedAt: updatePayload.completed_at ?? null,
       },
+    };
+
+    if (!online) {
+      applyOptimisticOption();
+      await enqueuePendingSyncAction({
+        actionType: "option_update",
+        entityType: "option",
+        entityId: option.id,
+        payload: { values: updatePayload, activity },
+      });
+      return;
+    }
+
+    const { error: updateError } = await supabase.from("event_options").update(updatePayload).eq("id", option.id);
+
+    if (updateError) {
+      if (isNetworkOrUnavailableError(updateError)) {
+        applyOptimisticOption();
+        await enqueuePendingSyncAction({
+          actionType: "option_update",
+          entityType: "option",
+          entityId: option.id,
+          payload: { values: updatePayload, activity },
+        });
+        return;
+      }
+      setError(updateError.message);
+      return;
+    }
+
+    applyOptimisticOption();
+
+    await logEventActivity({
+      ...activity,
     });
   }
 
@@ -3649,6 +4261,93 @@ export default function Home() {
       .filter((entry) => !nextExistingEntryIds.has(entry.id) && canManageLinkEntryEntity(permissions, profile, link, entry))
       .map((entry) => entry.id);
     const nextEntries: EventLinkEntry[] = [];
+    const offlineDrafts = nextDrafts.map((draft) => ({ ...draft, id: draft.id || createLocalId() }));
+    const offlineRows: Database["public"]["Tables"]["event_link_entries"]["Insert"][] = offlineDrafts.map((draft, position) => {
+      const entryCreatorPayload = draft.legacyParentValue
+        ? {
+            created_by_profile_id: draft.createdByProfileId ?? null,
+            created_by_role: draft.createdByRole ?? null,
+            created_by_name: draft.createdByName ?? null,
+          }
+        : getCreatorInsertPayload(profile);
+      return {
+        id: draft.id,
+        link_id: link.id,
+        url: draft.url.trim() || null,
+        stream_key: isPlatform ? draft.streamKey.trim() || null : null,
+        position,
+        ...entryCreatorPayload,
+      };
+    });
+    const offlineEntries: EventLinkEntry[] = offlineRows.map((row) => ({
+      id: row.id ?? createLocalId(),
+      linkId: link.id,
+      url: row.url ?? null,
+      streamKey: row.stream_key ?? null,
+      position: row.position ?? 0,
+      createdAt: new Date().toISOString(),
+      ...mapCreatorMetadata({
+        created_by_profile_id: row.created_by_profile_id ?? null,
+        created_by_role: row.created_by_role ?? null,
+        created_by_name: row.created_by_name ?? null,
+      }),
+    }));
+    const offlineStatus: LinkStatus = offlineDrafts.some((draft) => isLinkEntryDraftComplete(draft, isPlatform)) ? "available" : "missing";
+    const offlineFirstEntry = offlineEntries[0] ?? null;
+    const offlineLinkPayload: Database["public"]["Tables"]["event_links"]["Update"] = {
+      url: offlineFirstEntry?.url ?? null,
+      stream_key: isPlatform ? offlineFirstEntry?.streamKey ?? null : null,
+      status: offlineStatus,
+    };
+
+    function applyOptimisticLinkEntries(updatedLink: EventLink) {
+      setEvents((current) =>
+        current.map((event) =>
+          event.id === link.eventId
+            ? {
+                ...event,
+                links: event.links.map((item) => (item.id === link.id ? updatedLink : item)),
+              }
+            : event,
+        ),
+      );
+    }
+
+    const offlineUpdatedLink: EventLink = {
+      ...link,
+      url: offlineLinkPayload.url ?? null,
+      streamKey: offlineLinkPayload.stream_key ?? null,
+      status: offlineStatus,
+      entries: offlineEntries,
+    };
+    const linkActivity: PendingActivityPayload | null =
+      serializeLinkEntries(link.entries, isPlatform) !== serializeLinkEntries(offlineUpdatedLink.entries, isPlatform) || link.status !== offlineStatus
+        ? {
+            eventId: link.eventId,
+            actionType: "link_edited",
+            entityType: "link",
+            entityId: link.id,
+            description: `Lien ${link.label} modifié`,
+            previousValue: { status: link.status, entries: link.entries },
+            newValue: { status: offlineStatus, entries: offlineEntries },
+          }
+        : null;
+
+    if (!online) {
+      applyOptimisticLinkEntries(offlineUpdatedLink);
+      await enqueuePendingSyncAction({
+        actionType: "link_entries_replace",
+        entityType: "link",
+        entityId: link.id,
+        payload: {
+          deletedEntryIds,
+          rows: offlineRows,
+          linkValues: offlineLinkPayload,
+          activity: linkActivity,
+        },
+      });
+      return offlineUpdatedLink;
+    }
 
     if (deletedEntryIds.length > 0) {
       const { error: deleteError } = await supabase
@@ -3776,20 +4475,92 @@ export default function Home() {
     if (!nextLabel) {
       throw new Error("Le nom de l'option est requis.");
     }
+    const optionId = createLocalId();
+    const optionInsertPayload: Database["public"]["Tables"]["event_options"]["Insert"] = {
+      id: optionId,
+      event_id: eventId,
+      label: nextLabel,
+      status: "incomplete",
+      details: null,
+      ...getCreatorInsertPayload(profile),
+    };
 
-    const { data, error: insertError } = await supabase
-      .from("event_options")
-      .insert({
-        event_id: eventId,
+    function buildOptimisticOption(): EventOption {
+      return {
+        id: optionId,
+        eventId,
         label: nextLabel,
         status: "incomplete",
         details: null,
-        ...getCreatorInsertPayload(profile),
-      })
+        completedByProfileId: null,
+        completedByLabel: null,
+        completedByInitials: null,
+        completedAt: null,
+        createdAt: new Date().toISOString(),
+        ...mapCreatorMetadata({
+          created_by_profile_id: optionInsertPayload.created_by_profile_id ?? null,
+          created_by_role: optionInsertPayload.created_by_role ?? null,
+          created_by_name: optionInsertPayload.created_by_name ?? null,
+        }),
+        items: [],
+      };
+    }
+
+    function applyOptimisticOption(option: EventOption) {
+      setEvents((current) =>
+        current.map((event) =>
+          event.id === eventId
+            ? {
+                ...event,
+                options: [...event.options, option],
+              }
+            : event,
+        ),
+      );
+    }
+
+    if (!online) {
+      const option = buildOptimisticOption();
+      applyOptimisticOption(option);
+      await enqueuePendingSyncAction({
+        actionType: "option_insert",
+        entityType: "option",
+        entityId: option.id,
+        payload: {
+          values: optionInsertPayload,
+          activity: {
+            eventId,
+            actionType: "option_created",
+            entityType: "option",
+            entityId: option.id,
+            description: `Option ${option.label} ajoutée`,
+            newValue: { label: option.label, status: option.status },
+          } satisfies PendingActivityPayload,
+        },
+      });
+      return option;
+    }
+
+    const { data, error: insertError } = await supabase
+      .from("event_options")
+      .insert(optionInsertPayload)
       .select()
       .single();
 
-    if (insertError) throw insertError;
+    if (insertError) {
+      if (isNetworkOrUnavailableError(insertError)) {
+        const option = buildOptimisticOption();
+        applyOptimisticOption(option);
+        await enqueuePendingSyncAction({
+          actionType: "option_insert",
+          entityType: "option",
+          entityId: option.id,
+          payload: { values: optionInsertPayload },
+        });
+        return option;
+      }
+      throw insertError;
+    }
 
     const option: EventOption = {
       id: data.id,
@@ -3806,16 +4577,7 @@ export default function Home() {
       items: [],
     };
 
-    setEvents((current) =>
-      current.map((event) =>
-        event.id === eventId
-          ? {
-              ...event,
-              options: [...event.options, option],
-            }
-          : event,
-      ),
-    );
+    applyOptimisticOption(option);
 
     await logEventActivity({
       eventId,
@@ -3841,11 +4603,8 @@ export default function Home() {
       throw new Error("Configuration Supabase manquante.");
     }
 
-    const { error: deleteError } = await supabase.from("event_options").delete().eq("id", option.id);
-
-    if (deleteError) throw deleteError;
-
-    setEvents((current) =>
+    function applyOptimisticDelete() {
+      setEvents((current) =>
       current.map((event) =>
         event.id === option.eventId
           ? {
@@ -3854,15 +4613,49 @@ export default function Home() {
             }
         : event,
       ),
-    );
+      );
+    }
 
-    await logEventActivity({
+    const activity: PendingActivityPayload = {
       eventId: option.eventId,
       actionType: "option_deleted",
       entityType: "option",
       entityId: option.id,
       description: `Option ${option.label} supprimée`,
       previousValue: { label: option.label, status: option.status },
+    };
+
+    if (!online) {
+      applyOptimisticDelete();
+      await enqueuePendingSyncAction({
+        actionType: "option_delete",
+        entityType: "option",
+        entityId: option.id,
+        payload: { activity },
+      });
+      return;
+    }
+
+    const { error: deleteError } = await supabase.from("event_options").delete().eq("id", option.id);
+
+    if (deleteError) {
+      if (isNetworkOrUnavailableError(deleteError)) {
+        applyOptimisticDelete();
+        await enqueuePendingSyncAction({
+          actionType: "option_delete",
+          entityType: "option",
+          entityId: option.id,
+          payload: { activity },
+        });
+        return;
+      }
+      throw deleteError;
+    }
+
+    applyOptimisticDelete();
+
+    await logEventActivity({
+      ...activity,
     });
   }
 
@@ -3877,25 +4670,63 @@ export default function Home() {
 
     const nextLabel = formatTitleCase(label);
     if (!nextLabel || nextLabel === option.label) return option;
+    const updatePayload: Database["public"]["Tables"]["event_options"]["Update"] = { label: nextLabel };
+    const updatedOption = { ...option, label: nextLabel };
+
+    function applyOptimisticRename() {
+      setEvents((current) =>
+        current.map((event) =>
+          event.id === option.eventId
+            ? {
+                ...event,
+                options: event.options.map((item) => (item.id === option.id ? updatedOption : item)),
+              }
+            : event,
+        ),
+      );
+    }
+
+    const activity: PendingActivityPayload = {
+      eventId: option.eventId,
+      actionType: "option_renamed",
+      entityType: "option",
+      entityId: option.id,
+      description: `Option ${option.label} renommée`,
+      previousValue: { label: option.label },
+      newValue: { label: nextLabel },
+    };
+
+    if (!online) {
+      applyOptimisticRename();
+      await enqueuePendingSyncAction({
+        actionType: "option_update",
+        entityType: "option",
+        entityId: option.id,
+        payload: { values: updatePayload, activity },
+      });
+      return updatedOption;
+    }
 
     const { error: updateError } = await supabase
       .from("event_options")
-      .update({ label: nextLabel })
+      .update(updatePayload)
       .eq("id", option.id);
 
-    if (updateError) throw updateError;
+    if (updateError) {
+      if (isNetworkOrUnavailableError(updateError)) {
+        applyOptimisticRename();
+        await enqueuePendingSyncAction({
+          actionType: "option_update",
+          entityType: "option",
+          entityId: option.id,
+          payload: { values: updatePayload, activity },
+        });
+        return updatedOption;
+      }
+      throw updateError;
+    }
 
-    const updatedOption = { ...option, label: nextLabel };
-    setEvents((current) =>
-      current.map((event) =>
-        event.id === option.eventId
-          ? {
-              ...event,
-              options: event.options.map((item) => (item.id === option.id ? updatedOption : item)),
-            }
-          : event,
-      ),
-    );
+    applyOptimisticRename();
 
     await logEventActivity({
       eventId: option.eventId,
@@ -3920,18 +4751,85 @@ export default function Home() {
     if (!nextLabel) {
       throw new Error("La note est requise.");
     }
+    const localItemId = createLocalId();
+    const creatorPayload = getCreatorInsertPayload(profile);
+    const insertPayload: Database["public"]["Tables"]["event_option_items"]["Insert"] = {
+      id: localItemId,
+      option_id: option.id,
+      label: nextLabel,
+      ...creatorPayload,
+    };
+
+    function applyOptimisticItem(optionItem: EventOptionItem) {
+      setEvents((current) =>
+        current.map((event) =>
+          event.id === option.eventId
+            ? {
+                ...event,
+                options: event.options.map((item) =>
+                  item.id === option.id
+                    ? {
+                        ...item,
+                        items: [...item.items, optionItem],
+                      }
+                    : item,
+                ),
+              }
+            : event,
+        ),
+      );
+    }
+
+    if (!online) {
+      const optionItem: EventOptionItem = {
+        id: localItemId,
+        optionId: option.id,
+        label: nextLabel,
+        createdAt: new Date().toISOString(),
+        ...mapCreatorMetadata({
+          created_by_profile_id: creatorPayload.created_by_profile_id ?? null,
+          created_by_role: creatorPayload.created_by_role ?? null,
+          created_by_name: creatorPayload.created_by_name ?? null,
+        }),
+      };
+      applyOptimisticItem(optionItem);
+      await enqueuePendingSyncAction({
+        actionType: "option_item_insert",
+        entityType: "option_item",
+        entityId: localItemId,
+        payload: { values: insertPayload },
+      });
+      return optionItem;
+    }
 
     const { data, error: insertError } = await supabase
       .from("event_option_items")
-      .insert({
-        option_id: option.id,
-        label: nextLabel,
-        ...getCreatorInsertPayload(profile),
-      })
+      .insert(insertPayload)
       .select()
       .single();
 
     if (insertError) {
+      if (isNetworkOrUnavailableError(insertError)) {
+        const optionItem: EventOptionItem = {
+          id: localItemId,
+          optionId: option.id,
+          label: nextLabel,
+          createdAt: new Date().toISOString(),
+          ...mapCreatorMetadata({
+            created_by_profile_id: creatorPayload.created_by_profile_id ?? null,
+            created_by_role: creatorPayload.created_by_role ?? null,
+            created_by_name: creatorPayload.created_by_name ?? null,
+          }),
+        };
+        applyOptimisticItem(optionItem);
+        await enqueuePendingSyncAction({
+          actionType: "option_item_insert",
+          entityType: "option_item",
+          entityId: localItemId,
+          payload: { values: insertPayload },
+        });
+        return optionItem;
+      }
       console.error("Failed to create event_option_items row", {
         optionId: option.id,
         label: nextLabel,
@@ -3945,23 +4843,7 @@ export default function Home() {
 
     const optionItem = mapEventOptionItem(data);
 
-    setEvents((current) =>
-      current.map((event) =>
-        event.id === option.eventId
-          ? {
-              ...event,
-              options: event.options.map((item) =>
-                item.id === option.id
-                  ? {
-                      ...item,
-                      items: [...item.items, optionItem],
-                    }
-                  : item,
-              ),
-            }
-          : event,
-      ),
-    );
+    applyOptimisticItem(optionItem);
 
     return optionItem;
   }
@@ -3975,9 +4857,50 @@ export default function Home() {
       throw new Error("Configuration Supabase manquante.");
     }
 
+    function applyOptimisticDelete() {
+      setEvents((current) =>
+        current.map((event) =>
+          event.id === option.eventId
+            ? {
+                ...event,
+                options: event.options.map((item) =>
+                  item.id === option.id
+                    ? {
+                        ...item,
+                        items: item.items.filter((detailItem) => detailItem.id !== optionItem.id),
+                      }
+                    : item,
+                ),
+              }
+            : event,
+        ),
+      );
+    }
+
+    if (!online) {
+      applyOptimisticDelete();
+      await enqueuePendingSyncAction({
+        actionType: "option_item_delete",
+        entityType: "option_item",
+        entityId: optionItem.id,
+        payload: {},
+      });
+      return;
+    }
+
     const { error: deleteError } = await supabase.from("event_option_items").delete().eq("id", optionItem.id);
 
     if (deleteError) {
+      if (isNetworkOrUnavailableError(deleteError)) {
+        applyOptimisticDelete();
+        await enqueuePendingSyncAction({
+          actionType: "option_item_delete",
+          entityType: "option_item",
+          entityId: optionItem.id,
+          payload: {},
+        });
+        return;
+      }
       console.error("Failed to delete event_option_items row", {
         optionId: option.id,
         itemId: optionItem.id,
@@ -3989,23 +4912,7 @@ export default function Home() {
       throw deleteError;
     }
 
-    setEvents((current) =>
-      current.map((event) =>
-        event.id === option.eventId
-          ? {
-              ...event,
-              options: event.options.map((item) =>
-                item.id === option.id
-                  ? {
-                      ...item,
-                      items: item.items.filter((detailItem) => detailItem.id !== optionItem.id),
-                    }
-                  : item,
-              ),
-            }
-        : event,
-      ),
-    );
+    applyOptimisticDelete();
 
   }
 
@@ -4020,20 +4927,89 @@ export default function Home() {
     if (!nextLabel) {
       throw new Error("Le nom du lien est requis.");
     }
+    const linkId = createLocalId();
+    const insertPayload: Database["public"]["Tables"]["event_links"]["Insert"] = {
+      id: linkId,
+      event_id: eventId,
+      label: nextLabel,
+      url: nextUrl || null,
+      status: nextUrl ? "available" : "missing",
+      ...getCreatorInsertPayload(profile),
+    };
+
+    function applyOptimisticLink(link: EventLink) {
+      setEvents((current) =>
+        current.map((event) =>
+          event.id === eventId
+            ? {
+                ...event,
+                links: [...event.links, link],
+              }
+            : event,
+        ),
+      );
+    }
+
+    function buildOptimisticLink(): EventLink {
+      return {
+        id: linkId,
+        eventId,
+        label: nextLabel,
+        url: nextUrl || null,
+        streamKey: null,
+        status: nextUrl ? "available" : "missing",
+        createdAt: new Date().toISOString(),
+        ...mapCreatorMetadata({
+          created_by_profile_id: insertPayload.created_by_profile_id ?? null,
+          created_by_role: insertPayload.created_by_role ?? null,
+          created_by_name: insertPayload.created_by_name ?? null,
+        }),
+        entries: [],
+      };
+    }
+
+    if (!online) {
+      const link = buildOptimisticLink();
+      applyOptimisticLink(link);
+      await enqueuePendingSyncAction({
+        actionType: "link_insert",
+        entityType: "link",
+        entityId: linkId,
+        payload: {
+          values: insertPayload,
+          activity: {
+            eventId,
+            actionType: "link_created",
+            entityType: "link",
+            entityId: linkId,
+            description: `Lien ${nextLabel} ajouté`,
+            newValue: { label: nextLabel, status: insertPayload.status, url: insertPayload.url },
+          } satisfies PendingActivityPayload,
+        },
+      });
+      return link;
+    }
 
     const { data, error: insertError } = await supabase
       .from("event_links")
-      .insert({
-        event_id: eventId,
-        label: nextLabel,
-        url: nextUrl || null,
-        status: nextUrl ? "available" : "missing",
-        ...getCreatorInsertPayload(profile),
-      })
+      .insert(insertPayload)
       .select()
       .single();
 
-    if (insertError) throw insertError;
+    if (insertError) {
+      if (isNetworkOrUnavailableError(insertError)) {
+        const link = buildOptimisticLink();
+        applyOptimisticLink(link);
+        await enqueuePendingSyncAction({
+          actionType: "link_insert",
+          entityType: "link",
+          entityId: linkId,
+          payload: { values: insertPayload },
+        });
+        return link;
+      }
+      throw insertError;
+    }
 
     const link: EventLink = {
       id: data.id,
@@ -4047,16 +5023,7 @@ export default function Home() {
       entries: [],
     };
 
-    setEvents((current) =>
-      current.map((event) =>
-        event.id === eventId
-          ? {
-              ...event,
-              links: [...event.links, link],
-            }
-          : event,
-      ),
-    );
+    applyOptimisticLink(link);
 
     await logEventActivity({
       eventId,
@@ -4082,11 +5049,8 @@ export default function Home() {
       throw new Error("Configuration Supabase manquante.");
     }
 
-    const { error: deleteError } = await supabase.from("event_links").delete().eq("id", link.id);
-
-    if (deleteError) throw deleteError;
-
-    setEvents((current) =>
+    function applyOptimisticDelete() {
+      setEvents((current) =>
       current.map((event) =>
         event.id === link.eventId
           ? {
@@ -4095,7 +5059,46 @@ export default function Home() {
             }
         : event,
       ),
-    );
+      );
+    }
+
+    if (!online) {
+      applyOptimisticDelete();
+      await enqueuePendingSyncAction({
+        actionType: "link_delete",
+        entityType: "link",
+        entityId: link.id,
+        payload: {
+          activity: {
+            eventId: link.eventId,
+            actionType: "link_deleted",
+            entityType: "link",
+            entityId: link.id,
+            description: `Lien ${link.label} supprimé`,
+            previousValue: { label: link.label, status: link.status, url: link.url },
+          } satisfies PendingActivityPayload,
+        },
+      });
+      return;
+    }
+
+    const { error: deleteError } = await supabase.from("event_links").delete().eq("id", link.id);
+
+    if (deleteError) {
+      if (isNetworkOrUnavailableError(deleteError)) {
+        applyOptimisticDelete();
+        await enqueuePendingSyncAction({
+          actionType: "link_delete",
+          entityType: "link",
+          entityId: link.id,
+          payload: {},
+        });
+        return;
+      }
+      throw deleteError;
+    }
+
+    applyOptimisticDelete();
 
     await logEventActivity({
       eventId: link.eventId,
@@ -4118,25 +5121,63 @@ export default function Home() {
 
     const nextLabel = formatTitleCase(label);
     if (!nextLabel || nextLabel === link.label) return link;
+    const updatePayload: Database["public"]["Tables"]["event_links"]["Update"] = { label: nextLabel };
+    const updatedLink = { ...link, label: nextLabel };
+
+    function applyOptimisticRename() {
+      setEvents((current) =>
+        current.map((event) =>
+          event.id === link.eventId
+            ? {
+                ...event,
+                links: event.links.map((item) => (item.id === link.id ? updatedLink : item)),
+              }
+            : event,
+        ),
+      );
+    }
+
+    const activity: PendingActivityPayload = {
+      eventId: link.eventId,
+      actionType: "link_renamed",
+      entityType: "link",
+      entityId: link.id,
+      description: `Lien ${link.label} renommé`,
+      previousValue: { label: link.label },
+      newValue: { label: nextLabel },
+    };
+
+    if (!online) {
+      applyOptimisticRename();
+      await enqueuePendingSyncAction({
+        actionType: "link_update",
+        entityType: "link",
+        entityId: link.id,
+        payload: { values: updatePayload, activity },
+      });
+      return updatedLink;
+    }
 
     const { error: updateError } = await supabase
       .from("event_links")
-      .update({ label: nextLabel })
+      .update(updatePayload)
       .eq("id", link.id);
 
-    if (updateError) throw updateError;
+    if (updateError) {
+      if (isNetworkOrUnavailableError(updateError)) {
+        applyOptimisticRename();
+        await enqueuePendingSyncAction({
+          actionType: "link_update",
+          entityType: "link",
+          entityId: link.id,
+          payload: { values: updatePayload, activity },
+        });
+        return updatedLink;
+      }
+      throw updateError;
+    }
 
-    const updatedLink = { ...link, label: nextLabel };
-    setEvents((current) =>
-      current.map((event) =>
-        event.id === link.eventId
-          ? {
-              ...event,
-              links: event.links.map((item) => (item.id === link.id ? updatedLink : item)),
-            }
-          : event,
-      ),
-    );
+    applyOptimisticRename();
 
     await logEventActivity({
       eventId: link.eventId,
@@ -4260,6 +5301,9 @@ export default function Home() {
 
   async function uploadEventDocument(group: EventDocumentGroup, file: globalThis.File) {
     assertCanManageOperational();
+    if (!online) {
+      throw new Error("Upload document indisponible hors ligne. Le fichier n'est pas perdu: réessayez quand le réseau revient.");
+    }
     if (!supabase) {
       throw new Error("Configuration Supabase manquante.");
     }
@@ -4334,6 +5378,9 @@ export default function Home() {
     if (!permissions.canManageEvents && group.files.some((file) => !canManageCreatedEntity(permissions, profile, file))) {
       throw new Error("Ce groupe contient des fichiers ajoutés par un admin.");
     }
+    if (!online && group.files.length > 0) {
+      throw new Error("Suppression de documents indisponible hors ligne. Réessayez quand le réseau revient.");
+    }
     if (!supabase) {
       throw new Error("Configuration Supabase manquante.");
     }
@@ -4372,6 +5419,9 @@ export default function Home() {
     assertCanManageOperational();
     if (!canManageCreatedEntity(permissions, profile, document)) {
       throw new Error("Vous ne pouvez supprimer que vos propres fichiers.");
+    }
+    if (!online) {
+      throw new Error("Suppression de fichier indisponible hors ligne. Réessayez quand le réseau revient.");
     }
     if (!supabase) {
       throw new Error("Configuration Supabase manquante.");
@@ -4458,9 +5508,6 @@ export default function Home() {
 
   async function deleteCurrentEvent(eventToDelete: ProductionEvent) {
     assertCanSoftDeleteEvents();
-    if (!supabase) {
-      throw new Error("Configuration Supabase manquante.");
-    }
 
     if (!eventToDelete) {
       throw new Error("Aucun événement sélectionné.");
@@ -4475,9 +5522,48 @@ export default function Home() {
     });
 
     const deletedAt = new Date().toISOString();
+    const deletePayload: Database["public"]["Tables"]["events"]["Update"] = { deleted_at: deletedAt, deleted_by: actorName ?? "Utilisateur" };
+    const activity: PendingActivityPayload = {
+      eventId,
+      actionType: "event_deleted",
+      entityType: "event",
+      entityId: eventId,
+      description: "Événement placé dans la corbeille",
+      previousValue: {
+        clientName: eventToDelete.clientName,
+        eventName: eventToDelete.eventName,
+        date: eventToDelete.date,
+      },
+      newValue: { deletedAt },
+    };
+
+    function applyOptimisticSoftDelete(updatedAt: string) {
+      setEvents((current) => current.filter((event) => event.id !== eventId));
+      setDeletedEvents((current) => [{ ...eventToDelete, deletedAt, deletedBy: actorName ?? "Utilisateur", updatedAt }, ...current]);
+      setSelectedId(null);
+      setScreen("calendar");
+      setCreateMenuOpen(false);
+      setDeleteDialogEvent(null);
+    }
+
+    if (!online) {
+      applyOptimisticSoftDelete(deletedAt);
+      await enqueuePendingSyncAction({
+        actionType: "event_soft_delete",
+        entityType: "event",
+        entityId: eventId,
+        payload: { values: deletePayload, activity },
+      });
+      return;
+    }
+
+    if (!supabase) {
+      throw new Error("Configuration Supabase manquante.");
+    }
+
     const { data: deletedEvent, error: softDeleteError } = await supabase
       .from("events")
-      .update({ deleted_at: deletedAt, deleted_by: actorName ?? "Utilisateur" })
+      .update(deletePayload)
       .eq("id", eventId)
       .select()
       .single();
@@ -4492,66 +5578,96 @@ export default function Home() {
       errorHint: softDeleteError?.hint,
     });
 
-    if (softDeleteError) throw softDeleteError;
+    if (softDeleteError) {
+      if (isNetworkOrUnavailableError(softDeleteError)) {
+        applyOptimisticSoftDelete(deletedAt);
+        await enqueuePendingSyncAction({
+          actionType: "event_soft_delete",
+          entityType: "event",
+          entityId: eventId,
+          payload: { values: deletePayload, activity },
+        });
+        return;
+      }
+      throw softDeleteError;
+    }
 
     await logEventActivity({
-      eventId,
-      actionType: "event_deleted",
-      entityType: "event",
-      entityId: eventId,
-      description: "Événement placé dans la corbeille",
-      previousValue: {
-        clientName: eventToDelete.clientName,
-        eventName: eventToDelete.eventName,
-        date: eventToDelete.date,
-      },
-      newValue: { deletedAt },
+      ...activity,
     });
 
-    setEvents((current) => current.filter((event) => event.id !== eventId));
-    setDeletedEvents((current) => [{ ...eventToDelete, deletedAt, deletedBy: actorName ?? "Utilisateur", updatedAt: deletedEvent.updated_at }, ...current]);
-    setSelectedId(null);
-    setScreen("calendar");
-    setCreateMenuOpen(false);
-    setDeleteDialogEvent(null);
+    applyOptimisticSoftDelete(deletedEvent.updated_at);
     await reloadData(null);
   }
 
   async function restoreDeletedEvent(eventToRestore: ProductionEvent) {
     assertCanRestoreEvents();
-    if (!supabase) {
-      throw new Error("Configuration Supabase manquante.");
-    }
-
     setRestoringEventId(eventToRestore.id);
     setTrashError(null);
+    const restorePayload: Database["public"]["Tables"]["events"]["Update"] = { deleted_at: null, deleted_by: null };
+    const activity: PendingActivityPayload = {
+      eventId: eventToRestore.id,
+      actionType: "event_restored",
+      entityType: "event",
+      entityId: eventToRestore.id,
+      description: "Événement restauré",
+      previousValue: { deletedAt: eventToRestore.deletedAt },
+      newValue: { deletedAt: null },
+    };
+
+    function applyOptimisticRestore(updatedAt: string) {
+      setDeletedEvents((current) => current.filter((event) => event.id !== eventToRestore.id));
+      setEvents((current) =>
+        [...current, { ...eventToRestore, deletedAt: null, deletedBy: null, updatedAt }].sort(
+          (a, b) => eventSortValue(a) - eventSortValue(b),
+        ),
+      );
+      setSelectedDateKey(eventToRestore.date);
+      setVisibleMonth(new Date(`${eventToRestore.date}T12:00:00`));
+    }
 
     try {
+      if (!online) {
+        applyOptimisticRestore(new Date().toISOString());
+        await enqueuePendingSyncAction({
+          actionType: "event_restore",
+          entityType: "event",
+          entityId: eventToRestore.id,
+          payload: { values: restorePayload, activity },
+        });
+        return;
+      }
+
+      if (!supabase) {
+        throw new Error("Configuration Supabase manquante.");
+      }
+
       const { data, error: restoreError } = await supabase
         .from("events")
-        .update({ deleted_at: null, deleted_by: null })
+        .update(restorePayload)
         .eq("id", eventToRestore.id)
         .select()
         .single();
 
-      if (restoreError) throw restoreError;
+      if (restoreError) {
+        if (isNetworkOrUnavailableError(restoreError)) {
+          applyOptimisticRestore(new Date().toISOString());
+          await enqueuePendingSyncAction({
+            actionType: "event_restore",
+            entityType: "event",
+            entityId: eventToRestore.id,
+            payload: { values: restorePayload, activity },
+          });
+          return;
+        }
+        throw restoreError;
+      }
 
       await logEventActivity({
-        eventId: eventToRestore.id,
-        actionType: "event_restored",
-        entityType: "event",
-        entityId: eventToRestore.id,
-        description: "Événement restauré",
-        previousValue: { deletedAt: eventToRestore.deletedAt },
-        newValue: { deletedAt: null },
+        ...activity,
       });
 
-      setDeletedEvents((current) => current.filter((event) => event.id !== eventToRestore.id));
-      setEvents((current) =>
-        [...current, { ...eventToRestore, deletedAt: data.deleted_at ?? null, deletedBy: data.deleted_by ?? null, updatedAt: data.updated_at }].sort(
-          (a, b) => eventSortValue(a) - eventSortValue(b),
-        ),
-      );
+      applyOptimisticRestore(data.updated_at);
       setSelectedDateKey(data.date);
       setVisibleMonth(new Date(`${data.date}T12:00:00`));
     } catch (restoreError) {
@@ -4747,6 +5863,10 @@ export default function Home() {
           onOpenUserManagement={() => setUserManagementOpen(true)}
           canManageExternalCalendars={Boolean(profile)}
           onOpenExternalCalendars={() => setExternalCalendarSettingsOpen(true)}
+          online={online}
+          pendingSyncCount={pendingSyncCount}
+          syncingPendingActions={syncingPendingActions}
+          pendingSyncError={pendingSyncError}
           onImportQuote={() => {
             if (!permissions.canManageEvents) return;
             openQuoteImport();
@@ -4887,6 +6007,10 @@ export default function Home() {
           onOpenUserManagement={() => setUserManagementOpen(true)}
           canManageExternalCalendars={Boolean(profile)}
           onOpenExternalCalendars={() => setExternalCalendarSettingsOpen(true)}
+          online={online}
+          pendingSyncCount={pendingSyncCount}
+          syncingPendingActions={syncingPendingActions}
+          pendingSyncError={pendingSyncError}
           onGoToday={() => {
             goToday();
             setYearOverviewOpen(false);
@@ -5134,6 +6258,10 @@ function AppHeader({
   onOpenUserManagement,
   canManageExternalCalendars,
   onOpenExternalCalendars,
+  online,
+  pendingSyncCount,
+  syncingPendingActions,
+  pendingSyncError,
   onImportQuote,
   onImportNativeMstvCalendar,
   onSearch,
@@ -5168,6 +6296,10 @@ function AppHeader({
   onOpenUserManagement: () => void;
   canManageExternalCalendars: boolean;
   onOpenExternalCalendars: () => void;
+  online: boolean;
+  pendingSyncCount: number;
+  syncingPendingActions: boolean;
+  pendingSyncError: string | null;
   onImportQuote: () => void;
   onImportNativeMstvCalendar: () => void;
   onSearch: () => void;
@@ -5279,6 +6411,12 @@ function AppHeader({
             )}
           </div>
         )}
+        <SyncStatusIndicator
+          online={online}
+          pendingCount={pendingSyncCount}
+          syncing={syncingPendingActions}
+          error={pendingSyncError}
+        />
         <AccountMenu
           profile={profile}
           email={email}
@@ -5509,6 +6647,10 @@ function YearOverviewOverlay({
   onOpenUserManagement,
   canManageExternalCalendars,
   onOpenExternalCalendars,
+  online,
+  pendingSyncCount,
+  syncingPendingActions,
+  pendingSyncError,
   onGoToday,
   onImportQuote,
   onImportNativeMstvCalendar,
@@ -5535,6 +6677,10 @@ function YearOverviewOverlay({
   onOpenUserManagement: () => void;
   canManageExternalCalendars: boolean;
   onOpenExternalCalendars: () => void;
+  online: boolean;
+  pendingSyncCount: number;
+  syncingPendingActions: boolean;
+  pendingSyncError: string | null;
   onGoToday: () => void;
   onImportQuote: () => void;
   onImportNativeMstvCalendar: () => void;
@@ -5734,6 +6880,10 @@ function YearOverviewOverlay({
           onOpenUserManagement={onOpenUserManagement}
           canManageExternalCalendars={canManageExternalCalendars}
           onOpenExternalCalendars={onOpenExternalCalendars}
+          online={online}
+          pendingSyncCount={pendingSyncCount}
+          syncingPendingActions={syncingPendingActions}
+          pendingSyncError={pendingSyncError}
           onImportQuote={onImportQuote}
           onImportNativeMstvCalendar={onImportNativeMstvCalendar}
           onSearch={onSearch}
@@ -11005,6 +12155,49 @@ function HeaderIcon({ label, icon: Icon, onClick }: { label: string; icon: Lucid
     >
       <Icon className="h-4 w-4" />
     </button>
+  );
+}
+
+function SyncStatusIndicator({
+  online,
+  pendingCount,
+  syncing,
+  error,
+}: {
+  online: boolean;
+  pendingCount: number;
+  syncing: boolean;
+  error: string | null;
+}) {
+  const visible = !online || pendingCount > 0 || syncing || Boolean(error);
+  if (!visible) return null;
+
+  const label = !online
+    ? pendingCount > 0
+      ? `${pendingCount} en attente`
+      : "Hors ligne"
+    : syncing
+      ? "Sync"
+      : error
+        ? "Erreur sync"
+        : `${pendingCount} en attente`;
+
+  return (
+    <div
+      className={cn(
+        "flex h-10 min-w-10 items-center justify-center rounded-full border px-2 text-sm font-semibold sm:px-3",
+        error
+          ? "border-rose-200 bg-rose-50 text-rose-700"
+          : !online
+            ? "border-amber-200 bg-amber-50 text-amber-800"
+            : "border-sky-200 bg-sky-50 text-sky-700",
+      )}
+      title={error ?? label}
+      aria-live="polite"
+    >
+      <span className="sm:hidden">{error ? "!" : !online ? "Off" : pendingCount}</span>
+      <span className="hidden sm:inline">{label}</span>
+    </div>
   );
 }
 
