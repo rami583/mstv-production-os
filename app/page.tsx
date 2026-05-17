@@ -6324,7 +6324,7 @@ function SelectedDayEvents({
 const calendarEventSwipeActionWidth = 112;
 const calendarEventFullSwipeRatio = 0.65;
 const selectedDayRowClassName =
-  "grid min-h-20 w-full grid-cols-[3px_1fr_auto] items-center gap-4 rounded-xl bg-white/70 px-4 py-4 text-left transition hover:bg-white lg:gap-5 lg:px-5";
+  "grid min-h-20 w-full grid-cols-[3px_1fr_auto] items-center gap-4 rounded-xl bg-white/70 px-4 py-4 text-left hover:bg-white lg:gap-5 lg:px-5";
 const selectedDayStaticRowClassName =
   "grid min-h-20 w-full grid-cols-[3px_1fr] items-center gap-4 rounded-xl bg-white/70 px-4 py-4 text-left lg:gap-5 lg:px-5";
 
@@ -6394,6 +6394,7 @@ function SwipeableCalendarEventRow({
   const visibleOffset = isDragging ? dragOffset : baseOffset;
   const deleteActionVisible = canDelete && visibleOffset < -1;
   const duplicateActionVisible = canDuplicate && visibleOffset > 1;
+  const stableRowWidthRef = useRef(0);
   const timeRange = formatTimeRange(event.startTime, event.endTime);
 
   function handlePointerDown(pointerEvent: ReactPointerEvent<HTMLDivElement>) {
@@ -6407,6 +6408,7 @@ function SwipeableCalendarEventRow({
     };
     setIsDragging(true);
     setDragOffset(baseOffset);
+    stableRowWidthRef.current = rowRef.current?.offsetWidth ?? pointerEvent.currentTarget.offsetWidth ?? calendarEventSwipeActionWidth;
     pointerEvent.currentTarget.setPointerCapture(pointerEvent.pointerId);
   }
 
@@ -6423,7 +6425,7 @@ function SwipeableCalendarEventRow({
       return;
     }
 
-    const rowWidth = rowRef.current?.offsetWidth ?? calendarEventSwipeActionWidth;
+    const rowWidth = stableRowWidthRef.current || rowRef.current?.offsetWidth || calendarEventSwipeActionWidth;
     const minOffset = canDelete ? -rowWidth : 0;
     const maxOffset = canDuplicate ? rowWidth : 0;
     const nextOffset = Math.max(minOffset, Math.min(maxOffset, baseOffset + deltaX));
@@ -6440,7 +6442,7 @@ function SwipeableCalendarEventRow({
     if (!pointerStart) return;
 
     const deltaX = pointerEvent.clientX - pointerStart.x;
-    const rowWidth = rowRef.current?.offsetWidth ?? calendarEventSwipeActionWidth;
+    const rowWidth = stableRowWidthRef.current || rowRef.current?.offsetWidth || calendarEventSwipeActionWidth;
     const minOffset = canDelete ? -rowWidth : 0;
     const maxOffset = canDuplicate ? rowWidth : 0;
     const finalOffset = Math.max(minOffset, Math.min(maxOffset, baseOffset + deltaX));
@@ -6455,6 +6457,7 @@ function SwipeableCalendarEventRow({
     pointerStartRef.current = null;
     setIsDragging(false);
     setDragOffset(0);
+    stableRowWidthRef.current = 0;
 
     if (shouldRequestDelete) {
       onCloseAction();
@@ -6530,6 +6533,7 @@ function SwipeableCalendarEventRow({
           pointerStartRef.current = null;
           setIsDragging(false);
           setDragOffset(0);
+          stableRowWidthRef.current = 0;
         }}
         onClick={handleRowClick}
             onKeyDown={(keyEvent) => {
@@ -6547,8 +6551,8 @@ function SwipeableCalendarEventRow({
         style={{ transform: `translateX(${canSwipe ? visibleOffset : 0}px)`, touchAction: "pan-y" }}
         className={cn(
           selectedDayRowClassName,
-          "relative z-10 cursor-pointer",
-          !isDragging && "transition-transform duration-200 ease-out",
+          "relative z-10 cursor-pointer will-change-transform",
+          isDragging ? "transition-none" : "transition-transform duration-200 ease-out",
         )}
       >
         <span className="h-full min-h-14 rounded-full bg-[#bb2720]" />
