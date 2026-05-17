@@ -1537,6 +1537,24 @@ function getPasswordResetRedirectUrl() {
   return origin.endsWith("/") ? origin : `${origin}/`;
 }
 
+function isCapacitorRuntime() {
+  if (typeof window === "undefined") return false;
+  const maybeCapacitor = (window as Window & { Capacitor?: { isNativePlatform?: () => boolean } }).Capacitor;
+  return window.location.protocol === "capacitor:" || Boolean(maybeCapacitor?.isNativePlatform?.());
+}
+
+function getAppApiUrl(path: string) {
+  if (typeof window === "undefined") return path;
+  const configuredUrl = process.env.NEXT_PUBLIC_SITE_URL?.trim();
+  if (isCapacitorRuntime() && configuredUrl) {
+    return new URL(path, configuredUrl.endsWith("/") ? configuredUrl : `${configuredUrl}/`).toString();
+  }
+  if (isCapacitorRuntime()) {
+    throw new Error("Synchronisation ICS indisponible: configurez NEXT_PUBLIC_SITE_URL vers l’app web déployée.");
+  }
+  return path;
+}
+
 function getCompletedByInitialsForDisplay(option: EventOption) {
   const knownInitials = completedByOverrideChoices.find((choice) => choice.label === option.completedByLabel || choice.initials === option.completedByInitials)?.initials;
   return knownInitials ?? option.completedByInitials;
@@ -2435,6 +2453,7 @@ export default function Home() {
 
   async function syncExternalCalendar(calendar: ExternalCalendar) {
     if (!supabase) throw new Error("Configuration Supabase manquante.");
+    if (!authSession?.access_token) throw new Error("Session utilisateur introuvable.");
     if (!canManageExternalCalendar(permissions, profile, calendar)) {
       throw new Error("Vous ne pouvez synchroniser que vos calendriers.");
     }
@@ -2446,12 +2465,29 @@ export default function Home() {
     setExternalCalendarSettingsError(null);
 
     try {
-      const response = await fetch(calendar.icsUrl.trim(), { cache: "no-store" });
+      const response = await fetch(getAppApiUrl("/api/external-calendars/fetch-ics"), {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${authSession.access_token}`,
+        },
+        body: JSON.stringify({ calendarId: calendar.id }),
+      });
       if (!response.ok) {
-        throw new Error(`Impossible de récupérer le calendrier ICS (${response.status}).`);
+        const errorPayload = await response.json().catch(() => null) as { error?: string } | null;
+        console.error("External calendar ICS fetch API failed", {
+          calendarId: calendar.id,
+          status: response.status,
+          error: errorPayload?.error ?? response.statusText,
+        });
+        throw new Error(errorPayload?.error || "Impossible de récupérer le flux ICS.");
       }
 
-      const icsText = await response.text();
+      const payload = await response.json().catch(() => null) as { icsText?: string; error?: string } | null;
+      const icsText = payload?.icsText ?? "";
+      if (!icsText.trim()) {
+        throw new Error(payload?.error || "Impossible de récupérer le flux ICS.");
+      }
       const parsedEvents = parseIcsEvents(icsText);
       if (parsedEvents.length === 0) {
         throw new Error("Aucun événement lisible trouvé dans ce flux ICS.");
