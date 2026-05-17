@@ -7031,7 +7031,6 @@ function LinkValueRow({
   onChange,
   onCommit,
   onCopy,
-  debugInfo,
   openable = false,
   editable = true,
 }: {
@@ -7044,13 +7043,6 @@ function LinkValueRow({
   onChange: (value: string) => void;
   onCommit: (value: string) => Promise<void>;
   onCopy: () => void;
-  debugInfo: {
-    entryId: string;
-    isEditable: boolean;
-    rowKey: string;
-    field: string;
-    storedValue: string;
-  };
   openable?: boolean;
   editable?: boolean;
 }) {
@@ -7062,7 +7054,6 @@ function LinkValueRow({
   const [committing, setCommitting] = useState(false);
   const openTimerRef = useRef<number | null>(null);
   const skipBlurCommitRef = useRef(false);
-  const mountIdRef = useRef(`m${Math.random().toString(36).slice(2, 7)}`);
 
   useEffect(() => {
     if (!editing) setLocalValue(value);
@@ -7095,117 +7086,69 @@ function LinkValueRow({
     }, 180);
   }
 
-  function editUrlFromRow() {
-    if (!editable) return;
-    if (openTimerRef.current) {
-      window.clearTimeout(openTimerRef.current);
-      openTimerRef.current = null;
-    }
-    setEditing(true);
-  }
-
   return (
-    <div className="flex w-full min-w-0 flex-col gap-1">
-      <div className="flex w-full min-w-0 items-center gap-2">
-        <div className={cn("inline-flex min-h-9 min-w-0 flex-1 items-center gap-2 rounded-full border px-3 py-1.5 transition focus-within:border-sky-400", rowTone.surface, rowTone.border)}>
-          <Icon className={cn("h-4 w-4 shrink-0", rowTone.icon)} />
-          {canOpen && !editing ? (
-            <button
-              type="button"
-              onClick={openUrlFromRow}
-              onDoubleClick={editUrlFromRow}
-              className={cn("min-w-0 flex-1 truncate bg-transparent text-left text-base font-semibold underline-offset-2 outline-none transition hover:underline", rowTone.text)}
-            >
-              {localValue}
-            </button>
-          ) : editable ? (
-            <input
-              value={localValue}
-              disabled={committing}
-              onFocus={() => {
-                console.info("Link input focused", {
-                  entryId: debugInfo.entryId,
-                  field: debugInfo.field,
-                  rowKey: debugInfo.rowKey,
-                  mountId: mountIdRef.current,
-                  editable,
-                });
-                setEditing(true);
-              }}
-              onChange={(event) => {
-                console.info("Link input local draft update", {
-                  entryId: debugInfo.entryId,
-                  field: debugInfo.field,
-                  rowKey: debugInfo.rowKey,
-                  mountId: mountIdRef.current,
-                  nextLength: event.target.value.length,
-                });
-                setLocalValue(event.target.value);
-              }}
-              onBlur={() => {
-                if (skipBlurCommitRef.current) {
-                  skipBlurCommitRef.current = false;
-                  return;
-                }
-                console.info("Link input blur commit", {
-                  entryId: debugInfo.entryId,
-                  field: debugInfo.field,
-                  rowKey: debugInfo.rowKey,
-                  mountId: mountIdRef.current,
-                });
-                void commitValue();
-              }}
-              onKeyDown={(event) => {
-                if (event.key === "Enter") {
-                  event.preventDefault();
-                  skipBlurCommitRef.current = true;
-                  console.info("Link input enter commit", {
-                    entryId: debugInfo.entryId,
-                    field: debugInfo.field,
-                    rowKey: debugInfo.rowKey,
-                    mountId: mountIdRef.current,
-                  });
-                  void commitValue().finally(() => event.currentTarget.blur());
-                }
-                if (event.key === "Escape") {
-                  event.preventDefault();
-                  setLocalValue(value);
-                  setEditing(false);
-                  event.currentTarget.blur();
-                }
-              }}
-              autoFocus={editing}
-              placeholder={placeholder}
-              className={cn("min-w-0 flex-1 bg-transparent text-base font-semibold outline-none placeholder:text-sky-300", rowTone.text)}
-            />
-          ) : (
-            <span className={cn("min-w-0 flex-1 truncate text-base font-semibold", rowTone.text)}>
-              {localValue || placeholder}
-            </span>
-          )}
-        </div>
-        <button
-          type="button"
-          onClick={onCopy}
-          disabled={!trimmedValue}
-          className={cn(
-            "flex h-9 w-9 shrink-0 items-center justify-center rounded-full border transition disabled:cursor-not-allowed disabled:opacity-35",
-            rowTone.surface,
-            rowTone.border,
-            rowTone.icon,
-            rowTone.hover,
-            copied && "bg-sky-200 text-sky-900",
-          )}
-          aria-label={copyLabel}
-        >
-          <Copy className="h-3.5 w-3.5" />
-        </button>
+    <div className="flex w-full min-w-0 items-center gap-2">
+      <div className={cn("inline-flex min-h-9 min-w-0 flex-1 items-center gap-2 rounded-full border px-3 py-1.5 transition focus-within:border-sky-400", rowTone.surface, rowTone.border)}>
+        <Icon className={cn("h-4 w-4 shrink-0", rowTone.icon)} />
+        {editable ? (
+          <input
+            value={localValue}
+            disabled={committing}
+            onFocus={() => setEditing(true)}
+            onChange={(event) => setLocalValue(event.target.value)}
+            onBlur={() => {
+              if (skipBlurCommitRef.current) {
+                skipBlurCommitRef.current = false;
+                return;
+              }
+              void commitValue();
+            }}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") {
+                event.preventDefault();
+                skipBlurCommitRef.current = true;
+                void commitValue().finally(() => event.currentTarget.blur());
+              }
+              if (event.key === "Escape") {
+                event.preventDefault();
+                setLocalValue(value);
+                setEditing(false);
+                event.currentTarget.blur();
+              }
+            }}
+            placeholder={placeholder}
+            className={cn("min-w-0 flex-1 bg-transparent text-base font-semibold outline-none placeholder:text-sky-300 disabled:opacity-70", rowTone.text)}
+          />
+        ) : canOpen ? (
+          <button
+            type="button"
+            onClick={openUrlFromRow}
+            className={cn("min-w-0 flex-1 truncate bg-transparent text-left text-base font-semibold underline-offset-2 outline-none transition hover:underline", rowTone.text)}
+          >
+            {localValue}
+          </button>
+        ) : (
+          <span className={cn("min-w-0 flex-1 truncate text-base font-semibold", rowTone.text)}>
+            {localValue || placeholder}
+          </span>
+        )}
       </div>
-      <div className="rounded-lg bg-sky-50 px-2 py-1 font-mono text-[10px] leading-snug text-sky-700">
-        entry={debugInfo.entryId} key={debugInfo.rowKey} field={debugInfo.field} editable={String(debugInfo.isEditable)} focused={String(editing)} mount={mountIdRef.current}
-        <br />
-        local={localValue || "∅"} stored={debugInfo.storedValue || "∅"}
-      </div>
+      <button
+        type="button"
+        onClick={onCopy}
+        disabled={!trimmedValue}
+        className={cn(
+          "flex h-9 w-9 shrink-0 items-center justify-center rounded-full border transition disabled:cursor-not-allowed disabled:opacity-35",
+          rowTone.surface,
+          rowTone.border,
+          rowTone.icon,
+          rowTone.hover,
+          copied && "bg-sky-200 text-sky-900",
+        )}
+        aria-label={copyLabel}
+      >
+        <Copy className="h-3.5 w-3.5" />
+      </button>
     </div>
   );
 }
@@ -7579,13 +7522,6 @@ function ContextDetailBlock({
                     onChange={(value) => updateLinkEntryDraft(index, "url", value)}
                     onCommit={(value) => saveLinkEntryDraft(index, "url", value)}
                     onCopy={() => void copyLinkValue(draft.url, getCopiedLinkField(index, "url"))}
-                    debugInfo={{
-                      entryId: draft.id ?? "new",
-                      isEditable: canEditEntry,
-                      rowKey,
-                      field: "url",
-                      storedValue: draft.url,
-                    }}
                     openable
                     editable={canEditEntry}
                   />
@@ -7600,13 +7536,6 @@ function ContextDetailBlock({
                       onChange={(value) => updateLinkEntryDraft(index, "streamKey", value)}
                       onCommit={(value) => saveLinkEntryDraft(index, "streamKey", value)}
                       onCopy={() => void copyLinkValue(draft.streamKey, getCopiedLinkField(index, "streamKey"))}
-                      debugInfo={{
-                        entryId: draft.id ?? "new",
-                        isEditable: canEditEntry,
-                        rowKey,
-                        field: "streamKey",
-                        storedValue: draft.streamKey,
-                      }}
                       editable={canEditEntry}
                     />
                   )}
