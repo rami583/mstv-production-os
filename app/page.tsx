@@ -101,6 +101,12 @@ type AppPermissions = {
   canManageUsers: boolean;
 };
 
+type CreatorMetadata = {
+  createdByProfileId: string | null;
+  createdByRole: UserRole | null;
+  createdByName: string | null;
+};
+
 type EventOption = {
   id: string;
   eventId: string;
@@ -113,14 +119,14 @@ type EventOption = {
   completedAt: string | null;
   createdAt: string;
   items: EventOptionItem[];
-};
+} & CreatorMetadata;
 
 type EventOptionItem = {
   id: string;
   optionId: string;
   label: string;
   createdAt: string;
-};
+} & CreatorMetadata;
 
 type EventLink = {
   id: string;
@@ -131,7 +137,7 @@ type EventLink = {
   status: LinkStatus;
   createdAt: string;
   entries: EventLinkEntry[];
-};
+} & CreatorMetadata;
 
 type EventLinkEntry = {
   id: string;
@@ -140,13 +146,14 @@ type EventLinkEntry = {
   streamKey: string | null;
   position: number;
   createdAt: string;
-};
+} & CreatorMetadata;
 
 type LinkEntryDraft = {
   id: string | null;
   url: string;
   streamKey: string;
-};
+  legacyParentValue?: boolean;
+} & Partial<CreatorMetadata>;
 
 type EventTimeField = "clientArrivalTime" | "startTime" | "endTime" | "endOfDayTime";
 
@@ -159,7 +166,7 @@ type EventDocument = {
   fileType: string | null;
   fileSize: number | null;
   createdAt: string;
-};
+} & CreatorMetadata;
 
 type EventDocumentGroup = {
   id: string;
@@ -167,7 +174,7 @@ type EventDocumentGroup = {
   label: string;
   createdAt: string;
   files: EventDocument[];
-};
+} & CreatorMetadata;
 
 type DocumentPreview = {
   file: EventDocument;
@@ -1019,6 +1026,10 @@ function createLinkEntryDrafts(link: EventLink, isPlatform: boolean) {
           streamKey: link.streamKey,
           position: 0,
           createdAt: link.createdAt,
+          createdByProfileId: link.createdByProfileId,
+          createdByRole: link.createdByRole,
+          createdByName: link.createdByName,
+          legacyParentValue: true,
         }]
       : [];
 
@@ -1027,6 +1038,10 @@ function createLinkEntryDrafts(link: EventLink, isPlatform: boolean) {
       id: entry.id,
       url: entry.url ?? "",
       streamKey: entry.streamKey ?? "",
+      legacyParentValue: "legacyParentValue" in entry ? Boolean(entry.legacyParentValue) : false,
+      createdByProfileId: entry.createdByProfileId ?? null,
+      createdByRole: entry.createdByRole ?? null,
+      createdByName: entry.createdByName ?? null,
     })),
     isPlatform,
   );
@@ -1150,6 +1165,32 @@ function getPermissionsForRole(role: UserRole): AppPermissions {
   };
 }
 
+function mapCreatorMetadata(row: {
+  created_by_profile_id?: string | null;
+  created_by_role?: string | null;
+  created_by_name?: string | null;
+}): CreatorMetadata {
+  return {
+    createdByProfileId: row.created_by_profile_id ?? null,
+    createdByRole: row.created_by_role ? normalizeUserRole(row.created_by_role) : null,
+    createdByName: row.created_by_name ?? null,
+  };
+}
+
+function getCreatorInsertPayload(profile: UserProfile | null) {
+  return {
+    created_by_profile_id: profile?.id ?? null,
+    created_by_role: profile?.role ?? null,
+    created_by_name: getProfileDisplayName(profile),
+  };
+}
+
+function canManageCreatedEntity(permissions: AppPermissions, profile: UserProfile | null, entity: CreatorMetadata) {
+  if (permissions.canManageEvents) return true;
+  if (!permissions.canManageOperational || !profile?.id) return false;
+  return entity.createdByProfileId === profile.id && entity.createdByRole === "team";
+}
+
 function mapEventActivityLog(row: EventActivityLogRow): EventActivityLog {
   return {
     id: row.id,
@@ -1171,6 +1212,7 @@ function mapEventOptionItem(row: EventOptionItemRow): EventOptionItem {
     optionId: row.option_id,
     label: row.label,
     createdAt: row.created_at,
+    ...mapCreatorMetadata(row),
   };
 }
 
@@ -1184,6 +1226,7 @@ function mapEventDocument(row: EventDocumentRow): EventDocument {
     fileType: row.file_type,
     fileSize: row.file_size,
     createdAt: row.created_at,
+    ...mapCreatorMetadata(row),
   };
 }
 
@@ -1193,6 +1236,7 @@ function mapEventDocumentGroup(row: EventDocumentGroupRow): EventDocumentGroup {
     eventId: row.event_id,
     label: row.label,
     createdAt: row.created_at,
+    ...mapCreatorMetadata(row),
     files: [],
   };
 }
@@ -1211,6 +1255,7 @@ function mapEvent(row: EventQueryRow): ProductionEvent {
       completedByInitials: option.completed_by_initials ?? null,
       completedAt: option.completed_at ?? null,
       createdAt: option.created_at,
+      ...mapCreatorMetadata(option),
       items: [],
     }));
 
@@ -1224,6 +1269,7 @@ function mapEvent(row: EventQueryRow): ProductionEvent {
       streamKey: link.stream_key ?? null,
       status: link.status,
       createdAt: link.created_at,
+      ...mapCreatorMetadata(link),
       entries: [],
     }));
 
@@ -1259,6 +1305,7 @@ function mapEventLinkEntry(row: EventLinkEntryRow): EventLinkEntry {
     streamKey: row.stream_key,
     position: row.position,
     createdAt: row.created_at,
+    ...mapCreatorMetadata(row),
   };
 }
 
@@ -2067,6 +2114,7 @@ export default function Home() {
             label: option.label,
             status: "incomplete" as CompletionStatus,
             details: option.details,
+            ...getCreatorInsertPayload(profile),
           })),
         )
         .select();
@@ -2080,6 +2128,7 @@ export default function Home() {
       return splitStoredDetails(defaultOption?.details ?? "").map((label) => ({
         option_id: option.id,
         label,
+        ...getCreatorInsertPayload(profile),
       }));
     });
 
@@ -2240,6 +2289,7 @@ export default function Home() {
               label,
               status: "incomplete" as CompletionStatus,
               details: defaultOption?.details ?? "",
+              ...getCreatorInsertPayload(profile),
             };
           }),
         )
@@ -2252,6 +2302,7 @@ export default function Home() {
         return splitStoredDetails(defaultOption?.details ?? "").map((label) => ({
           option_id: option.id,
           label,
+          ...getCreatorInsertPayload(profile),
         }));
       });
 
@@ -2366,6 +2417,7 @@ export default function Home() {
           completed_by_label: option.completedByLabel,
           completed_by_initials: option.completedByInitials,
           completed_at: option.completedAt,
+          ...getCreatorInsertPayload(profile),
         })
         .select()
         .single();
@@ -2377,6 +2429,7 @@ export default function Home() {
           option.items.map((item) => ({
             option_id: duplicatedOption.id,
             label: item.label,
+            ...getCreatorInsertPayload(profile),
           })),
         );
 
@@ -2393,6 +2446,7 @@ export default function Home() {
           url: link.url,
           stream_key: link.streamKey,
           status: link.status,
+          ...getCreatorInsertPayload(profile),
         })
         .select()
         .single();
@@ -2422,6 +2476,7 @@ export default function Home() {
             url: entry.url,
             stream_key: entry.streamKey,
             position: entry.position ?? position,
+            ...getCreatorInsertPayload(profile),
           })),
         );
 
@@ -2434,6 +2489,7 @@ export default function Home() {
         sourceEvent.documentGroups.map((group) => ({
           event_id: duplicatedEvent.id,
           label: group.label,
+          ...getCreatorInsertPayload(profile),
         })),
       );
 
@@ -2730,7 +2786,9 @@ export default function Home() {
     const nextDrafts = getPersistableLinkEntryDrafts(drafts, isPlatform);
     const existingEntryIds = new Set(link.entries.map((entry) => entry.id));
     const nextExistingEntryIds = new Set(nextDrafts.map((draft) => draft.id).filter((id): id is string => Boolean(id)));
-    const deletedEntryIds = link.entries.map((entry) => entry.id).filter((entryId) => !nextExistingEntryIds.has(entryId));
+    const deletedEntryIds = link.entries
+      .filter((entry) => !nextExistingEntryIds.has(entry.id) && canManageCreatedEntity(permissions, profile, entry))
+      .map((entry) => entry.id);
     const nextEntries: EventLinkEntry[] = [];
 
     if (deletedEntryIds.length > 0) {
@@ -2750,6 +2808,12 @@ export default function Home() {
       };
 
       if (draft.id && existingEntryIds.has(draft.id)) {
+        const existingEntry = link.entries.find((entry) => entry.id === draft.id);
+        if (existingEntry && !canManageCreatedEntity(permissions, profile, existingEntry)) {
+          nextEntries.push(existingEntry);
+          continue;
+        }
+
         const { data, error: updateEntryError } = await supabase
           .from("event_link_entries")
           .update(entryPayload)
@@ -2760,11 +2824,19 @@ export default function Home() {
         if (updateEntryError) throw updateEntryError;
         nextEntries.push(mapEventLinkEntry(data));
       } else {
+        const entryCreatorPayload = draft.legacyParentValue
+          ? {
+              created_by_profile_id: draft.createdByProfileId ?? null,
+              created_by_role: draft.createdByRole ?? null,
+              created_by_name: draft.createdByName ?? null,
+            }
+          : getCreatorInsertPayload(profile);
         const { data, error: insertEntryError } = await supabase
           .from("event_link_entries")
           .insert({
             link_id: link.id,
             ...entryPayload,
+            ...entryCreatorPayload,
           })
           .select()
           .single();
@@ -2853,6 +2925,7 @@ export default function Home() {
         label: nextLabel,
         status: "incomplete",
         details: null,
+        ...getCreatorInsertPayload(profile),
       })
       .select()
       .single();
@@ -2870,6 +2943,7 @@ export default function Home() {
       completedByInitials: data.completed_by_initials ?? null,
       completedAt: data.completed_at ?? null,
       createdAt: data.created_at,
+      ...mapCreatorMetadata(data),
       items: [],
     };
 
@@ -2898,6 +2972,12 @@ export default function Home() {
 
   async function deleteEventOption(option: EventOption) {
     assertCanManageOperational();
+    if (!canManageCreatedEntity(permissions, profile, option)) {
+      throw new Error("Vous ne pouvez supprimer que vos propres options.");
+    }
+    if (!permissions.canManageEvents && option.items.some((item) => !canManageCreatedEntity(permissions, profile, item))) {
+      throw new Error("Cette option contient des notes créées par un admin.");
+    }
     if (!supabase) {
       throw new Error("Configuration Supabase manquante.");
     }
@@ -2929,6 +3009,9 @@ export default function Home() {
 
   async function renameEventOption(option: EventOption, label: string) {
     assertCanManageOperational();
+    if (!canManageCreatedEntity(permissions, profile, option)) {
+      throw new Error("Vous ne pouvez renommer que vos propres options.");
+    }
     if (!supabase) {
       throw new Error("Configuration Supabase manquante.");
     }
@@ -2984,6 +3067,7 @@ export default function Home() {
       .insert({
         option_id: option.id,
         label: nextLabel,
+        ...getCreatorInsertPayload(profile),
       })
       .select()
       .single();
@@ -3025,6 +3109,9 @@ export default function Home() {
 
   async function deleteEventOptionItem(option: EventOption, optionItem: EventOptionItem) {
     assertCanManageOperational();
+    if (!canManageCreatedEntity(permissions, profile, optionItem)) {
+      throw new Error("Vous ne pouvez supprimer que vos propres notes.");
+    }
     if (!supabase) {
       throw new Error("Configuration Supabase manquante.");
     }
@@ -3082,6 +3169,7 @@ export default function Home() {
         label: nextLabel,
         url: nextUrl || null,
         status: nextUrl ? "available" : "missing",
+        ...getCreatorInsertPayload(profile),
       })
       .select()
       .single();
@@ -3096,6 +3184,7 @@ export default function Home() {
       streamKey: data.stream_key ?? null,
       status: data.status,
       createdAt: data.created_at,
+      ...mapCreatorMetadata(data),
       entries: [],
     };
 
@@ -3124,6 +3213,12 @@ export default function Home() {
 
   async function deleteEventLink(link: EventLink) {
     assertCanManageOperational();
+    if (!canManageCreatedEntity(permissions, profile, link)) {
+      throw new Error("Vous ne pouvez supprimer que vos propres liens.");
+    }
+    if (!permissions.canManageEvents && link.entries.some((entry) => !canManageCreatedEntity(permissions, profile, entry))) {
+      throw new Error("Ce lien contient des entrées créées par un admin.");
+    }
     if (!supabase) {
       throw new Error("Configuration Supabase manquante.");
     }
@@ -3155,6 +3250,9 @@ export default function Home() {
 
   async function renameEventLink(link: EventLink, label: string) {
     assertCanManageOperational();
+    if (!canManageCreatedEntity(permissions, profile, link)) {
+      throw new Error("Vous ne pouvez renommer que vos propres liens.");
+    }
     if (!supabase) {
       throw new Error("Configuration Supabase manquante.");
     }
@@ -3208,6 +3306,7 @@ export default function Home() {
     const insertPayload = {
       event_id: eventId,
       label: nextLabel,
+      ...getCreatorInsertPayload(profile),
     };
 
     const { data, error: insertError } = await supabase
@@ -3258,6 +3357,9 @@ export default function Home() {
 
   async function renameEventDocumentGroup(group: EventDocumentGroup, label: string) {
     assertCanManageOperational();
+    if (!canManageCreatedEntity(permissions, profile, group)) {
+      throw new Error("Vous ne pouvez renommer que vos propres documents.");
+    }
     if (!supabase) {
       throw new Error("Configuration Supabase manquante.");
     }
@@ -3323,6 +3425,7 @@ export default function Home() {
         file_path: filePath,
         file_type: file.type || null,
         file_size: file.size,
+        ...getCreatorInsertPayload(profile),
       })
       .select()
       .single();
@@ -3366,6 +3469,12 @@ export default function Home() {
 
   async function deleteEventDocumentGroup(group: EventDocumentGroup) {
     assertCanManageOperational();
+    if (!canManageCreatedEntity(permissions, profile, group)) {
+      throw new Error("Vous ne pouvez supprimer que vos propres groupes de documents.");
+    }
+    if (!permissions.canManageEvents && group.files.some((file) => !canManageCreatedEntity(permissions, profile, file))) {
+      throw new Error("Ce groupe contient des fichiers ajoutés par un admin.");
+    }
     if (!supabase) {
       throw new Error("Configuration Supabase manquante.");
     }
@@ -3402,6 +3511,9 @@ export default function Home() {
 
   async function deleteEventDocument(document: EventDocument) {
     assertCanManageOperational();
+    if (!canManageCreatedEntity(permissions, profile, document)) {
+      throw new Error("Vous ne pouvez supprimer que vos propres fichiers.");
+    }
     if (!supabase) {
       throw new Error("Configuration Supabase manquante.");
     }
@@ -3875,6 +3987,7 @@ export default function Home() {
               onTimelineTimeEditStart={startTimelineTimeEditing}
               onTimelineTimeEditEnd={endTimelineTimeEditing}
               permissions={permissions}
+              profile={profile}
             />
           )}
 
@@ -5668,6 +5781,7 @@ function ProductionDetail({
   onTimelineTimeEditStart,
   onTimelineTimeEditEnd,
   permissions,
+  profile,
 }: {
   event: ProductionEvent;
   previousEvent: ProductionEvent | null;
@@ -5698,6 +5812,7 @@ function ProductionDetail({
   onTimelineTimeEditStart: (saveTime: () => Promise<void>) => void;
   onTimelineTimeEditEnd: () => void;
   permissions: AppPermissions;
+  profile: UserProfile | null;
 }) {
   const [contextSelection, setContextSelection] = useState<ContextSelection>(null);
   const [addForm, setAddForm] = useState<ItemKind | null>(null);
@@ -6147,6 +6262,8 @@ function ProductionDetail({
                 const showOptionCompletedInitials = Boolean(optionCompletedInitials);
                 const isSelectedOption = contextSelection?.type === "option" && contextSelection.optionId === option.id;
                 const isConfirmingDelete = confirmDelete?.type === "option" && confirmDelete.optionId === option.id;
+                const canManageOptionStructure = canManageCreatedEntity(permissions, profile, option);
+                const canDeleteOption = canManageOptionStructure && (permissions.canManageEvents || option.items.every((item) => canManageCreatedEntity(permissions, profile, item)));
                 return (
                   <div
                     key={option.id}
@@ -6192,7 +6309,7 @@ function ProductionDetail({
                             </>
                           )}
                         </button>
-                        {permissions.canManageOperational && (
+                        {canDeleteOption && (
                           <button
                             onClick={(event) => {
                               event.stopPropagation();
@@ -6239,6 +6356,8 @@ function ProductionDetail({
                 const isSelectedLink = contextSelection?.type === "link" && contextSelection.linkId === link.id;
                 const linkTone = getLinkTone(getLinkState(link));
                 const isConfirmingDelete = confirmDelete?.type === "link" && confirmDelete.linkId === link.id;
+                const canManageLinkStructure = canManageCreatedEntity(permissions, profile, link);
+                const canDeleteLink = canManageLinkStructure && (permissions.canManageEvents || link.entries.every((entry) => canManageCreatedEntity(permissions, profile, entry)));
                 return (
                   <div
                     key={link.id}
@@ -6265,7 +6384,7 @@ function ProductionDetail({
                           <span className={cn("min-w-0 flex-1 truncate pr-5 text-base font-semibold", linkTone.text)}>{link.label}</span>
                         </button>
                         <ExternalLink className="mr-8 hidden h-4 w-4 shrink-0 text-sky-400 sm:block" />
-                        {permissions.canManageOperational && (
+                        {canDeleteLink && (
                           <button
                             onClick={(event) => {
                               event.stopPropagation();
@@ -6312,6 +6431,9 @@ function ProductionDetail({
                 const documentTone = getDocumentTone(group.files.length > 0);
                 const isSelectedDocument = contextSelection?.type === "document" && contextSelection.groupId === group.id;
                 const isConfirmingDelete = confirmDelete?.type === "document" && confirmDelete.groupId === group.id;
+                const canManageDocumentGroupStructure = canManageCreatedEntity(permissions, profile, group);
+                const canDeleteDocumentGroup =
+                  canManageDocumentGroupStructure && (permissions.canManageEvents || group.files.every((file) => canManageCreatedEntity(permissions, profile, file)));
                 return (
                   <div
                     key={group.id}
@@ -6340,7 +6462,7 @@ function ProductionDetail({
                           <Icon className={cn("h-4 w-4 shrink-0 sm:h-5 sm:w-5", documentTone.icon)} />
                           <span className={cn("min-w-0 flex-1 truncate pr-5 text-base font-semibold", documentTone.text)}>{group.label}</span>
                         </button>
-                        {permissions.canManageOperational && (
+                        {canDeleteDocumentGroup && (
                           <button
                             onClick={(buttonEvent) => {
                               buttonEvent.stopPropagation();
@@ -6380,6 +6502,7 @@ function ProductionDetail({
             onOpenDocument={onOpenDocument}
             onDownloadDocument={onDownloadDocument}
             permissions={permissions}
+            profile={profile}
           />
         </div>
       </div>
@@ -7026,6 +7149,7 @@ function ContextDetailBlock({
   onOpenDocument,
   onDownloadDocument,
   permissions,
+  profile,
 }: {
   event: ProductionEvent;
   selection: ContextSelection;
@@ -7042,6 +7166,7 @@ function ContextDetailBlock({
   onOpenDocument: (document: EventDocument) => Promise<void>;
   onDownloadDocument: (document: EventDocument) => Promise<void>;
   permissions: AppPermissions;
+  profile: UserProfile | null;
 }) {
   const selectedOption = selection?.type === "option" ? event.options.find((option) => option.id === selection.optionId) ?? null : null;
   const selectedLink = selection?.type === "link" ? event.links.find((link) => link.id === selection.linkId) ?? null : null;
@@ -7051,8 +7176,11 @@ function ContextDetailBlock({
   const selectedDocumentGroupId = selectedDocumentGroup?.id ?? "";
   const selectedLinkIsPlatform = selectedLink ? isPlatformLink(selectedLink) : false;
   const canEdit = permissions.canManageOperational;
+  const canRenameSelectedOption = selectedOption ? canManageCreatedEntity(permissions, profile, selectedOption) : false;
+  const canRenameSelectedLink = selectedLink ? canManageCreatedEntity(permissions, profile, selectedLink) : false;
+  const canRenameSelectedDocumentGroup = selectedDocumentGroup ? canManageCreatedEntity(permissions, profile, selectedDocumentGroup) : false;
   const [linkEntryDrafts, setLinkEntryDrafts] = useState<LinkEntryDraft[]>(() => selectedLink ? createLinkEntryDrafts(selectedLink, selectedLinkIsPlatform) : []);
-  const [lastSavedLinkEntrySignature, setLastSavedLinkEntrySignature] = useState(() => selectedLink ? serializeLinkEntries(selectedLink.entries, selectedLinkIsPlatform) : "[]");
+  const [lastSavedLinkEntrySignature, setLastSavedLinkEntrySignature] = useState(() => selectedLink ? serializeLinkEntryDrafts(createLinkEntryDrafts(selectedLink, selectedLinkIsPlatform), selectedLinkIsPlatform) : "[]");
   const [savingLink, setSavingLink] = useState(false);
   const [linkSaveError, setLinkSaveError] = useState<string | null>(null);
   const [copiedLinkField, setCopiedLinkField] = useState<string | null>(null);
@@ -7070,8 +7198,9 @@ function ContextDetailBlock({
   const hasUnsavedLinkChanges = selectedLink ? linkEntryDraftSignature !== lastSavedLinkEntrySignature : false;
 
   useEffect(() => {
-    setLinkEntryDrafts(selectedLink ? createLinkEntryDrafts(selectedLink, selectedLinkIsPlatform) : []);
-    setLastSavedLinkEntrySignature(selectedLink ? serializeLinkEntries(selectedLink.entries, selectedLinkIsPlatform) : "[]");
+    const nextDrafts = selectedLink ? createLinkEntryDrafts(selectedLink, selectedLinkIsPlatform) : [];
+    setLinkEntryDrafts(nextDrafts);
+    setLastSavedLinkEntrySignature(selectedLink ? serializeLinkEntryDrafts(nextDrafts, selectedLinkIsPlatform) : "[]");
     setSavingLink(false);
     setLinkSaveError(null);
     setCopiedLinkField(null);
@@ -7137,10 +7266,22 @@ function ContextDetailBlock({
 
   function updateLinkEntryDraft(index: number, field: "url" | "streamKey", value: string) {
     setLinkEntryDrafts((current) => {
+      const currentDraft = current[index];
+      if (currentDraft && !canEditLinkEntryDraft(currentDraft)) return current;
       const nextDrafts = current.map((draft, draftIndex) => (
         draftIndex === index ? { ...draft, [field]: value } : draft
       ));
       return normalizeLinkEntryDrafts(nextDrafts, selectedLinkIsPlatform);
+    });
+  }
+
+  function canEditLinkEntryDraft(draft: LinkEntryDraft) {
+    if (!canEdit) return false;
+    if (!draft.id && !draft.legacyParentValue) return true;
+    return canManageCreatedEntity(permissions, profile, {
+      createdByProfileId: draft.createdByProfileId ?? null,
+      createdByRole: draft.createdByRole ?? null,
+      createdByName: draft.createdByName ?? null,
     });
   }
 
@@ -7294,18 +7435,19 @@ function ContextDetailBlock({
         <div className="link-detail-block flex w-full min-w-0 flex-col gap-3">
           <div className="top-row flex w-full min-w-0 items-center justify-between gap-3">
             <div className={cn("flex min-w-0 items-center gap-2 text-base font-semibold", linkTone.text)}>
-              <InlineEditableTitle
-                value={selectedLink.label}
-                onSave={renameSelectedLink}
-                className="truncate"
-                inputClassName="border-sky-200 text-sky-950 focus:border-sky-400"
-                editable={canEdit}
-              />
+          <InlineEditableTitle
+            value={selectedLink.label}
+            onSave={renameSelectedLink}
+            className="truncate"
+            inputClassName="border-sky-200 text-sky-950 focus:border-sky-400"
+            editable={canRenameSelectedLink}
+          />
             </div>
           </div>
           <div className="url-editor-row flex w-full min-w-0 flex-col gap-2">
             {linkEntryDrafts.map((draft, index) => {
               const entryCompleted = isLinkEntryDraftComplete(draft, selectedLinkIsPlatform);
+              const canEditEntry = canEditLinkEntryDraft(draft);
 
               return (
                 <div key={draft.id ?? `draft-${index}`} className={cn("flex w-full min-w-0 flex-col gap-2", selectedLinkIsPlatform && index > 0 && "pt-1")}>
@@ -7319,7 +7461,7 @@ function ContextDetailBlock({
                     onChange={(value) => updateLinkEntryDraft(index, "url", value)}
                     onCopy={() => void copyLinkValue(draft.url, getCopiedLinkField(index, "url"))}
                     openable
-                    editable={canEdit}
+                    editable={canEditEntry}
                   />
                   {selectedLinkIsPlatform && (
                     <LinkValueRow
@@ -7331,7 +7473,7 @@ function ContextDetailBlock({
                       completed={entryCompleted}
                       onChange={(value) => updateLinkEntryDraft(index, "streamKey", value)}
                       onCopy={() => void copyLinkValue(draft.streamKey, getCopiedLinkField(index, "streamKey"))}
-                      editable={canEdit}
+                      editable={canEditEntry}
                     />
                   )}
                 </div>
@@ -7364,7 +7506,7 @@ function ContextDetailBlock({
                 onSave={renameSelectedDocumentGroup}
                 className="truncate"
                 inputClassName="border-amber-200 text-amber-950 focus:border-amber-400"
-                editable={canEdit}
+                editable={canRenameSelectedDocumentGroup}
               />
             </div>
           </div>
@@ -7406,6 +7548,7 @@ function ContextDetailBlock({
             <div className="flex flex-col gap-2">
               {selectedDocumentGroup.files.map((file) => {
                 const FileIcon = getDocumentFileIcon(file);
+                const canDeleteFile = canManageCreatedEntity(permissions, profile, file);
                 return (
                   <div key={file.id} data-no-event-swipe className="flex w-full min-w-0 items-center gap-2">
                     <div className={cn("group inline-flex min-h-9 min-w-0 flex-1 items-center gap-2 rounded-full border px-3 py-1.5", documentTone.surface, documentTone.border)}>
@@ -7419,7 +7562,7 @@ function ContextDetailBlock({
                         <span className={cn("min-w-0 truncate text-base font-semibold", documentTone.text)}>{file.fileName}</span>
                         <span className="shrink-0 text-base font-medium text-amber-700/70">{formatFileSize(file.fileSize)}</span>
                       </button>
-                      {canEdit && (
+                      {canDeleteFile && (
                         <button
                           onClick={() => void removeDocumentFile(file)}
                           className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-amber-500 opacity-100 transition hover:bg-white/70 hover:text-amber-800 focus:opacity-100 [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover:opacity-100"
@@ -7474,7 +7617,7 @@ function ContextDetailBlock({
             onSave={renameSelectedOption}
             className="truncate"
             inputClassName="border-emerald-200 text-emerald-950 focus:border-emerald-400"
-            editable={canEdit}
+            editable={canRenameSelectedOption}
           />
         </div>
         {canEdit && (
@@ -7546,20 +7689,23 @@ function ContextDetailBlock({
               </button>
             </form>
           ) : null}
-        {selectedOption.items.map((item) => (
-          <div key={item.id} className={cn("group flex min-h-12 w-full items-start gap-3 rounded-xl border px-3 py-2.5", optionTone.surface, optionTone.border)}>
-            <p className={cn("min-w-0 flex-1 whitespace-pre-wrap text-base font-medium leading-relaxed", optionTone.text)}>{item.label}</p>
-            {canEdit && (
-              <button
-                onClick={() => void removeOptionItem(item)}
-                className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-emerald-500 opacity-100 transition hover:bg-white/70 hover:text-emerald-800 focus:opacity-100 [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover:opacity-100"
-                aria-label="Supprimer cette note"
-              >
-                <X className="h-3.5 w-3.5" />
-              </button>
-            )}
-          </div>
-        ))}
+        {selectedOption.items.map((item) => {
+          const canDeleteNote = canManageCreatedEntity(permissions, profile, item);
+          return (
+            <div key={item.id} className={cn("group flex min-h-12 w-full items-start gap-3 rounded-xl border px-3 py-2.5", optionTone.surface, optionTone.border)}>
+              <p className={cn("min-w-0 flex-1 whitespace-pre-wrap text-base font-medium leading-relaxed", optionTone.text)}>{item.label}</p>
+              {canDeleteNote && (
+                <button
+                  onClick={() => void removeOptionItem(item)}
+                  className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-emerald-500 opacity-100 transition hover:bg-white/70 hover:text-emerald-800 focus:opacity-100 [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover:opacity-100"
+                  aria-label="Supprimer cette note"
+                >
+                  <X className="h-3.5 w-3.5" />
+                </button>
+              )}
+            </div>
+          );
+        })}
         </div>
         {optionItemError && <div className="text-base font-medium text-rose-700">{optionItemError}</div>}
       </div>

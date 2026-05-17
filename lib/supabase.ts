@@ -61,6 +61,9 @@ export type Database = {
           completed_by_label: string | null;
           completed_by_initials: string | null;
           completed_at: string | null;
+          created_by_profile_id: string | null;
+          created_by_role: string | null;
+          created_by_name: string | null;
           created_at: string;
         };
         Insert: {
@@ -74,6 +77,9 @@ export type Database = {
           completed_by_label?: string | null;
           completed_by_initials?: string | null;
           completed_at?: string | null;
+          created_by_profile_id?: string | null;
+          created_by_role?: string | null;
+          created_by_name?: string | null;
           created_at?: string;
         };
         Update: Partial<Database["public"]["Tables"]["event_options"]["Insert"]>;
@@ -84,12 +90,18 @@ export type Database = {
           id: string;
           option_id: string;
           label: string;
+          created_by_profile_id: string | null;
+          created_by_role: string | null;
+          created_by_name: string | null;
           created_at: string;
         };
         Insert: {
           id?: string;
           option_id: string;
           label: string;
+          created_by_profile_id?: string | null;
+          created_by_role?: string | null;
+          created_by_name?: string | null;
           created_at?: string;
         };
         Update: Partial<Database["public"]["Tables"]["event_option_items"]["Insert"]>;
@@ -103,6 +115,9 @@ export type Database = {
           url: string | null;
           stream_key: string | null;
           status: LinkStatus;
+          created_by_profile_id: string | null;
+          created_by_role: string | null;
+          created_by_name: string | null;
           created_at: string;
         };
         Insert: {
@@ -112,6 +127,9 @@ export type Database = {
           url?: string | null;
           stream_key?: string | null;
           status?: LinkStatus;
+          created_by_profile_id?: string | null;
+          created_by_role?: string | null;
+          created_by_name?: string | null;
           created_at?: string;
         };
         Update: Partial<Database["public"]["Tables"]["event_links"]["Insert"]>;
@@ -124,6 +142,9 @@ export type Database = {
           url: string | null;
           stream_key: string | null;
           position: number;
+          created_by_profile_id: string | null;
+          created_by_role: string | null;
+          created_by_name: string | null;
           created_at: string;
         };
         Insert: {
@@ -132,6 +153,9 @@ export type Database = {
           url?: string | null;
           stream_key?: string | null;
           position?: number;
+          created_by_profile_id?: string | null;
+          created_by_role?: string | null;
+          created_by_name?: string | null;
           created_at?: string;
         };
         Update: Partial<Database["public"]["Tables"]["event_link_entries"]["Insert"]>;
@@ -146,6 +170,9 @@ export type Database = {
           file_path: string;
           file_type: string | null;
           file_size: number | null;
+          created_by_profile_id: string | null;
+          created_by_role: string | null;
+          created_by_name: string | null;
           created_at: string;
         };
         Insert: {
@@ -156,6 +183,9 @@ export type Database = {
           file_path: string;
           file_type?: string | null;
           file_size?: number | null;
+          created_by_profile_id?: string | null;
+          created_by_role?: string | null;
+          created_by_name?: string | null;
           created_at?: string;
         };
         Update: Partial<Database["public"]["Tables"]["event_documents"]["Insert"]>;
@@ -166,12 +196,18 @@ export type Database = {
           id: string;
           event_id: string;
           label: string;
+          created_by_profile_id: string | null;
+          created_by_role: string | null;
+          created_by_name: string | null;
           created_at: string;
         };
         Insert: {
           id?: string;
           event_id: string;
           label: string;
+          created_by_profile_id?: string | null;
+          created_by_role?: string | null;
+          created_by_name?: string | null;
           created_at?: string;
         };
         Update: Partial<Database["public"]["Tables"]["event_document_groups"]["Insert"]>;
