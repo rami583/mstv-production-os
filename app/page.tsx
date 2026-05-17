@@ -1188,7 +1188,8 @@ function getCreatorInsertPayload(profile: UserProfile | null) {
 function canManageCreatedEntity(permissions: AppPermissions, profile: UserProfile | null, entity: CreatorMetadata) {
   if (permissions.canManageEvents) return true;
   if (!permissions.canManageOperational || !profile?.id) return false;
-  return entity.createdByProfileId === profile.id && entity.createdByRole === "team";
+  if (entity.createdByProfileId !== profile.id) return false;
+  return entity.createdByRole !== "admin";
 }
 
 function mapEventActivityLog(row: EventActivityLogRow): EventActivityLog {
