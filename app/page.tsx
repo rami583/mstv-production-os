@@ -9235,7 +9235,6 @@ function ExternalCalendarColorPalette({
   onChange: (value: string) => void;
   disabled?: boolean;
 }) {
-  const customInputRef = useRef<HTMLInputElement | null>(null);
   const customColor = normalizeHexColor(value) ?? "#64748b";
   const customSelected = Boolean(normalizeHexColor(value));
 
@@ -9262,30 +9261,26 @@ function ExternalCalendarColorPalette({
           </button>
         );
       })}
-      <button
-        type="button"
-        onClick={() => customInputRef.current?.click()}
-        disabled={disabled}
+      <label
         aria-label="Personnaliser"
-        aria-pressed={customSelected}
         title="Personnaliser"
         className={cn(
-          "flex h-6 w-6 items-center justify-center rounded-full transition disabled:cursor-default disabled:opacity-50",
+          "relative flex h-6 w-6 items-center justify-center overflow-hidden rounded-full transition",
+          disabled ? "cursor-default opacity-50" : "cursor-pointer",
           customSelected ? "ring-2 ring-stone-300 ring-offset-2 ring-offset-white" : "ring-0 hover:ring-2 hover:ring-stone-200 hover:ring-offset-2 hover:ring-offset-white",
         )}
         style={{ backgroundColor: customColor }}
       >
         {customSelected ? <Check className="h-3.5 w-3.5 text-white" strokeWidth={3} /> : <Palette className="h-3.5 w-3.5 text-white" strokeWidth={2.5} />}
-      </button>
-      <input
-        ref={customInputRef}
-        type="color"
-        value={customColor}
-        onChange={(event) => onChange(event.target.value)}
-        disabled={disabled}
-        className="sr-only"
-        aria-label="Couleur personnalisée"
-      />
+        <input
+          type="color"
+          value={customColor}
+          onChange={(event) => onChange(event.target.value)}
+          disabled={disabled}
+          className="absolute inset-0 h-full w-full cursor-pointer opacity-0 disabled:cursor-default"
+          aria-label="Couleur personnalisée"
+        />
+      </label>
     </div>
   );
 }
