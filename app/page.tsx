@@ -1192,6 +1192,12 @@ function canManageCreatedEntity(permissions: AppPermissions, profile: UserProfil
   return entity.createdByRole !== "admin";
 }
 
+function canManageLinkEntryEntity(permissions: AppPermissions, profile: UserProfile | null, link: EventLink, entry: CreatorMetadata) {
+  if (canManageCreatedEntity(permissions, profile, entry)) return true;
+  if (entry.createdByProfileId) return false;
+  return canManageCreatedEntity(permissions, profile, link);
+}
+
 function mapEventActivityLog(row: EventActivityLogRow): EventActivityLog {
   return {
     id: row.id,
@@ -2788,7 +2794,7 @@ export default function Home() {
     const existingEntryIds = new Set(link.entries.map((entry) => entry.id));
     const nextExistingEntryIds = new Set(nextDrafts.map((draft) => draft.id).filter((id): id is string => Boolean(id)));
     const deletedEntryIds = link.entries
-      .filter((entry) => !nextExistingEntryIds.has(entry.id) && canManageCreatedEntity(permissions, profile, entry))
+      .filter((entry) => !nextExistingEntryIds.has(entry.id) && canManageLinkEntryEntity(permissions, profile, link, entry))
       .map((entry) => entry.id);
     const nextEntries: EventLinkEntry[] = [];
 
@@ -2810,7 +2816,7 @@ export default function Home() {
 
       if (draft.id && existingEntryIds.has(draft.id)) {
         const existingEntry = link.entries.find((entry) => entry.id === draft.id);
-        if (existingEntry && !canManageCreatedEntity(permissions, profile, existingEntry)) {
+        if (existingEntry && !canManageLinkEntryEntity(permissions, profile, link, existingEntry)) {
           nextEntries.push(existingEntry);
           continue;
         }
@@ -7277,9 +7283,10 @@ function ContextDetailBlock({
   }
 
   function canEditLinkEntryDraft(draft: LinkEntryDraft) {
+    if (!selectedLink) return false;
     if (!canEdit) return false;
     if (!draft.id && !draft.legacyParentValue) return true;
-    return canManageCreatedEntity(permissions, profile, {
+    return canManageLinkEntryEntity(permissions, profile, selectedLink, {
       createdByProfileId: draft.createdByProfileId ?? null,
       createdByRole: draft.createdByRole ?? null,
       createdByName: draft.createdByName ?? null,
