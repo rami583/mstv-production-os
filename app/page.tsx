@@ -5381,7 +5381,7 @@ function CalendarMonthGrid({
         const schoolHolidayMarker = markers.find((marker) => marker.type === "schoolHoliday");
         const markerLabel = markers.map((marker) => marker.label).join(" • ");
         const dayDots = [
-          publicHolidayMarker ? { key: "public-holiday", className: "bg-sky-400/80" } : null,
+          publicHolidayMarker ? { key: "public-holiday", className: "bg-emerald-400/80" } : null,
           schoolHolidayMarker ? { key: "school-holiday", className: "bg-amber-400/80" } : null,
           ...dayEvents.slice(0, 4).map((event) => ({ key: event.id, className: "bg-[#bb2720]" })),
         ].filter(Boolean).slice(0, 4) as { key: string; className: string }[];
@@ -5397,7 +5397,7 @@ function CalendarMonthGrid({
             className={cn(
               "group flex h-[70px] flex-col items-center justify-start gap-1 bg-white/35 px-1 py-2.5 transition hover:bg-white/80 sm:h-[88px] sm:py-3 lg:h-[clamp(72px,9svh,112px)] lg:px-2 lg:py-4",
               schoolHolidayMarker && "bg-amber-50/60 hover:bg-amber-50/85",
-              publicHolidayMarker && "bg-sky-50/70 hover:bg-sky-50/90",
+              publicHolidayMarker && "bg-emerald-50/70 hover:bg-emerald-50/90",
               !isLastRow && "border-b border-stone-200/45",
               !interactive && "pointer-events-none",
             )}
@@ -5415,7 +5415,7 @@ function CalendarMonthGrid({
               </span>
               {markers.length > 0 && (
                 <span className="mt-1 hidden min-w-0 flex-wrap justify-end gap-1 lg:flex">
-                  {publicHolidayMarker && <span className="h-1.5 w-1.5 rounded-full bg-sky-400/80" />}
+                  {publicHolidayMarker && <span className="h-1.5 w-1.5 rounded-full bg-emerald-400/80" />}
                   {schoolHolidayMarker && <span className="h-1.5 w-1.5 rounded-full bg-amber-400/80" />}
                 </span>
               )}
@@ -5534,13 +5534,13 @@ function SelectedDayEvents({
             key={`${marker.type}-${marker.label}-${marker.date ?? marker.start}`}
             className={cn(
               "relative grid min-h-20 w-full grid-cols-[3px_1fr] items-center gap-4 rounded-xl bg-white/70 px-4 py-4 text-left lg:gap-5 lg:px-5",
-              isPublicHoliday ? "bg-sky-50/80" : "bg-amber-50/80",
+              isPublicHoliday ? "bg-emerald-50/80" : "bg-amber-50/80",
             )}
           >
-            <span className={cn("h-full min-h-14 rounded-full", isPublicHoliday ? "bg-sky-400" : "bg-amber-400")} />
+            <span className={cn("h-full min-h-14 rounded-full", isPublicHoliday ? "bg-emerald-400" : "bg-amber-400")} />
             <span className="min-w-0">
-              <span className={cn("block text-base font-semibold leading-snug", isPublicHoliday ? "text-sky-950" : "text-amber-950")}>{marker.label}</span>
-              <span className={cn("block truncate text-base font-medium", isPublicHoliday ? "text-sky-600" : "text-amber-700")}>
+              <span className={cn("block text-base font-semibold leading-snug", isPublicHoliday ? "text-emerald-950" : "text-amber-950")}>{marker.label}</span>
+              <span className={cn("block truncate text-base font-medium", isPublicHoliday ? "text-emerald-700" : "text-amber-700")}>
                 {isPublicHoliday ? "Jour férié" : "Vacances scolaires Zone C"}
               </span>
             </span>
