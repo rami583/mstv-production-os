@@ -74,6 +74,8 @@ type EventDocumentRow = Database["public"]["Tables"]["event_documents"]["Row"];
 type EventDocumentGroupRow = Database["public"]["Tables"]["event_document_groups"]["Row"];
 type EventActivityLogRow = Database["public"]["Tables"]["event_activity_log"]["Row"];
 type ProfileRow = Database["public"]["Tables"]["profiles"]["Row"];
+type ExternalCalendarRow = Database["public"]["Tables"]["external_calendars"]["Row"];
+type ExternalCalendarEventRow = Database["public"]["Tables"]["external_calendar_events"]["Row"];
 
 type UserRole = "admin" | "team";
 
@@ -81,6 +83,10 @@ type EventQueryRow = EventRow & {
   event_options: EventOptionRow[] | null;
   event_links: EventLinkRow[] | null;
   event_documents?: EventDocumentRow[] | null;
+};
+
+type ExternalCalendarEventQueryRow = ExternalCalendarEventRow & {
+  external_calendars: ExternalCalendarRow | null;
 };
 
 type UserProfile = {
@@ -197,6 +203,32 @@ type EventActivityLog = {
   createdAt: string;
 };
 
+type ExternalCalendar = {
+  id: string;
+  name: string;
+  icsUrl: string;
+  color: string | null;
+  visibility: string;
+  createdAt: string;
+};
+
+type ExternalCalendarEvent = {
+  id: string;
+  externalCalendarId: string;
+  externalEventId: string;
+  title: string;
+  description: string | null;
+  location: string | null;
+  startTime: string;
+  endTime: string | null;
+  allDay: boolean;
+  rawEvent: Record<string, unknown> | null;
+  lastSyncedAt: string | null;
+  calendarName: string;
+  calendarColor: string | null;
+  calendarVisibility: string;
+};
+
 type ProductionEvent = {
   id: string;
   clientName: string;
@@ -301,6 +333,8 @@ const realtimeTableNames = [
   "event_activity_log",
   "profiles",
   "team_members",
+  "external_calendars",
+  "external_calendar_events",
 ] as const;
 
 type DuplicateEventRequest = {
@@ -393,6 +427,216 @@ function isDateKeyInMarker(dateKey: string, marker: CalendarMarker) {
 
 function getCalendarMarkers(dateKey: string) {
   return [...publicHolidays, ...schoolHolidaysZoneC].filter((marker) => isDateKeyInMarker(dateKey, marker));
+}
+
+function getExternalCalendarTone(color: string | null) {
+  const normalizedColor = normalizeLabel(color ?? "");
+  if (normalizedColor.includes("violet") || normalizedColor.includes("direction") || normalizedColor.includes("indigo")) {
+    return {
+      dot: "bg-indigo-400/85",
+      bg: "bg-indigo-50/80",
+      stripe: "bg-indigo-400",
+      title: "text-indigo-950",
+      meta: "text-indigo-700",
+    };
+  }
+
+  if (normalizedColor.includes("blue") || normalizedColor.includes("bleu") || normalizedColor.includes("sky")) {
+    return {
+      dot: "bg-sky-400/85",
+      bg: "bg-sky-50/80",
+      stripe: "bg-sky-400",
+      title: "text-sky-950",
+      meta: "text-sky-700",
+    };
+  }
+
+  return {
+    dot: "bg-indigo-400/85",
+    bg: "bg-indigo-50/80",
+    stripe: "bg-indigo-400",
+    title: "text-indigo-950",
+    meta: "text-indigo-700",
+  };
+}
+
+function getExternalEventDateKey(event: ExternalCalendarEvent) {
+  if (event.allDay) return event.startTime.slice(0, 10);
+  return formatDateKey(new Date(event.startTime));
+}
+
+function formatExternalEventTimeRange(event: ExternalCalendarEvent) {
+  if (event.allDay) return "Toute la journée";
+
+  const formatter = new Intl.DateTimeFormat("fr-FR", {
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+  const startDate = new Date(event.startTime);
+  const endDate = event.endTime ? new Date(event.endTime) : null;
+  if (Number.isNaN(startDate.getTime())) return "";
+  const startLabel = formatter.format(startDate).replace(":", "h");
+  if (!endDate || Number.isNaN(endDate.getTime())) return startLabel;
+  return `${startLabel} → ${formatter.format(endDate).replace(":", "h")}`;
+}
+
+function unescapeIcsValue(value: string) {
+  return value
+    .replace(/\\n/gi, "\n")
+    .replace(/\\,/g, ",")
+    .replace(/\\;/g, ";")
+    .replace(/\\\\/g, "\\")
+    .trim();
+}
+
+function unfoldIcsLines(text: string) {
+  return text
+    .replace(/\r\n/g, "\n")
+    .replace(/\r/g, "\n")
+    .split("\n")
+    .reduce<string[]>((lines, line) => {
+      if (/^[ \t]/.test(line) && lines.length > 0) {
+        lines[lines.length - 1] += line.slice(1);
+      } else {
+        lines.push(line);
+      }
+      return lines;
+    }, []);
+}
+
+function parseIcsDate(value: string, params: Record<string, string>) {
+  const isAllDay = params.VALUE?.toLocaleUpperCase("fr-FR") === "DATE" || /^\d{8}$/.test(value);
+  const dateMatch = value.match(/^(\d{4})(\d{2})(\d{2})$/);
+  if (isAllDay && dateMatch) {
+    const [, year, month, day] = dateMatch;
+    return {
+      iso: `${year}-${month}-${day}T00:00:00.000Z`,
+      allDay: true,
+    };
+  }
+
+  const dateTimeMatch = value.match(/^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})?(Z)?$/);
+  if (!dateTimeMatch) return null;
+
+  const [, year, month, day, hours, minutes, seconds = "00", utcFlag] = dateTimeMatch;
+  const parsedDate = utcFlag
+    ? new Date(`${year}-${month}-${day}T${hours}:${minutes}:${seconds}Z`)
+    : new Date(Number(year), Number(month) - 1, Number(day), Number(hours), Number(minutes), Number(seconds));
+
+  if (Number.isNaN(parsedDate.getTime())) return null;
+  return {
+    iso: parsedDate.toISOString(),
+    allDay: false,
+  };
+}
+
+function parseIcsProperty(line: string) {
+  const separatorIndex = line.indexOf(":");
+  if (separatorIndex < 0) return null;
+  const rawName = line.slice(0, separatorIndex);
+  const value = line.slice(separatorIndex + 1);
+  const [name = "", ...paramParts] = rawName.split(";");
+  const params = Object.fromEntries(
+    paramParts.map((part) => {
+      const [key = "", rawValue = ""] = part.split("=");
+      return [key.toLocaleUpperCase("fr-FR"), rawValue.replace(/^"|"$/g, "")];
+    }),
+  );
+
+  return {
+    name: name.toLocaleUpperCase("fr-FR"),
+    params,
+    value,
+  };
+}
+
+function hashIcsFallback(value: string) {
+  let hash = 0;
+  for (let index = 0; index < value.length; index += 1) {
+    hash = (hash << 5) - hash + value.charCodeAt(index);
+    hash |= 0;
+  }
+  return `generated-${Math.abs(hash)}`;
+}
+
+function parseIcsEvents(icsText: string) {
+  const lines = unfoldIcsLines(icsText);
+  const events: Array<{
+    externalEventId: string;
+    title: string;
+    description: string | null;
+    location: string | null;
+    startTime: string;
+    endTime: string | null;
+    allDay: boolean;
+    rawEvent: Record<string, unknown>;
+  }> = [];
+  let currentLines: string[] | null = null;
+
+  for (const line of lines) {
+    if (line === "BEGIN:VEVENT") {
+      currentLines = [];
+      continue;
+    }
+    if (line === "END:VEVENT") {
+      if (currentLines) {
+        const raw: Record<string, unknown> = {};
+        let uid = "";
+        let summary = "";
+        let description: string | null = null;
+        let location: string | null = null;
+        let startTime = "";
+        let endTime: string | null = null;
+        let allDay = false;
+
+        for (const eventLine of currentLines) {
+          const property = parseIcsProperty(eventLine);
+          if (!property) continue;
+          raw[property.name] = property.value;
+
+          if (property.name === "UID") uid = property.value.trim();
+          if (property.name === "SUMMARY") summary = unescapeIcsValue(property.value);
+          if (property.name === "DESCRIPTION") description = unescapeIcsValue(property.value);
+          if (property.name === "LOCATION") location = unescapeIcsValue(property.value);
+          if (property.name === "DTSTART") {
+            const parsedDate = parseIcsDate(property.value.trim(), property.params);
+            if (parsedDate) {
+              startTime = parsedDate.iso;
+              allDay = parsedDate.allDay;
+            }
+          }
+          if (property.name === "DTEND") {
+            const parsedDate = parseIcsDate(property.value.trim(), property.params);
+            if (parsedDate) {
+              endTime = parsedDate.iso;
+            }
+          }
+        }
+
+        if (startTime && summary) {
+          events.push({
+            externalEventId: uid || hashIcsFallback(`${summary}-${startTime}-${endTime ?? ""}`),
+            title: summary,
+            description,
+            location,
+            startTime,
+            endTime,
+            allDay,
+            rawEvent: raw,
+          });
+        }
+      }
+
+      currentLines = null;
+      continue;
+    }
+
+    if (currentLines) {
+      currentLines.push(line);
+    }
+  }
+
+  return events;
 }
 
 function formatTime(time: string | null) {
@@ -1316,6 +1560,36 @@ function mapEventLinkEntry(row: EventLinkEntryRow): EventLinkEntry {
   };
 }
 
+function mapExternalCalendar(row: ExternalCalendarRow): ExternalCalendar {
+  return {
+    id: row.id,
+    name: row.name,
+    icsUrl: row.ics_url,
+    color: row.color,
+    visibility: row.visibility ?? "admin",
+    createdAt: row.created_at,
+  };
+}
+
+function mapExternalCalendarEvent(row: ExternalCalendarEventQueryRow): ExternalCalendarEvent {
+  return {
+    id: row.id,
+    externalCalendarId: row.external_calendar_id,
+    externalEventId: row.external_event_id,
+    title: row.title,
+    description: row.description,
+    location: row.location,
+    startTime: row.start_time,
+    endTime: row.end_time,
+    allDay: Boolean(row.all_day),
+    rawEvent: row.raw_event,
+    lastSyncedAt: row.last_synced_at,
+    calendarName: row.external_calendars?.name ?? "Calendrier externe",
+    calendarColor: row.external_calendars?.color ?? null,
+    calendarVisibility: row.external_calendars?.visibility ?? "admin",
+  };
+}
+
 function withOptionItems(events: ProductionEvent[], items: EventOptionItem[]) {
   const itemsByOptionId = new Map<string, EventOptionItem[]>();
 
@@ -1522,6 +1796,34 @@ async function fetchProfiles() {
   return (data ?? []).map(mapUserProfile);
 }
 
+async function fetchExternalCalendars() {
+  if (!supabase) {
+    throw new Error("Configuration Supabase manquante.");
+  }
+
+  const { data, error } = await supabase
+    .from("external_calendars")
+    .select("*")
+    .order("created_at", { ascending: true });
+
+  if (error) throw error;
+  return (data ?? []).map(mapExternalCalendar);
+}
+
+async function fetchExternalCalendarEvents() {
+  if (!supabase) {
+    throw new Error("Configuration Supabase manquante.");
+  }
+
+  const { data, error } = await supabase
+    .from("external_calendar_events")
+    .select("*, external_calendars (*)")
+    .order("start_time", { ascending: true });
+
+  if (error) throw error;
+  return ((data ?? []) as ExternalCalendarEventQueryRow[]).map(mapExternalCalendarEvent);
+}
+
 export default function Home() {
   const today = useMemo(() => new Date(), []);
   const [authSession, setAuthSession] = useState<Session | null>(null);
@@ -1552,10 +1854,17 @@ export default function Home() {
   const [historyOpen, setHistoryOpen] = useState(false);
   const [trashOpen, setTrashOpen] = useState(false);
   const [userManagementOpen, setUserManagementOpen] = useState(false);
+  const [externalCalendarSettingsOpen, setExternalCalendarSettingsOpen] = useState(false);
+  const [externalCalendarDetail, setExternalCalendarDetail] = useState<ExternalCalendarEvent | null>(null);
   const [managedProfiles, setManagedProfiles] = useState<UserProfile[]>([]);
   const [managedProfilesLoading, setManagedProfilesLoading] = useState(false);
   const [managedProfilesError, setManagedProfilesError] = useState<string | null>(null);
   const [updatingProfileId, setUpdatingProfileId] = useState<string | null>(null);
+  const [externalCalendars, setExternalCalendars] = useState<ExternalCalendar[]>([]);
+  const [externalCalendarEvents, setExternalCalendarEvents] = useState<ExternalCalendarEvent[]>([]);
+  const [externalCalendarSettingsLoading, setExternalCalendarSettingsLoading] = useState(false);
+  const [externalCalendarSettingsError, setExternalCalendarSettingsError] = useState<string | null>(null);
+  const [syncingExternalCalendarId, setSyncingExternalCalendarId] = useState<string | null>(null);
   const [deletedEvents, setDeletedEvents] = useState<ProductionEvent[]>([]);
   const [trashLoading, setTrashLoading] = useState(false);
   const [trashError, setTrashError] = useState<string | null>(null);
@@ -1581,6 +1890,10 @@ export default function Home() {
   const yearLabel = String(visibleMonth.getFullYear());
   const permissions = useMemo(() => getPermissionsForRole(profile?.role ?? "team"), [profile?.role]);
   const actorName = getProfileDisplayName(profile);
+  const visibleExternalCalendarEvents = useMemo(
+    () => (permissions.canManageEvents ? externalCalendarEvents.filter((event) => event.calendarVisibility === "admin") : []),
+    [externalCalendarEvents, permissions.canManageEvents],
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -1592,6 +1905,8 @@ export default function Home() {
       if (!session) {
         setProfile(null);
         setEvents([]);
+        setExternalCalendars([]);
+        setExternalCalendarEvents([]);
         setSelectedId(null);
         setLoading(false);
         return;
@@ -1668,6 +1983,11 @@ export default function Home() {
   }, [userManagementOpen, permissions.canManageUsers]);
 
   useEffect(() => {
+    if (!externalCalendarSettingsOpen || !permissions.canManageEvents) return;
+    void refreshExternalCalendarSettings();
+  }, [externalCalendarSettingsOpen, permissions.canManageEvents]);
+
+  useEffect(() => {
     if (!authSession || !profile || !supabase) return;
 
     const currentSession = authSession;
@@ -1703,6 +2023,10 @@ export default function Home() {
             if (userManagementOpen && permissions.canManageUsers) {
               await refreshManagedProfiles();
             }
+
+            if (externalCalendarSettingsOpen && permissions.canManageEvents) {
+              await refreshExternalCalendarSettings();
+            }
           } catch (realtimeError) {
             console.warn("Realtime refresh failed", realtimeError);
           }
@@ -1736,7 +2060,7 @@ export default function Home() {
       }
       void realtimeClient.removeChannel(channel);
     };
-  }, [authSession?.user.id, profile?.id, profile?.role, trashOpen, historyOpen, selectedEvent?.id, userManagementOpen, permissions.canManageUsers]);
+  }, [authSession?.user.id, profile?.id, profile?.role, trashOpen, historyOpen, selectedEvent?.id, userManagementOpen, externalCalendarSettingsOpen, permissions.canManageUsers, permissions.canManageEvents]);
 
   useEffect(() => {
     let cancelled = false;
@@ -1809,8 +2133,14 @@ export default function Home() {
     setError(null);
 
     try {
-      const nextEvents = await fetchEvents();
+      const [nextEvents, nextExternalCalendars, nextExternalEvents] = await Promise.all([
+        fetchEvents(),
+        permissions.canManageEvents ? fetchExternalCalendars() : Promise.resolve([]),
+        permissions.canManageEvents ? fetchExternalCalendarEvents() : Promise.resolve([]),
+      ]);
       setEvents(nextEvents);
+      setExternalCalendars(nextExternalCalendars);
+      setExternalCalendarEvents(nextExternalEvents);
       setSelectedId((current) => {
         if (nextSelectedId !== undefined) return nextSelectedId;
         if (current && nextEvents.some((event) => event.id === current)) return current;
@@ -1852,6 +2182,109 @@ export default function Home() {
       setManagedProfilesError("Impossible de charger les utilisateurs.");
     } finally {
       setManagedProfilesLoading(false);
+    }
+  }
+
+  async function refreshExternalCalendarSettings() {
+    if (!permissions.canManageEvents) return;
+
+    setExternalCalendarSettingsLoading(true);
+    setExternalCalendarSettingsError(null);
+
+    try {
+      const [nextCalendars, nextEvents] = await Promise.all([
+        fetchExternalCalendars(),
+        fetchExternalCalendarEvents(),
+      ]);
+      setExternalCalendars(nextCalendars);
+      setExternalCalendarEvents(nextEvents);
+    } catch (calendarError) {
+      console.error("Failed to load external calendars. Apply supabase/migrations/023_external_calendars.sql if needed.", calendarError);
+      setExternalCalendarSettingsError("Impossible de charger les calendriers externes.");
+    } finally {
+      setExternalCalendarSettingsLoading(false);
+    }
+  }
+
+  async function createExternalCalendar(input: { name: string; icsUrl: string; color: string; visibility: string }) {
+    assertCanManageEvents();
+    if (!supabase) throw new Error("Configuration Supabase manquante.");
+
+    const { error: insertError } = await supabase
+      .from("external_calendars")
+      .insert({
+        name: input.name.trim(),
+        ics_url: input.icsUrl.trim(),
+        color: input.color,
+        visibility: input.visibility,
+      });
+
+    if (insertError) throw insertError;
+    await refreshExternalCalendarSettings();
+  }
+
+  async function updateExternalCalendar(calendar: ExternalCalendar, input: { name: string; icsUrl: string; color: string; visibility: string }) {
+    assertCanManageEvents();
+    if (!supabase) throw new Error("Configuration Supabase manquante.");
+
+    const { error: updateError } = await supabase
+      .from("external_calendars")
+      .update({
+        name: input.name.trim(),
+        ics_url: input.icsUrl.trim(),
+        color: input.color,
+        visibility: input.visibility,
+      })
+      .eq("id", calendar.id);
+
+    if (updateError) throw updateError;
+    await refreshExternalCalendarSettings();
+  }
+
+  async function syncExternalCalendar(calendar: ExternalCalendar) {
+    assertCanManageEvents();
+    if (!supabase) throw new Error("Configuration Supabase manquante.");
+    if (!calendar.icsUrl.trim()) {
+      throw new Error("Ajoutez une URL ICS avant de synchroniser.");
+    }
+
+    setSyncingExternalCalendarId(calendar.id);
+    setExternalCalendarSettingsError(null);
+
+    try {
+      const response = await fetch(calendar.icsUrl.trim(), { cache: "no-store" });
+      if (!response.ok) {
+        throw new Error(`Impossible de récupérer le calendrier ICS (${response.status}).`);
+      }
+
+      const icsText = await response.text();
+      const parsedEvents = parseIcsEvents(icsText);
+      if (parsedEvents.length === 0) {
+        throw new Error("Aucun événement lisible trouvé dans ce flux ICS.");
+      }
+
+      const now = new Date().toISOString();
+      const rows: Database["public"]["Tables"]["external_calendar_events"]["Insert"][] = parsedEvents.map((event) => ({
+        external_calendar_id: calendar.id,
+        external_event_id: event.externalEventId,
+        title: event.title,
+        description: event.description,
+        location: event.location,
+        start_time: event.startTime,
+        end_time: event.endTime,
+        all_day: event.allDay,
+        raw_event: event.rawEvent,
+        last_synced_at: now,
+      }));
+
+      const { error: upsertError } = await supabase
+        .from("external_calendar_events")
+        .upsert(rows, { onConflict: "external_calendar_id,external_event_id" });
+
+      if (upsertError) throw upsertError;
+      await refreshExternalCalendarSettings();
+    } finally {
+      setSyncingExternalCalendarId(null);
     }
   }
 
@@ -3893,6 +4326,8 @@ export default function Home() {
           onLogout={signOut}
           canManageUsers={permissions.canManageUsers}
           onOpenUserManagement={() => setUserManagementOpen(true)}
+          canManageExternalCalendars={permissions.canManageEvents}
+          onOpenExternalCalendars={() => setExternalCalendarSettingsOpen(true)}
           onImportQuote={() => {
             if (!permissions.canManageEvents) return;
             openQuoteImport();
@@ -3943,7 +4378,9 @@ export default function Home() {
           {!loading && screen === "calendar" && (
             <CalendarDashboard
               events={events}
+              externalEvents={visibleExternalCalendarEvents}
               onOpen={openEvent}
+              onOpenExternalEvent={setExternalCalendarDetail}
               visibleMonth={visibleMonth}
               selectedDateKey={selectedDateKey}
               onDeleteRequest={(event) => {
@@ -4027,6 +4464,8 @@ export default function Home() {
           onLogout={signOut}
           canManageUsers={permissions.canManageUsers}
           onOpenUserManagement={() => setUserManagementOpen(true)}
+          canManageExternalCalendars={permissions.canManageEvents}
+          onOpenExternalCalendars={() => setExternalCalendarSettingsOpen(true)}
           onGoToday={() => {
             goToday();
             setYearOverviewOpen(false);
@@ -4174,6 +4613,26 @@ export default function Home() {
         />
       )}
 
+      {externalCalendarSettingsOpen && permissions.canManageEvents && (
+        <ExternalCalendarsSheet
+          calendars={externalCalendars}
+          loading={externalCalendarSettingsLoading}
+          error={externalCalendarSettingsError}
+          syncingCalendarId={syncingExternalCalendarId}
+          onClose={() => setExternalCalendarSettingsOpen(false)}
+          onCreate={createExternalCalendar}
+          onUpdate={updateExternalCalendar}
+          onSync={async (calendar) => {
+            try {
+              await syncExternalCalendar(calendar);
+            } catch (syncError) {
+              console.error("External calendar sync failed", syncError);
+              setExternalCalendarSettingsError(syncError instanceof Error ? syncError.message : "Impossible de synchroniser ce calendrier.");
+            }
+          }}
+        />
+      )}
+
       {permanentDeleteDialogEvent && (
         <PermanentDeleteEventDialog
           event={permanentDeleteDialogEvent}
@@ -4188,6 +4647,10 @@ export default function Home() {
           onClose={() => setDocumentPreview(null)}
           onDownload={downloadEventDocument}
         />
+      )}
+
+      {externalCalendarDetail && (
+        <ExternalCalendarEventDetails event={externalCalendarDetail} onClose={() => setExternalCalendarDetail(null)} />
       )}
 
       {historyOpen && selectedEvent && (
@@ -4225,6 +4688,8 @@ function AppHeader({
   onLogout,
   canManageUsers,
   onOpenUserManagement,
+  canManageExternalCalendars,
+  onOpenExternalCalendars,
   onImportQuote,
   onSearch,
   canOpenHistory,
@@ -4255,6 +4720,8 @@ function AppHeader({
   onLogout: () => void;
   canManageUsers: boolean;
   onOpenUserManagement: () => void;
+  canManageExternalCalendars: boolean;
+  onOpenExternalCalendars: () => void;
   onImportQuote: () => void;
   onSearch: () => void;
   canOpenHistory: boolean;
@@ -4362,7 +4829,15 @@ function AppHeader({
             )}
           </div>
         )}
-        <AccountMenu profile={profile} email={email} canManageUsers={canManageUsers} onOpenUserManagement={onOpenUserManagement} onLogout={onLogout} />
+        <AccountMenu
+          profile={profile}
+          email={email}
+          canManageUsers={canManageUsers}
+          onOpenUserManagement={onOpenUserManagement}
+          canManageExternalCalendars={canManageExternalCalendars}
+          onOpenExternalCalendars={onOpenExternalCalendars}
+          onLogout={onLogout}
+        />
       </div>
     </header>
   );
@@ -4570,6 +5045,8 @@ function YearOverviewOverlay({
   onLogout,
   canManageUsers,
   onOpenUserManagement,
+  canManageExternalCalendars,
+  onOpenExternalCalendars,
   onGoToday,
   onImportQuote,
   onSearch,
@@ -4592,6 +5069,8 @@ function YearOverviewOverlay({
   onLogout: () => void;
   canManageUsers: boolean;
   onOpenUserManagement: () => void;
+  canManageExternalCalendars: boolean;
+  onOpenExternalCalendars: () => void;
   onGoToday: () => void;
   onImportQuote: () => void;
   onSearch: () => void;
@@ -4787,6 +5266,8 @@ function YearOverviewOverlay({
           onLogout={onLogout}
           canManageUsers={canManageUsers}
           onOpenUserManagement={onOpenUserManagement}
+          canManageExternalCalendars={canManageExternalCalendars}
+          onOpenExternalCalendars={onOpenExternalCalendars}
           onImportQuote={onImportQuote}
           onSearch={onSearch}
           canOpenHistory={false}
@@ -4963,7 +5444,9 @@ function YearOverviewMiniMonth({
 
 function CalendarDashboard({
   events,
+  externalEvents,
   onOpen,
+  onOpenExternalEvent,
   onDeleteRequest,
   onDuplicateRequest,
   canDeleteEvents,
@@ -4974,7 +5457,9 @@ function CalendarDashboard({
   changeMonth,
 }: {
   events: ProductionEvent[];
+  externalEvents: ExternalCalendarEvent[];
   onOpen: (id: string) => void;
+  onOpenExternalEvent: (event: ExternalCalendarEvent) => void;
   onDeleteRequest: (event: ProductionEvent) => void;
   onDuplicateRequest: (event: ProductionEvent) => void;
   canDeleteEvents: boolean;
@@ -4986,9 +5471,9 @@ function CalendarDashboard({
 }) {
   const weekdays = ["L", "M", "M", "J", "V", "S", "D"];
   const todayKey = formatDateKey(new Date());
-  const currentMonthData = useMemo(() => getCalendarMonthData(visibleMonth, events), [events, visibleMonth]);
-  const previousMonthData = useMemo(() => getCalendarMonthData(new Date(visibleMonth.getFullYear(), visibleMonth.getMonth() - 1, 1), events), [events, visibleMonth]);
-  const nextMonthData = useMemo(() => getCalendarMonthData(new Date(visibleMonth.getFullYear(), visibleMonth.getMonth() + 1, 1), events), [events, visibleMonth]);
+  const currentMonthData = useMemo(() => getCalendarMonthData(visibleMonth, events, externalEvents), [events, externalEvents, visibleMonth]);
+  const previousMonthData = useMemo(() => getCalendarMonthData(new Date(visibleMonth.getFullYear(), visibleMonth.getMonth() - 1, 1), events, externalEvents), [events, externalEvents, visibleMonth]);
+  const nextMonthData = useMemo(() => getCalendarMonthData(new Date(visibleMonth.getFullYear(), visibleMonth.getMonth() + 1, 1), events, externalEvents), [events, externalEvents, visibleMonth]);
   const currentSelectedDateKey = isDateKeyInMonth(selectedDateKey, currentMonthData)
     ? selectedDateKey
     : getPreferredDateKeyForMonth(visibleMonth, events);
@@ -5149,6 +5634,7 @@ function CalendarDashboard({
           weekdays={weekdays}
           onSelectDate={setSelectedDateKey}
           onOpen={onOpen}
+          onOpenExternalEvent={onOpenExternalEvent}
           onDeleteRequest={onDeleteRequest}
           onDuplicateRequest={onDuplicateRequest}
           canDeleteEvents={canDeleteEvents}
@@ -5164,6 +5650,7 @@ function CalendarDashboard({
           weekdays={weekdays}
           onSelectDate={setSelectedDateKey}
           onOpen={onOpen}
+          onOpenExternalEvent={onOpenExternalEvent}
           onDeleteRequest={onDeleteRequest}
           onDuplicateRequest={onDuplicateRequest}
           canDeleteEvents={canDeleteEvents}
@@ -5189,6 +5676,7 @@ function CalendarDashboard({
           weekdays={weekdays}
           onSelectDate={setSelectedDateKey}
           onOpen={onOpen}
+          onOpenExternalEvent={onOpenExternalEvent}
           onDeleteRequest={onDeleteRequest}
           onDuplicateRequest={onDuplicateRequest}
           canDeleteEvents={canDeleteEvents}
@@ -5209,6 +5697,7 @@ function CalendarMonthPage({
   weekdays,
   onSelectDate,
   onOpen,
+  onOpenExternalEvent,
   onDeleteRequest,
   onDuplicateRequest,
   canDeleteEvents,
@@ -5228,6 +5717,7 @@ function CalendarMonthPage({
   weekdays: string[];
   onSelectDate: (dateKey: string) => void;
   onOpen: (id: string) => void;
+  onOpenExternalEvent: (event: ExternalCalendarEvent) => void;
   onDeleteRequest: (event: ProductionEvent) => void;
   onDuplicateRequest: (event: ProductionEvent) => void;
   canDeleteEvents: boolean;
@@ -5243,6 +5733,7 @@ function CalendarMonthPage({
 }) {
   const selectedDay = monthData.calendarDays.find((day) => day.dateKey === selectedDateKey);
   const selectedEvents = [...(selectedDay?.events ?? [])].sort((a, b) => eventSortValue(a) - eventSortValue(b));
+  const selectedExternalEvents = [...(selectedDay?.externalEvents ?? [])].sort((a, b) => new Date(a.startTime).getTime() - new Date(b.startTime).getTime());
   const selectedMarkers = selectedDay?.markers ?? [];
 
   return (
@@ -5288,7 +5779,9 @@ function CalendarMonthPage({
         <SelectedDayEvents
           markers={selectedMarkers}
           events={selectedEvents}
+          externalEvents={selectedExternalEvents}
           onOpen={onOpen}
+          onOpenExternalEvent={onOpenExternalEvent}
           onDeleteRequest={onDeleteRequest}
           onDuplicateRequest={onDuplicateRequest}
           canDeleteEvents={canDeleteEvents}
@@ -5299,7 +5792,7 @@ function CalendarMonthPage({
   );
 }
 
-function getCalendarMonthData(monthDate: Date, events: ProductionEvent[]) {
+function getCalendarMonthData(monthDate: Date, events: ProductionEvent[], externalEvents: ExternalCalendarEvent[] = []) {
   const year = monthDate.getFullYear();
   const month = monthDate.getMonth();
   const daysInMonth = new Date(year, month + 1, 0).getDate();
@@ -5313,6 +5806,7 @@ function getCalendarMonthData(monthDate: Date, events: ProductionEvent[]) {
     return {
       day,
       events: events.filter((event) => event.date === dateKey),
+      externalEvents: externalEvents.filter((event) => getExternalEventDateKey(event) === dateKey),
       markers: getCalendarMarkers(dateKey),
       dateKey,
     };
@@ -5371,7 +5865,7 @@ function CalendarMonthGrid({
       {Array.from({ length: monthData.leadingEmptyDays }).map((_, index) => (
         <div key={`empty-${index}`} className="h-[70px] border-b border-stone-200/45 bg-white/25 sm:h-[88px] lg:h-[clamp(72px,9svh,112px)]" />
       ))}
-      {monthData.calendarDays.map(({ day, events: dayEvents, markers, dateKey }, index) => {
+      {monthData.calendarDays.map(({ day, events: dayEvents, externalEvents: dayExternalEvents, markers, dateKey }, index) => {
         const position = monthData.leadingEmptyDays + index;
         const isLastRow = position >= monthData.totalCells - 7;
         const isWeekend = position % 7 >= 5;
@@ -5383,6 +5877,7 @@ function CalendarMonthGrid({
         const dayDots = [
           publicHolidayMarker ? { key: "public-holiday", className: "bg-emerald-400/80" } : null,
           schoolHolidayMarker ? { key: "school-holiday", className: "bg-amber-400/80" } : null,
+          ...dayExternalEvents.slice(0, 4).map((event) => ({ key: `external-${event.id}`, className: getExternalCalendarTone(event.calendarColor).dot })),
           ...dayEvents.slice(0, 4).map((event) => ({ key: event.id, className: "bg-[#bb2720]" })),
         ].filter(Boolean).slice(0, 4) as { key: string; className: string }[];
 
@@ -5413,10 +5908,13 @@ function CalendarMonthGrid({
               >
                 {day}
               </span>
-              {markers.length > 0 && (
+              {(markers.length > 0 || dayExternalEvents.length > 0) && (
                 <span className="mt-1 hidden min-w-0 flex-wrap justify-end gap-1 lg:flex">
                   {publicHolidayMarker && <span className="h-1.5 w-1.5 rounded-full bg-emerald-400/80" />}
                   {schoolHolidayMarker && <span className="h-1.5 w-1.5 rounded-full bg-amber-400/80" />}
+                  {dayExternalEvents.slice(0, 2).map((event) => (
+                    <span key={`desktop-external-${event.id}`} className={cn("h-1.5 w-1.5 rounded-full", getExternalCalendarTone(event.calendarColor).dot)} />
+                  ))}
                 </span>
               )}
             </span>
@@ -5439,6 +5937,13 @@ function CalendarMonthGrid({
                 ))}
               </span>
             )}
+            {dayEvents.length === 0 && dayExternalEvents.length > 0 && (
+              <span className="hidden max-w-full gap-0.5 lg:mt-2 lg:flex lg:gap-1">
+                {dayExternalEvents.slice(0, 3).map((event) => (
+                  <span key={event.id} className={cn("h-2 w-2 shrink-0 rounded-full lg:h-2.5 lg:w-2.5", getExternalCalendarTone(event.calendarColor).dot)} />
+                ))}
+              </span>
+            )}
           </button>
         );
       })}
@@ -5452,7 +5957,9 @@ function CalendarMonthGrid({
 function SelectedDayEvents({
   markers,
   events,
+  externalEvents,
   onOpen,
+  onOpenExternalEvent,
   onDeleteRequest,
   onDuplicateRequest,
   canDeleteEvents,
@@ -5460,7 +5967,9 @@ function SelectedDayEvents({
 }: {
   markers: CalendarMarker[];
   events: ProductionEvent[];
+  externalEvents: ExternalCalendarEvent[];
   onOpen: (id: string) => void;
+  onOpenExternalEvent: (event: ExternalCalendarEvent) => void;
   onDeleteRequest: (event: ProductionEvent) => void;
   onDuplicateRequest: (event: ProductionEvent) => void;
   canDeleteEvents: boolean;
@@ -5488,7 +5997,7 @@ function SelectedDayEvents({
     }
   }, [canDeleteEvents, canDuplicateEvents, openSwipeAction]);
 
-  if (markers.length === 0 && events.length === 0) return null;
+  if (markers.length === 0 && events.length === 0 && externalEvents.length === 0) return null;
   const orderedMarkers = [...markers].sort((a, b) => {
     if (a.type === b.type) return 0;
     return a.type === "publicHoliday" ? -1 : 1;
@@ -5527,6 +6036,9 @@ function SelectedDayEvents({
           }}
         />
       ))}
+      {externalEvents.map((event) => (
+        <ExternalCalendarEventRow key={event.id} event={event} onOpen={onOpenExternalEvent} />
+      ))}
       {orderedMarkers.map((marker) => {
         const isPublicHoliday = marker.type === "publicHoliday";
         return (
@@ -5553,6 +6065,38 @@ function SelectedDayEvents({
 
 const calendarEventSwipeActionWidth = 112;
 const calendarEventFullSwipeRatio = 0.65;
+
+function ExternalCalendarEventRow({
+  event,
+  onOpen,
+}: {
+  event: ExternalCalendarEvent;
+  onOpen: (event: ExternalCalendarEvent) => void;
+}) {
+  const tone = getExternalCalendarTone(event.calendarColor);
+  const timeRange = formatExternalEventTimeRange(event);
+
+  return (
+    <button
+      type="button"
+      onClick={() => onOpen(event)}
+      className={cn(
+        "grid min-h-20 w-full grid-cols-[3px_1fr_auto] items-center gap-4 rounded-xl px-4 py-4 text-left transition hover:bg-white lg:gap-5 lg:px-5",
+        tone.bg,
+      )}
+    >
+      <span className={cn("h-full min-h-14 rounded-full", tone.stripe)} />
+      <span className="min-w-0">
+        <span className={cn("block text-base font-semibold leading-snug", tone.title)}>{event.title}</span>
+        <span className={cn("block truncate text-base font-medium", tone.meta)}>
+          {event.calendarName}
+          {event.location ? ` · ${event.location}` : ""}
+        </span>
+      </span>
+      {timeRange && <span className={cn("pl-2 text-right text-base font-medium", tone.meta)}>{timeRange}</span>}
+    </button>
+  );
+}
 
 function SwipeableCalendarEventRow({
   event,
@@ -8488,6 +9032,282 @@ function UserManagementSheet({
   );
 }
 
+function ExternalCalendarsSheet({
+  calendars,
+  loading,
+  error,
+  syncingCalendarId,
+  onClose,
+  onCreate,
+  onUpdate,
+  onSync,
+}: {
+  calendars: ExternalCalendar[];
+  loading: boolean;
+  error: string | null;
+  syncingCalendarId: string | null;
+  onClose: () => void;
+  onCreate: (input: { name: string; icsUrl: string; color: string; visibility: string }) => Promise<void>;
+  onUpdate: (calendar: ExternalCalendar, input: { name: string; icsUrl: string; color: string; visibility: string }) => Promise<void>;
+  onSync: (calendar: ExternalCalendar) => Promise<void>;
+}) {
+  const [draft, setDraft] = useState({ name: "", icsUrl: "", color: "direction", visibility: "admin" });
+  const [savingNew, setSavingNew] = useState(false);
+  const [localError, setLocalError] = useState<string | null>(null);
+
+  async function handleCreate() {
+    setLocalError(null);
+    if (!draft.name.trim() || !draft.icsUrl.trim()) {
+      setLocalError("Nom et URL ICS obligatoires.");
+      return;
+    }
+
+    setSavingNew(true);
+    try {
+      await onCreate(draft);
+      setDraft({ name: "", icsUrl: "", color: "direction", visibility: "admin" });
+    } catch (createError) {
+      setLocalError(createError instanceof Error ? createError.message : "Impossible d'ajouter ce calendrier.");
+    } finally {
+      setSavingNew(false);
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-end bg-stone-950/10 p-3 sm:items-center sm:justify-center sm:p-6">
+      <div className="flex max-h-[86vh] w-full flex-col rounded-3xl border border-stone-200 bg-white p-4 sm:max-w-2xl sm:p-5">
+        <div className="mb-4 flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <h2 className="text-base font-semibold text-stone-950">Calendriers externes</h2>
+            <p className="mt-1 text-base font-medium text-stone-500">Flux ICS en lecture seule.</p>
+          </div>
+          <button type="button" onClick={onClose} className="rounded-full border border-stone-200 bg-white px-3 py-1.5 text-base font-semibold text-stone-600 transition hover:bg-stone-50">
+            Fermer
+          </button>
+        </div>
+
+        {(error || localError) && <div className="mb-3 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-base font-medium text-rose-700">{localError || error}</div>}
+
+        <div className="no-scrollbar min-h-0 flex-1 overflow-y-auto overscroll-contain">
+          {loading && <div className="rounded-2xl bg-stone-50 px-4 py-3 text-base font-medium text-stone-500">Chargement...</div>}
+          <div className="space-y-2">
+            {calendars.map((calendar) => (
+              <ExternalCalendarEditorRow
+                key={calendar.id}
+                calendar={calendar}
+                syncing={syncingCalendarId === calendar.id}
+                onUpdate={onUpdate}
+                onSync={onSync}
+              />
+            ))}
+          </div>
+
+          <div className="mt-3 rounded-2xl border border-stone-200 bg-stone-50/70 px-4 py-3">
+            <p className="mb-3 text-base font-semibold text-stone-950">Ajouter un calendrier</p>
+            <div className="grid gap-2">
+              <input
+                value={draft.name}
+                onChange={(event) => setDraft((current) => ({ ...current, name: event.target.value }))}
+                placeholder="Nom"
+                className="h-10 rounded-xl border border-stone-200 bg-white px-3 text-base font-semibold text-stone-950 outline-none transition placeholder:text-stone-300 focus:border-[#bb2720]/40"
+              />
+              <input
+                value={draft.icsUrl}
+                onChange={(event) => setDraft((current) => ({ ...current, icsUrl: event.target.value }))}
+                placeholder="URL ICS"
+                inputMode="url"
+                className="h-10 rounded-xl border border-stone-200 bg-white px-3 text-base font-medium text-stone-950 outline-none transition placeholder:text-stone-300 focus:border-[#bb2720]/40"
+              />
+              <div className="grid grid-cols-2 gap-2">
+                <select
+                  value={draft.color}
+                  onChange={(event) => setDraft((current) => ({ ...current, color: event.target.value }))}
+                  className="h-10 rounded-xl border border-stone-200 bg-white px-3 text-base font-semibold text-stone-700 outline-none"
+                >
+                  <option value="direction">Direction bleu/violet</option>
+                  <option value="sky">Bleu doux</option>
+                </select>
+                <select
+                  value={draft.visibility}
+                  onChange={(event) => setDraft((current) => ({ ...current, visibility: event.target.value }))}
+                  className="h-10 rounded-xl border border-stone-200 bg-white px-3 text-base font-semibold text-stone-700 outline-none"
+                >
+                  <option value="admin">Admin uniquement</option>
+                </select>
+              </div>
+              <button
+                type="button"
+                onClick={() => void handleCreate()}
+                disabled={savingNew}
+                className="justify-self-end rounded-full border border-stone-200 bg-white px-3 py-1.5 text-base font-semibold text-stone-600 transition hover:bg-stone-100 disabled:text-stone-300"
+              >
+                {savingNew ? "Ajout..." : "Ajouter"}
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ExternalCalendarEditorRow({
+  calendar,
+  syncing,
+  onUpdate,
+  onSync,
+}: {
+  calendar: ExternalCalendar;
+  syncing: boolean;
+  onUpdate: (calendar: ExternalCalendar, input: { name: string; icsUrl: string; color: string; visibility: string }) => Promise<void>;
+  onSync: (calendar: ExternalCalendar) => Promise<void>;
+}) {
+  const [draft, setDraft] = useState({
+    name: calendar.name,
+    icsUrl: calendar.icsUrl,
+    color: calendar.color ?? "direction",
+    visibility: calendar.visibility,
+  });
+  const [saving, setSaving] = useState(false);
+  const [rowError, setRowError] = useState<string | null>(null);
+  const hasChanges =
+    draft.name.trim() !== calendar.name ||
+    draft.icsUrl.trim() !== calendar.icsUrl ||
+    draft.color !== (calendar.color ?? "direction") ||
+    draft.visibility !== calendar.visibility;
+
+  useEffect(() => {
+    setDraft({
+      name: calendar.name,
+      icsUrl: calendar.icsUrl,
+      color: calendar.color ?? "direction",
+      visibility: calendar.visibility,
+    });
+  }, [calendar.color, calendar.icsUrl, calendar.name, calendar.visibility]);
+
+  async function handleSave() {
+    setRowError(null);
+    setSaving(true);
+    try {
+      await onUpdate(calendar, draft);
+    } catch (saveError) {
+      setRowError(saveError instanceof Error ? saveError.message : "Impossible d'enregistrer ce calendrier.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function handleSync() {
+    setRowError(null);
+    setSaving(true);
+    try {
+      if (hasChanges) {
+        await onUpdate(calendar, draft);
+      }
+      await onSync({ ...calendar, ...draft });
+    } catch (syncError) {
+      setRowError(syncError instanceof Error ? syncError.message : "Impossible de synchroniser ce calendrier.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="rounded-2xl border border-stone-200 bg-stone-50/70 px-4 py-3">
+      <div className="grid gap-2">
+        <div className="flex items-center justify-between gap-3">
+          <input
+            value={draft.name}
+            onChange={(event) => setDraft((current) => ({ ...current, name: event.target.value }))}
+            className="min-w-0 flex-1 bg-transparent text-base font-semibold text-stone-950 outline-none"
+            aria-label="Nom du calendrier"
+          />
+          <span className="rounded-full bg-indigo-50 px-2.5 py-1 text-sm font-semibold text-indigo-700">Lecture seule</span>
+        </div>
+        <input
+          value={draft.icsUrl}
+          onChange={(event) => setDraft((current) => ({ ...current, icsUrl: event.target.value }))}
+          placeholder="URL ICS"
+          inputMode="url"
+          className="h-10 rounded-xl border border-stone-200 bg-white px-3 text-base font-medium text-stone-950 outline-none transition placeholder:text-stone-300 focus:border-[#bb2720]/40"
+        />
+        <div className="grid grid-cols-2 gap-2">
+          <select
+            value={draft.color}
+            onChange={(event) => setDraft((current) => ({ ...current, color: event.target.value }))}
+            className="h-10 rounded-xl border border-stone-200 bg-white px-3 text-base font-semibold text-stone-700 outline-none"
+          >
+            <option value="direction">Direction bleu/violet</option>
+            <option value="sky">Bleu doux</option>
+          </select>
+          <select
+            value={draft.visibility}
+            onChange={(event) => setDraft((current) => ({ ...current, visibility: event.target.value }))}
+            className="h-10 rounded-xl border border-stone-200 bg-white px-3 text-base font-semibold text-stone-700 outline-none"
+          >
+            <option value="admin">Admin uniquement</option>
+          </select>
+        </div>
+        {rowError && <p className="text-sm font-semibold text-rose-600">{rowError}</p>}
+        <div className="flex justify-end gap-2">
+          {hasChanges && (
+            <button
+              type="button"
+              onClick={() => void handleSave()}
+              disabled={saving}
+              className="rounded-full border border-stone-200 bg-white px-3 py-1.5 text-base font-semibold text-stone-600 transition hover:bg-stone-100 disabled:text-stone-300"
+            >
+              {saving ? "Enregistrement..." : "Enregistrer"}
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={() => void handleSync()}
+            disabled={syncing || saving || !draft.icsUrl.trim()}
+            className="rounded-full border border-indigo-200 bg-indigo-50 px-3 py-1.5 text-base font-semibold text-indigo-700 transition hover:bg-indigo-100 disabled:border-stone-200 disabled:bg-white disabled:text-stone-300"
+          >
+            {syncing ? "Synchronisation..." : "Synchroniser"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ExternalCalendarEventDetails({
+  event,
+  onClose,
+}: {
+  event: ExternalCalendarEvent;
+  onClose: () => void;
+}) {
+  const tone = getExternalCalendarTone(event.calendarColor);
+  const dateLabel = event.allDay ? formatFullDate(event.startTime.slice(0, 10)) : formatFullDate(formatDateKey(new Date(event.startTime)));
+  const timeRange = formatExternalEventTimeRange(event);
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-end bg-stone-950/10 p-3 sm:items-center sm:justify-center sm:p-6">
+      <div className="w-full rounded-3xl border border-stone-200 bg-white p-4 sm:max-w-lg sm:p-5">
+        <div className="mb-4 flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <p className={cn("mb-1 text-sm font-semibold", tone.meta)}>{event.calendarName}</p>
+            <h2 className="text-base font-semibold text-stone-950">{event.title}</h2>
+          </div>
+          <button type="button" onClick={onClose} className="rounded-full border border-stone-200 bg-white px-3 py-1.5 text-base font-semibold text-stone-600 transition hover:bg-stone-50">
+            Fermer
+          </button>
+        </div>
+        <div className={cn("grid gap-3 rounded-2xl px-4 py-3", tone.bg)}>
+          <p className={cn("text-base font-semibold", tone.title)}>{dateLabel}</p>
+          {timeRange && <p className={cn("text-base font-medium", tone.meta)}>{timeRange}</p>}
+          {event.location && <p className="text-base font-medium text-stone-600">{event.location}</p>}
+          {event.description && <p className="whitespace-pre-wrap text-base font-medium leading-relaxed text-stone-600">{event.description}</p>}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function DuplicateEventDialog({
   request,
   onClose,
@@ -9220,12 +10040,16 @@ function HeaderIcon({ label, icon: Icon, onClick }: { label: string; icon: Lucid
 function AccountMenu({
   profile,
   email,
+  canManageExternalCalendars,
+  onOpenExternalCalendars,
   onLogout,
 }: {
   profile: UserProfile | null;
   email?: string;
   canManageUsers: boolean;
   onOpenUserManagement: () => void;
+  canManageExternalCalendars: boolean;
+  onOpenExternalCalendars: () => void;
   onLogout: () => void;
 }) {
   const [open, setOpen] = useState(false);
@@ -9259,11 +10083,23 @@ function AccountMenu({
         {initials}
       </button>
       {open && (
-        <div className="absolute right-0 top-12 z-40 w-44 rounded-2xl border border-stone-200 bg-white/95 p-1 text-right backdrop-blur-xl">
+        <div className="absolute right-0 top-12 z-40 w-52 rounded-2xl border border-stone-200 bg-white/95 p-1 text-right backdrop-blur-xl">
           <div className="px-3 py-2">
             <p className="truncate text-sm font-semibold text-stone-950">{displayName}</p>
             <p className="mt-0.5 truncate text-xs font-medium text-stone-500">{profile ? getRoleLabel(profile.role) : email}</p>
           </div>
+          {canManageExternalCalendars && (
+            <button
+              type="button"
+              onClick={() => {
+                setOpen(false);
+                onOpenExternalCalendars();
+              }}
+              className="block w-full rounded-xl px-3 py-2 text-right text-sm font-medium text-stone-700 transition hover:bg-[#bb2720]/[0.05] hover:text-stone-950"
+            >
+              Calendriers externes
+            </button>
+          )}
           <button
             type="button"
             onClick={() => {

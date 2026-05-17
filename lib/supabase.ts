@@ -285,6 +285,56 @@ export type Database = {
         Update: Partial<Database["public"]["Tables"]["team_members"]["Insert"]>;
         Relationships: [];
       };
+      external_calendars: {
+        Row: {
+          id: string;
+          name: string;
+          ics_url: string;
+          color: string | null;
+          visibility: string | null;
+          created_at: string;
+        };
+        Insert: {
+          id?: string;
+          name: string;
+          ics_url: string;
+          color?: string | null;
+          visibility?: string | null;
+          created_at?: string;
+        };
+        Update: Partial<Database["public"]["Tables"]["external_calendars"]["Insert"]>;
+        Relationships: [];
+      };
+      external_calendar_events: {
+        Row: {
+          id: string;
+          external_calendar_id: string;
+          external_event_id: string;
+          title: string;
+          description: string | null;
+          location: string | null;
+          start_time: string;
+          end_time: string | null;
+          all_day: boolean | null;
+          raw_event: Record<string, unknown> | null;
+          last_synced_at: string | null;
+        };
+        Insert: {
+          id?: string;
+          external_calendar_id: string;
+          external_event_id: string;
+          title: string;
+          description?: string | null;
+          location?: string | null;
+          start_time: string;
+          end_time?: string | null;
+          all_day?: boolean | null;
+          raw_event?: Record<string, unknown> | null;
+          last_synced_at?: string | null;
+        };
+        Update: Partial<Database["public"]["Tables"]["external_calendar_events"]["Insert"]>;
+        Relationships: [];
+      };
     };
     Views: Record<string, never>;
     Functions: Record<string, never>;
