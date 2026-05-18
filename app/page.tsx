@@ -7785,10 +7785,18 @@ function CalendarDashboard({
           onCalendarPointerUp={handleMonthSwipePointerUp}
           onCalendarPointerCancel={resetMonthSwipe}
           onCalendarClickCapture={(clickEvent) => {
-            if (!suppressMonthClickRef.current) return;
-            suppressMonthClickRef.current = false;
-            clickEvent.preventDefault();
-            clickEvent.stopPropagation();
+            if (suppressMonthClickRef.current) {
+              suppressMonthClickRef.current = false;
+              clickEvent.preventDefault();
+              clickEvent.stopPropagation();
+              return;
+            }
+
+            const dayCell = (clickEvent.target as HTMLElement).closest<HTMLElement>("[data-calendar-date-key]");
+            const dateKey = dayCell?.dataset.calendarDateKey;
+            if (!dateKey) return;
+
+            setSelectedDateKey(dateKey);
           }}
           interactive={!pagerAnimatingDirection}
         />
@@ -8010,6 +8018,7 @@ function CalendarMonthGrid({
         return (
           <button
             key={dateKey}
+            data-calendar-date-key={dateKey}
             onClick={() => {
               if (interactive) onSelectDate(dateKey);
             }}
