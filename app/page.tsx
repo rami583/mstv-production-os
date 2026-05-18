@@ -7089,15 +7089,19 @@ function AppHeader({
         )}
         {canOpenHistory && <HeaderIcon label="Historique" icon={History} onClick={onOpenHistory} />}
         <HeaderIcon label="Rechercher" icon={Search} onClick={onSearch} />
-        {hasCreateMenuActions && (
+        {(hasCreateMenuActions || !profile) && (
           <div ref={menuWrapperRef} className="relative">
-            <button
-              onClick={() => setCreateMenuOpen((current) => !current)}
-              className="flex h-10 w-10 items-center justify-center rounded-full bg-[#bb2720] text-base font-semibold leading-none text-white transition hover:bg-[#a7211b]"
-              aria-label="Créer"
-            >
-              +
-            </button>
+            {hasCreateMenuActions ? (
+              <button
+                onClick={() => setCreateMenuOpen((current) => !current)}
+                className="flex h-10 w-10 items-center justify-center rounded-full bg-[#bb2720] text-base font-semibold leading-none text-white transition hover:bg-[#a7211b]"
+                aria-label="Créer"
+              >
+                +
+              </button>
+            ) : (
+              <div className="h-10 w-10 rounded-full border border-transparent" aria-hidden />
+            )}
             {createMenuOpen && (
               <CreateMenu
                 onImportQuote={onImportQuote}
@@ -13054,8 +13058,6 @@ function SyncStatusIndicator({
   error: string | null;
 }) {
   const visible = !online || pendingCount > 0 || syncing || Boolean(error);
-  if (!visible) return null;
-
   const label = !online
     ? pendingCount > 0
       ? `${pendingCount} en attente`
@@ -13070,14 +13072,16 @@ function SyncStatusIndicator({
     <div
       className={cn(
         "flex h-10 min-w-10 items-center justify-center rounded-full border px-2 text-sm font-semibold sm:px-3",
+        !visible && "pointer-events-none invisible",
         error
           ? "border-rose-200 bg-rose-50 text-rose-700"
           : !online
             ? "border-amber-200 bg-amber-50 text-amber-800"
             : "border-sky-200 bg-sky-50 text-sky-700",
       )}
-      title={error ?? label}
+      title={visible ? error ?? label : undefined}
       aria-live="polite"
+      aria-hidden={!visible}
     >
       <span className="sm:hidden">{error ? "!" : !online ? "HL" : pendingCount}</span>
       <span className="hidden sm:inline">{label}</span>
