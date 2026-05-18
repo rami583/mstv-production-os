@@ -6828,8 +6828,7 @@ function AppHeader({
     <header className="relative mb-5 flex items-center justify-between gap-2 px-1 py-1">
       <div className="flex min-w-0 items-center gap-2 sm:gap-3">
         <button className="flex items-center gap-3 text-left" onClick={onLogoClick ?? (() => setScreen("calendar"))} aria-label="Accueil calendrier">
-          <img src="/brand/mon-studio-tv-icon.png" alt="Mon Studio TV" className="h-11 w-auto sm:hidden" />
-          <img src="/brand/mon-studio-tv-horizontal.png" alt="Mon Studio TV" className="hidden h-10 w-auto sm:block lg:h-11" />
+          <img src="/brand/mon-studio-tv-icon.png" alt="Mon Studio TV" className="h-11 w-auto" />
         </button>
         {screen === "calendar" && (
           <button
