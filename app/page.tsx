@@ -979,6 +979,7 @@ function parseIcsEvents(icsText: string) {
       if (currentLines) {
         const raw: Record<string, unknown> = {};
         let uid = "";
+        let recurrenceId = "";
         let summary = "";
         let description: string | null = null;
         let location: string | null = null;
@@ -992,6 +993,7 @@ function parseIcsEvents(icsText: string) {
           raw[property.name] = property.value;
 
           if (property.name === "UID") uid = property.value.trim();
+          if (property.name === "RECURRENCE-ID") recurrenceId = property.value.trim();
           if (property.name === "SUMMARY") summary = unescapeIcsValue(property.value);
           if (property.name === "DESCRIPTION") description = unescapeIcsValue(property.value);
           if (property.name === "LOCATION") location = unescapeIcsValue(property.value);
@@ -1011,8 +1013,14 @@ function parseIcsEvents(icsText: string) {
         }
 
         if (startTime && summary) {
+          const externalEventId = uid
+            ? recurrenceId
+              ? `${uid}::${recurrenceId}`
+              : uid
+            : hashIcsFallback(`${summary}-${startTime}-${endTime ?? ""}`);
+
           events.push({
-            externalEventId: uid || hashIcsFallback(`${summary}-${startTime}-${endTime ?? ""}`),
+            externalEventId,
             title: summary,
             description,
             location,
@@ -3090,9 +3098,27 @@ export default function Home() {
       }
 
       const now = new Date().toISOString();
-      const rows: Database["public"]["Tables"]["external_calendar_events"]["Insert"][] = parsedEvents.map((event) => ({
+      const usedExternalEventIds = new Set<string>();
+      let duplicateExternalEventIds = 0;
+      const rows: Database["public"]["Tables"]["external_calendar_events"]["Insert"][] = parsedEvents.map((event) => {
+        let externalEventId = event.externalEventId;
+
+        if (usedExternalEventIds.has(externalEventId)) {
+          duplicateExternalEventIds += 1;
+          const stableSuffix = hashIcsFallback(`${event.startTime}-${event.endTime ?? ""}-${event.title}-${JSON.stringify(event.rawEvent)}`);
+          externalEventId = `${event.externalEventId}::${stableSuffix}`;
+
+          while (usedExternalEventIds.has(externalEventId)) {
+            duplicateExternalEventIds += 1;
+            externalEventId = `${event.externalEventId}::${stableSuffix}-${duplicateExternalEventIds}`;
+          }
+        }
+
+        usedExternalEventIds.add(externalEventId);
+
+        return {
         external_calendar_id: calendar.id,
-        external_event_id: event.externalEventId,
+        external_event_id: externalEventId,
         title: event.title,
         description: event.description,
         location: event.location,
@@ -3101,7 +3127,16 @@ export default function Home() {
         all_day: event.allDay,
         raw_event: event.rawEvent,
         last_synced_at: now,
-      }));
+        };
+      });
+
+      if (duplicateExternalEventIds > 0) {
+        console.info("External calendar duplicate event identifiers normalized", {
+          calendarId: calendar.id,
+          duplicateExternalEventIds,
+          parsedEvents: parsedEvents.length,
+        });
+      }
 
       const totalBatches = Math.ceil(rows.length / EXTERNAL_CALENDAR_UPSERT_BATCH_SIZE);
       setExternalCalendarSyncProgress({ calendarId: calendar.id, synced: 0, total: rows.length });
