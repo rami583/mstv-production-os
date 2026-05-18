@@ -61,3 +61,14 @@ a {
 .no-scrollbar::-webkit-scrollbar {
   display: none;
 }
+
+@media (max-width: 639px) {
+  .mobile-no-scrollbar {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+
+  .mobile-no-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
+}

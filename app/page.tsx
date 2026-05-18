@@ -12017,7 +12017,7 @@ function ExternalCalendarEventDetails({
             Fermer
           </button>
         </div>
-        <div className="min-h-0 overflow-y-auto overscroll-contain">
+        <div className="mobile-no-scrollbar min-h-0 overflow-y-auto overscroll-contain">
           <div style={tone.bgStyle} className={cn("grid min-w-0 gap-3 rounded-2xl px-4 py-3", tone.bg)}>
             <p className={cn("text-base font-semibold", tone.title)} style={{ overflowWrap: "anywhere" }}>
               {dateLabel}
@@ -12060,7 +12060,10 @@ function ExternalCalendarEventDetails({
             {descriptionView.notesText && (
               <div className="min-w-0 rounded-2xl bg-white/70 px-3 py-2">
                 <p className="mb-1 text-xs font-semibold uppercase tracking-normal text-stone-400">Notes</p>
-                <div className="max-h-56 overflow-y-auto overscroll-contain whitespace-pre-wrap text-sm font-medium leading-relaxed text-stone-600" style={{ overflowWrap: "anywhere", wordBreak: "break-word" }}>
+                <div
+                  className="mobile-no-scrollbar max-h-56 overflow-y-auto overscroll-contain whitespace-pre-wrap text-sm font-medium leading-relaxed text-stone-600"
+                  style={{ overflowWrap: "anywhere", wordBreak: "break-word" }}
+                >
                   {descriptionView.notesText}
                 </div>
               </div>
