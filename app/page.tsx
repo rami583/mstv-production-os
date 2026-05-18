@@ -7042,6 +7042,7 @@ function YearOverviewOverlay({
   const yearTransitioningRef = useRef(false);
   const suppressYearClickRef = useRef(false);
   const [yearPagerOffset, setYearPagerOffset] = useState(0);
+  const [yearPageHeight, setYearPageHeight] = useState(0);
   const [yearTransitionEnabled, setYearTransitionEnabled] = useState(false);
   const shortWeekdays = ["L", "M", "M", "J", "V", "S", "D"];
 
@@ -7066,8 +7067,23 @@ function YearOverviewOverlay({
     };
   }, []);
 
+  useLayoutEffect(() => {
+    const pagerElement = yearPagerRef.current;
+    if (!pagerElement) return;
+    const observedElement = pagerElement;
+
+    function updatePageHeight() {
+      setYearPageHeight(observedElement.clientHeight);
+    }
+
+    updatePageHeight();
+    const observer = new ResizeObserver(updatePageHeight);
+    observer.observe(observedElement);
+    return () => observer.disconnect();
+  }, []);
+
   function getYearPageStep() {
-    return (yearPagerRef.current?.clientHeight ?? window.innerHeight) + PAGE_GAP;
+    return (yearPageHeight || yearPagerRef.current?.clientHeight || window.innerHeight) + PAGE_GAP;
   }
 
   function animateYearChange(direction: -1 | 1) {
@@ -7200,6 +7216,8 @@ function YearOverviewOverlay({
     }, 420);
   }
 
+  const yearPageStep = getYearPageStep();
+
   return (
     <div className="fixed inset-0 z-50 overflow-hidden bg-[#f7f9fb]/95 px-4 pb-[calc(1.15rem+env(safe-area-inset-bottom))] pt-[calc(1.25rem+env(safe-area-inset-top))] backdrop-blur-xl sm:px-6 sm:pb-[calc(1.5rem+env(safe-area-inset-bottom))] sm:pt-[calc(1.5rem+env(safe-area-inset-top))] lg:px-8">
       <div className="mx-auto flex h-full max-w-7xl flex-col">
@@ -7274,7 +7292,7 @@ function YearOverviewOverlay({
           className="flex h-full flex-col"
           style={{
             gap: PAGE_GAP,
-            transform: `translate3d(0, calc(-100% - ${PAGE_GAP}px + ${yearPagerOffset}px), 0)`,
+            transform: `translate3d(0, ${-yearPageStep + yearPagerOffset}px, 0)`,
             transition: yearTransitionEnabled ? `transform ${PAGE_TRANSITION_MS}ms ${PAGE_TRANSITION_EASING}` : undefined,
           }}
         >
@@ -7313,7 +7331,7 @@ function YearOverviewPage({
 }) {
   return (
     <section className="flex h-full w-full shrink-0 flex-col">
-      <div className="grid min-h-0 flex-1 grid-cols-3 gap-x-2 gap-y-2 pt-2 sm:gap-x-8 sm:gap-y-8 sm:pt-4">
+      <div className="grid min-h-0 flex-1 grid-cols-3 grid-rows-4 gap-x-2 gap-y-2 pt-2 sm:gap-x-6 sm:gap-y-5 sm:pt-4 lg:gap-x-8 lg:gap-y-6">
         {monthNames.map((monthName, monthIndex) => (
           <YearOverviewMiniMonth
             key={`${year}-${monthName}`}
@@ -7359,7 +7377,7 @@ function YearOverviewMiniMonth({
       type="button"
       onClick={onSelect}
       className={cn(
-        "min-w-0 rounded-[1.1rem] p-1.5 text-left transition hover:bg-white/70 sm:rounded-[1.25rem] sm:p-3",
+        "min-h-0 min-w-0 overflow-hidden rounded-[1.1rem] p-1.5 text-left transition hover:bg-white/70 sm:rounded-[1.25rem] sm:p-2.5 lg:p-3",
         isVisibleMonth && "bg-white/90 ring-1 ring-[#bb2720]/20",
       )}
     >
