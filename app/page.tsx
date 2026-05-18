@@ -2700,10 +2700,10 @@ export default function Home() {
   const isSelectedDateToday = selectedDateKey === todayKey;
   const yearLabel = String(visibleMonth.getFullYear());
   const permissions = useMemo(() => getPermissionsForRole(profile?.role ?? "team"), [profile?.role]);
-  const headerCanOpenTrash = permissions.canRestoreEvents || permissions.canPermanentDeleteEvents;
-  const headerHasCreateMenuActions =
-    permissions.canManageEvents || headerCanOpenTrash || (permissions.canSoftDeleteEvents && screen === "detail" && Boolean(selectedEvent));
-  const headerReady = isBootHydrated && Boolean(authSession && profile);
+  const headerProfile = isBootHydrated ? profile : initialCachedAuth?.profile ?? profile;
+  const headerSession = isBootHydrated ? authSession : initialCachedAuth?.session ?? authSession;
+  const headerPermissions = useMemo(() => getPermissionsForRole(headerProfile?.role ?? "team"), [headerProfile?.role]);
+  const headerCanOpenTrash = headerPermissions.canRestoreEvents || headerPermissions.canPermanentDeleteEvents;
   const actorName = getProfileDisplayName(profile);
   const visibleExternalCalendarEvents = useMemo(
     () =>
@@ -6558,81 +6558,71 @@ export default function Home() {
         }}
         className="relative mx-auto flex h-full min-h-0 w-full max-w-7xl flex-col px-4 pb-[calc(1.25rem+env(safe-area-inset-bottom))] pt-[calc(1.25rem+env(safe-area-inset-top))] sm:px-6 sm:pb-[calc(1.5rem+env(safe-area-inset-bottom))] sm:pt-[calc(1.5rem+env(safe-area-inset-top))] lg:px-8"
       >
-        {headerReady ? (
-          <AppHeader
-            screen={screen}
-            setScreen={setScreen}
-            yearLabel={yearLabel}
-            detailDateLabel={screen === "detail" && selectedEvent ? formatFullDate(selectedEvent.date) : null}
-            onEditDetailDate={screen === "detail" && selectedEvent && permissions.canManageEvents ? () => setDateEditorOpen(true) : undefined}
-            goToday={goToday}
-            isSelectedDateToday={isSelectedDateToday}
-            createMenuOpen={createMenuOpen && !yearOverviewOpen}
-            setCreateMenuOpen={setCreateMenuOpen}
-            profile={profile}
-            email={authSession.user.email}
-            onLogout={signOut}
-            canManageUsers={permissions.canManageUsers}
-            onOpenUserManagement={() => setUserManagementOpen(true)}
-            canManageExternalCalendars={Boolean(profile)}
-            onOpenExternalCalendars={() => setExternalCalendarSettingsOpen(true)}
-            online={online}
-            pendingSyncCount={pendingSyncCount}
-            syncingPendingActions={syncingPendingActions}
-            pendingSyncError={pendingSyncError}
-            onImportQuote={() => {
-              if (!permissions.canManageEvents) return;
-              openQuoteImport();
-            }}
-            onImportNativeMstvCalendar={openNativeMstvIcsImport}
-            onSearch={() => setSearchOpen(true)}
-            canOpenHistory={permissions.canManageEvents && screen === "detail" && Boolean(selectedEvent)}
-            onOpenHistory={openHistory}
-            canOpenTrash={headerCanOpenTrash}
-            onOpenTrash={() => {
-              setTrashOpen(true);
-              setCreateMenuOpen(false);
-            }}
-            onOpenYearOverview={() => setYearOverviewOpen(true)}
-            onCreateEvent={() => {
-              if (!permissions.canManageEvents) return;
-              setEditingEvent(null);
-              setEditingReturnScreen("calendar");
-              setCreateModalOpen(true);
-              setCreateMenuOpen(false);
-            }}
-            canCreateEvent={permissions.canManageEvents}
-            canImportQuote={permissions.canManageEvents}
-            canImportNativeMstvCalendar={permissions.canManageEvents}
-            canDuplicateEvent={permissions.canManageEvents && screen === "detail" && Boolean(selectedEvent)}
-            onDuplicateEvent={() => {
-              if (selectedEvent && !selectedEvent.deletedAt) {
-                setDuplicateDatePickerEvent(selectedEvent);
-              }
-              setCreateMenuOpen(false);
-            }}
-            canDeleteEvent={permissions.canSoftDeleteEvents && screen === "detail" && Boolean(selectedEvent)}
-            onDeleteEvent={() => {
-              console.log("Delete event menu action clicked", {
-                eventId: selectedEvent?.id ?? null,
-                clientName: selectedEvent?.clientName ?? null,
-                eventName: selectedEvent?.eventName ?? null,
-              });
-              if (selectedEvent) {
-                setDeleteDialogEvent(selectedEvent);
-              }
-              setCreateMenuOpen(false);
-            }}
-          />
-        ) : (
-          <AppHeaderPlaceholder
-            screen={screen}
-            yearLabel={yearLabel}
-            detailDateLabel={screen === "detail" && selectedEvent ? formatFullDate(selectedEvent.date) : null}
-            showHistory={permissions.canManageEvents && screen === "detail" && Boolean(selectedEvent)}
-            showCreateMenuSlot={headerHasCreateMenuActions}
-          />
-        )}
+        <AppHeader
+          screen={screen}
+          setScreen={setScreen}
+          yearLabel={yearLabel}
+          detailDateLabel={screen === "detail" && selectedEvent ? formatFullDate(selectedEvent.date) : null}
+          onEditDetailDate={screen === "detail" && selectedEvent && headerPermissions.canManageEvents ? () => setDateEditorOpen(true) : undefined}
+          goToday={goToday}
+          isSelectedDateToday={isSelectedDateToday}
+          createMenuOpen={createMenuOpen && !yearOverviewOpen}
+          setCreateMenuOpen={setCreateMenuOpen}
+          profile={headerProfile}
+          email={headerSession?.user.email}
+          onLogout={signOut}
+          canManageUsers={headerPermissions.canManageUsers}
+          onOpenUserManagement={() => setUserManagementOpen(true)}
+          canManageExternalCalendars={Boolean(headerProfile)}
+          onOpenExternalCalendars={() => setExternalCalendarSettingsOpen(true)}
+          online={online}
+          pendingSyncCount={pendingSyncCount}
+          syncingPendingActions={syncingPendingActions}
+          pendingSyncError={pendingSyncError}
+          onImportQuote={() => {
+            if (!headerPermissions.canManageEvents) return;
+            openQuoteImport();
+          }}
+          onImportNativeMstvCalendar={openNativeMstvIcsImport}
+          onSearch={() => setSearchOpen(true)}
+          canOpenHistory={headerPermissions.canManageEvents && screen === "detail" && Boolean(selectedEvent)}
+          onOpenHistory={openHistory}
+          canOpenTrash={headerCanOpenTrash}
+          onOpenTrash={() => {
+            setTrashOpen(true);
+            setCreateMenuOpen(false);
+          }}
+          onOpenYearOverview={() => setYearOverviewOpen(true)}
+          onCreateEvent={() => {
+            if (!headerPermissions.canManageEvents) return;
+            setEditingEvent(null);
+            setEditingReturnScreen("calendar");
+            setCreateModalOpen(true);
+            setCreateMenuOpen(false);
+          }}
+          canCreateEvent={headerPermissions.canManageEvents}
+          canImportQuote={headerPermissions.canManageEvents}
+          canImportNativeMstvCalendar={headerPermissions.canManageEvents}
+          canDuplicateEvent={headerPermissions.canManageEvents && screen === "detail" && Boolean(selectedEvent)}
+          onDuplicateEvent={() => {
+            if (selectedEvent && !selectedEvent.deletedAt) {
+              setDuplicateDatePickerEvent(selectedEvent);
+            }
+            setCreateMenuOpen(false);
+          }}
+          canDeleteEvent={headerPermissions.canSoftDeleteEvents && screen === "detail" && Boolean(selectedEvent)}
+          onDeleteEvent={() => {
+            console.log("Delete event menu action clicked", {
+              eventId: selectedEvent?.id ?? null,
+              clientName: selectedEvent?.clientName ?? null,
+              eventName: selectedEvent?.eventName ?? null,
+            });
+            if (selectedEvent) {
+              setDeleteDialogEvent(selectedEvent);
+            }
+            setCreateMenuOpen(false);
+          }}
+        />
 
         <div className="flex min-h-0 flex-1 flex-col">
           {error && <StatusMessage tone="error">{error}</StatusMessage>}
@@ -7108,19 +7098,15 @@ function AppHeader({
         )}
         {canOpenHistory && <HeaderIcon label="Historique" icon={History} onClick={onOpenHistory} />}
         <HeaderIcon label="Rechercher" icon={Search} onClick={onSearch} />
-        {(hasCreateMenuActions || !profile) && (
+        {hasCreateMenuActions && (
           <div ref={menuWrapperRef} className="relative">
-            {hasCreateMenuActions ? (
-              <button
-                onClick={() => setCreateMenuOpen((current) => !current)}
-                className="flex h-10 w-10 items-center justify-center rounded-full bg-[#bb2720] text-base font-semibold leading-none text-white transition hover:bg-[#a7211b]"
-                aria-label="Créer"
-              >
-                +
-              </button>
-            ) : (
-              <div className="h-10 w-10 rounded-full border border-transparent" aria-hidden />
-            )}
+            <button
+              onClick={() => setCreateMenuOpen((current) => !current)}
+              className="flex h-10 w-10 items-center justify-center rounded-full bg-[#bb2720] text-base font-semibold leading-none text-white transition hover:bg-[#a7211b]"
+              aria-label="Créer"
+            >
+              +
+            </button>
             {createMenuOpen && (
               <CreateMenu
                 onImportQuote={onImportQuote}
@@ -7154,52 +7140,6 @@ function AppHeader({
           onOpenExternalCalendars={onOpenExternalCalendars}
           onLogout={onLogout}
         />
-      </div>
-    </header>
-  );
-}
-
-function AppHeaderPlaceholder({
-  screen,
-  yearLabel,
-  detailDateLabel,
-  showHistory,
-  showCreateMenuSlot,
-}: {
-  screen: Screen;
-  yearLabel: string;
-  detailDateLabel: string | null;
-  showHistory: boolean;
-  showCreateMenuSlot: boolean;
-}) {
-  return (
-    <header className="relative mb-5 flex items-center justify-between gap-2 px-1 py-1" aria-hidden>
-      <div className="flex min-w-0 items-center gap-2 sm:gap-3">
-        <div className="flex items-center gap-3 text-left">
-          <img src="/brand/mon-studio-tv-icon.png" alt="" className="h-11 w-auto" />
-        </div>
-        {screen === "calendar" && (
-          <div className="rounded-full border border-stone-200 bg-white px-2.5 py-1.5 text-base font-semibold text-stone-700 sm:px-3">
-            {yearLabel}
-          </div>
-        )}
-        {screen === "detail" && detailDateLabel && (
-          <div className="rounded-full border border-stone-200 bg-white px-2.5 py-1.5 text-base font-semibold text-stone-700 sm:px-3">
-            {detailDateLabel}
-          </div>
-        )}
-      </div>
-      <div className="flex shrink-0 items-center gap-1.5 sm:gap-2">
-        {screen === "calendar" && (
-          <div className="rounded-full border border-stone-200 bg-white px-2.5 py-2 text-base font-semibold text-stone-700 sm:px-3">
-            Aujourd'hui
-          </div>
-        )}
-        {showHistory && <div className="h-10 w-10 rounded-full border border-stone-200 bg-white" />}
-        <div className="h-10 w-10 rounded-full border border-stone-200 bg-white" />
-        {showCreateMenuSlot && <div className="h-10 w-10 rounded-full bg-[#bb2720]" />}
-        <div className="invisible h-10 min-w-10 rounded-full border border-sky-200 bg-sky-50 px-2 sm:px-3" />
-        <div className="h-10 w-10 rounded-full border border-stone-200 bg-white" />
       </div>
     </header>
   );
@@ -13123,6 +13063,8 @@ function SyncStatusIndicator({
   error: string | null;
 }) {
   const visible = !online || pendingCount > 0 || syncing || Boolean(error);
+  if (!visible) return null;
+
   const label = !online
     ? pendingCount > 0
       ? `${pendingCount} en attente`
@@ -13137,16 +13079,14 @@ function SyncStatusIndicator({
     <div
       className={cn(
         "flex h-10 min-w-10 items-center justify-center rounded-full border px-2 text-sm font-semibold sm:px-3",
-        !visible && "pointer-events-none invisible",
         error
           ? "border-rose-200 bg-rose-50 text-rose-700"
           : !online
             ? "border-amber-200 bg-amber-50 text-amber-800"
             : "border-sky-200 bg-sky-50 text-sky-700",
       )}
-      title={visible ? error ?? label : undefined}
+      title={error ?? label}
       aria-live="polite"
-      aria-hidden={!visible}
     >
       <span className="sm:hidden">{error ? "!" : !online ? "HL" : pendingCount}</span>
       <span className="hidden sm:inline">{label}</span>
