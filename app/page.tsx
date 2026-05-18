@@ -13144,13 +13144,24 @@ function SectionHeader({
 }) {
   const addTone =
     tone === "option"
-      ? "border-emerald-200 bg-emerald-50 text-emerald-700 hover:border-emerald-300 hover:bg-emerald-100"
+      ? "border-emerald-700 bg-emerald-700 text-white hover:border-emerald-800 hover:bg-emerald-800"
       : tone === "link"
-        ? "border-sky-200 bg-sky-50 text-sky-700 hover:border-sky-300 hover:bg-sky-100"
-        : "border-amber-200 bg-amber-50 text-amber-700 hover:border-amber-300 hover:bg-amber-100";
+        ? "border-sky-700 bg-sky-700 text-white hover:border-sky-800 hover:bg-sky-800"
+        : "border-amber-600 bg-amber-600 text-white hover:border-amber-700 hover:bg-amber-700";
 
   return (
-    <div className={cn("mb-2 flex min-w-0 items-center gap-1 sm:mb-3 sm:gap-2", align === "right" ? "justify-end" : "justify-start")}>
+    <div className={cn("mb-2 flex min-w-0 items-center gap-1.5 sm:mb-3 sm:gap-2", align === "right" ? "justify-end" : "justify-start")}>
+      {onAdd && (
+        <button
+          type="button"
+          onClick={onAdd}
+          className={cn("flex h-6 w-6 shrink-0 items-center justify-center rounded-full border text-base font-semibold leading-none transition active:scale-95", addTone)}
+          aria-label={addLabel}
+          title={addLabel}
+        >
+          +
+        </button>
+      )}
       <h2
         className={cn(
           "min-w-0 flex-1 truncate text-[0.7rem] font-semibold uppercase tracking-[0.08em] text-stone-500 sm:text-base sm:tracking-[0.16em]",
@@ -13159,16 +13170,6 @@ function SectionHeader({
       >
         {label}
       </h2>
-      {onAdd && (
-        <button
-          onClick={onAdd}
-          className={cn("flex h-5 w-5 shrink-0 items-center justify-center rounded-full border text-base font-semibold leading-none transition sm:h-6 sm:w-6", addTone)}
-          aria-label={addLabel}
-          title={addLabel}
-        >
-          +
-        </button>
-      )}
     </div>
   );
 }
