@@ -8047,42 +8047,12 @@ function CalendarMonthGrid({
               >
                 {day}
               </span>
-              {(markers.length > 0 || dayExternalEvents.length > 0) && (
-                <span className="mt-1 hidden min-w-0 flex-wrap justify-end gap-1 lg:flex">
-                  {publicHolidayMarker && <span className="h-1.5 w-1.5 rounded-full bg-emerald-400/80" />}
-                  {schoolHolidayMarker && <span className="h-1.5 w-1.5 rounded-full bg-amber-400/80" />}
-                  {dayExternalEvents.slice(0, 2).map((event) => {
-                    const tone = getExternalCalendarTone(event.calendarColor);
-                    return <span key={`desktop-external-${event.id}`} style={tone.dotStyle} className={cn("h-1.5 w-1.5 rounded-full", tone.dot)} />;
-                  })}
-                </span>
-              )}
             </span>
             {dayDots.length > 0 && (
-              <span className="flex min-h-3 w-full items-center justify-center gap-0.5 px-0.5 lg:hidden">
+              <span className="flex min-h-3 w-full items-center justify-center gap-0.5 px-0.5">
                 {dayDots.map((dot) => (
                   <span key={dot.key} style={dot.style} className={cn("h-1.5 w-1.5 shrink-0 rounded-full", dot.className)} />
                 ))}
-              </span>
-            )}
-            {markers.length > 0 && (
-              <span className="hidden max-w-full truncate text-base font-semibold leading-tight text-stone-500 opacity-0 transition group-hover:opacity-100 lg:block">
-                {markers[0].label}
-              </span>
-            )}
-            {dayEvents.length > 0 && (
-              <span className="hidden max-w-full gap-0.5 lg:mt-2 lg:flex lg:gap-1">
-                {dayEvents.slice(0, 3).map((event) => (
-                  <span key={event.id} className="h-2 w-2 shrink-0 rounded-full bg-[#bb2720] lg:h-2.5 lg:w-2.5" />
-                ))}
-              </span>
-            )}
-            {dayEvents.length === 0 && dayExternalEvents.length > 0 && (
-              <span className="hidden max-w-full gap-0.5 lg:mt-2 lg:flex lg:gap-1">
-                {dayExternalEvents.slice(0, 3).map((event) => {
-                  const tone = getExternalCalendarTone(event.calendarColor);
-                  return <span key={event.id} style={tone.dotStyle} className={cn("h-2 w-2 shrink-0 rounded-full lg:h-2.5 lg:w-2.5", tone.dot)} />;
-                })}
               </span>
             )}
           </button>
