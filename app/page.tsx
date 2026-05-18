@@ -1871,6 +1871,14 @@ function normalizeExternalCalendarVisibility(visibility: string | null | undefin
   return "private";
 }
 
+function normalizeExternalCalendarIcsUrl(value: string) {
+  const trimmed = value.trim();
+  if (/^webcal:\/\//i.test(trimmed)) {
+    return `https://${trimmed.replace(/^webcal:\/\//i, "")}`;
+  }
+  return trimmed;
+}
+
 function getExternalCalendarVisibilityLabel(visibility: ExternalCalendarVisibility) {
   const labels: Record<ExternalCalendarVisibility, string> = {
     admin_only: "Admin",
@@ -2975,12 +2983,13 @@ export default function Home() {
     if (!supabase) throw new Error("Configuration Supabase manquante.");
     if (!profile?.id) throw new Error("Profil utilisateur introuvable.");
     const visibility = permissions.canManageEvents ? input.visibility : "private";
+    const icsUrl = normalizeExternalCalendarIcsUrl(input.icsUrl);
 
     const { error: insertError } = await supabase
       .from("external_calendars")
       .insert({
         name: input.name.trim(),
-        ics_url: input.icsUrl.trim(),
+        ics_url: icsUrl,
         color: input.color,
         visibility,
         created_by_profile_id: profile.id,
@@ -2997,12 +3006,13 @@ export default function Home() {
       throw new Error("Vous ne pouvez modifier que vos calendriers.");
     }
     const visibility = permissions.canManageEvents ? input.visibility : "private";
+    const icsUrl = normalizeExternalCalendarIcsUrl(input.icsUrl);
 
     const { error: updateError } = await supabase
       .from("external_calendars")
       .update({
         name: input.name.trim(),
-        ics_url: input.icsUrl.trim(),
+        ics_url: icsUrl,
         color: input.color,
         visibility,
       })
@@ -3049,9 +3059,21 @@ export default function Home() {
       if (!icsText.trim()) {
         throw new Error(payload?.error || "Impossible de récupérer le flux ICS.");
       }
-      const parsedEvents = parseIcsEvents(icsText);
+      let parsedEvents: ReturnType<typeof parseIcsEvents>;
+      try {
+        parsedEvents = parseIcsEvents(icsText);
+      } catch (parseError) {
+        console.error("External calendar ICS parse failed", {
+          calendarId: calendar.id,
+          error: parseError instanceof Error ? parseError.message : String(parseError),
+        });
+        throw new Error("Le calendrier a été récupéré mais n'a pas pu être lu.");
+      }
       if (parsedEvents.length === 0) {
-        throw new Error("Aucun événement lisible trouvé dans ce flux ICS.");
+        console.error("External calendar ICS parse returned no events", {
+          calendarId: calendar.id,
+        });
+        throw new Error("Le calendrier a été récupéré mais n'a pas pu être lu.");
       }
 
       const now = new Date().toISOString();
@@ -11566,6 +11588,7 @@ function ExternalCalendarAddView({
         <input
           value={draft.icsUrl}
           onChange={(event) => onChange((current) => ({ ...current, icsUrl: event.target.value }))}
+          onBlur={() => onChange((current) => ({ ...current, icsUrl: normalizeExternalCalendarIcsUrl(current.icsUrl) }))}
           placeholder="URL ICS"
           inputMode="url"
           className="h-10 rounded-xl border border-stone-200 bg-white px-3 text-base font-medium text-stone-950 outline-none transition placeholder:text-stone-300 focus:border-[#bb2720]/40"
@@ -11699,6 +11722,7 @@ function ExternalCalendarSettingsDetail({
         <input
           value={draft.icsUrl}
           onChange={(event) => setDraft((current) => ({ ...current, icsUrl: event.target.value }))}
+          onBlur={() => setDraft((current) => ({ ...current, icsUrl: normalizeExternalCalendarIcsUrl(current.icsUrl) }))}
           placeholder="URL ICS"
           inputMode="url"
           readOnly={!canManage}

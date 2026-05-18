@@ -43,6 +43,34 @@ function getBearerToken(request: Request) {
   return match?.[1] ?? "";
 }
 
+function normalizeIcsUrl(value: string) {
+  const trimmed = value.trim();
+  if (/^webcal:\/\//i.test(trimmed)) {
+    return `https://${trimmed.replace(/^webcal:\/\//i, "")}`;
+  }
+  return trimmed;
+}
+
+function getUrlProtocol(value: string) {
+  try {
+    return new URL(value).protocol.replace(/:$/, "") || "unknown";
+  } catch {
+    return "invalid";
+  }
+}
+
+function getSafeResponsePreview(value: string) {
+  return value
+    .slice(0, 100)
+    .replace(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi, "[email]")
+    .replace(/https?:\/\/\S+/gi, "[url]")
+    .replace(/\r?\n/g, "\\n");
+}
+
+function getErrorMessage(error: unknown) {
+  return error instanceof Error ? error.message : String(error);
+}
+
 export function OPTIONS() {
   return new Response(null, {
     status: 204,
@@ -94,7 +122,8 @@ export async function POST(request: Request) {
       return jsonResponse({ error: "Accès refusé." }, { status: 403 });
     }
 
-    const icsUrl = calendar.ics_url.trim();
+    const rawIcsUrl = calendar.ics_url.trim();
+    const icsUrl = normalizeIcsUrl(rawIcsUrl);
     if (!icsUrl) {
       return jsonResponse({ error: "URL ICS manquante." }, { status: 400 });
     }
@@ -110,27 +139,73 @@ export async function POST(request: Request) {
       return jsonResponse({ error: "URL ICS invalide." }, { status: 400 });
     }
 
-    const response = await fetch(parsedUrl, {
-      cache: "no-store",
-      headers: {
-        Accept: "text/calendar,text/plain,*/*",
-        "User-Agent": "MSTV Production OS Calendar Sync",
-      },
+    console.info("External ICS fetch start", {
+      calendarId: calendar.id,
+      calendarName: calendar.name,
+      receivedProtocol: getUrlProtocol(rawIcsUrl),
+      normalizedProtocol: parsedUrl.protocol.replace(/:$/, ""),
+      normalizedHost: parsedUrl.host,
     });
+
+    let response: Response;
+    try {
+      response = await fetch(parsedUrl, {
+        cache: "no-store",
+        redirect: "follow",
+        headers: {
+          Accept: "text/calendar,text/plain,application/octet-stream,*/*",
+          "User-Agent": "MSTV Production OS/1.0 Calendar Sync",
+        },
+      });
+    } catch (fetchError) {
+      console.error("External ICS fetch network failed", {
+        calendarId: calendar.id,
+        calendarName: calendar.name,
+        normalizedHost: parsedUrl.host,
+        error: getErrorMessage(fetchError),
+      });
+      return jsonResponse({ error: "Flux calendrier inaccessible." }, { status: 502 });
+    }
 
     if (!response.ok) {
       console.error("External ICS fetch failed", {
         calendarId: calendar.id,
         calendarName: calendar.name,
+        normalizedHost: parsedUrl.host,
         status: response.status,
         statusText: response.statusText,
+        contentType: response.headers.get("content-type"),
       });
-      return jsonResponse({ error: "Impossible de récupérer le flux ICS." }, { status: 502 });
+      return jsonResponse({ error: "Flux calendrier inaccessible." }, { status: 502 });
     }
 
     const icsText = await response.text();
-    if (!icsText.trim()) {
-      return jsonResponse({ error: "Le flux ICS est vide." }, { status: 502 });
+    const responseSize = Buffer.byteLength(icsText, "utf8");
+    const contentType = response.headers.get("content-type") ?? "";
+    const looksLikeIcs = /BEGIN:VCALENDAR/i.test(icsText);
+
+    console.info("External ICS fetch response", {
+      calendarId: calendar.id,
+      calendarName: calendar.name,
+      normalizedHost: parsedUrl.host,
+      status: response.status,
+      contentType,
+      responseSize,
+      preview: getSafeResponsePreview(icsText),
+      containsVCalendar: looksLikeIcs,
+      containsVEvent: /BEGIN:VEVENT/i.test(icsText),
+    });
+
+    if (!icsText.trim() || !looksLikeIcs) {
+      console.error("External ICS validation failed", {
+        calendarId: calendar.id,
+        calendarName: calendar.name,
+        normalizedHost: parsedUrl.host,
+        contentType,
+        responseSize,
+        preview: getSafeResponsePreview(icsText),
+      });
+      return jsonResponse({ error: "Le lien ne semble pas être un calendrier ICS valide." }, { status: 422 });
     }
 
     return jsonResponse({ icsText });
