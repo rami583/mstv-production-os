@@ -95,6 +95,7 @@ type ExternalCalendarSyncResult = {
 };
 
 const EXTERNAL_CALENDAR_UPSERT_BATCH_SIZE = 250;
+const EXTERNAL_CALENDAR_FETCH_PAGE_SIZE = 1000;
 
 type EventQueryRow = EventRow & {
   event_options: EventOptionRow[] | null;
@@ -2340,13 +2341,30 @@ async function fetchExternalCalendarEvents() {
     throw new Error("Configuration Supabase manquante.");
   }
 
-  const { data, error } = await supabase
-    .from("external_calendar_events")
-    .select("*, external_calendars (*)")
-    .order("start_time", { ascending: true });
+  const rows: ExternalCalendarEventQueryRow[] = [];
+  let from = 0;
 
-  if (error) throw error;
-  return ((data ?? []) as ExternalCalendarEventQueryRow[]).map(mapExternalCalendarEvent);
+  while (true) {
+    const to = from + EXTERNAL_CALENDAR_FETCH_PAGE_SIZE - 1;
+    const { data, error } = await supabase
+      .from("external_calendar_events")
+      .select("*, external_calendars (*)")
+      .order("start_time", { ascending: true })
+      .range(from, to);
+
+    if (error) throw error;
+
+    const pageRows = (data ?? []) as ExternalCalendarEventQueryRow[];
+    rows.push(...pageRows);
+
+    if (pageRows.length < EXTERNAL_CALENDAR_FETCH_PAGE_SIZE) {
+      break;
+    }
+
+    from += EXTERNAL_CALENDAR_FETCH_PAGE_SIZE;
+  }
+
+  return rows.map(mapExternalCalendarEvent);
 }
 
 export default function Home() {
@@ -2469,6 +2487,31 @@ export default function Home() {
       ),
     [externalCalendarEvents, permissions, profile],
   );
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+
+    const monthStart = new Date(visibleMonth.getFullYear(), visibleMonth.getMonth(), 1);
+    const monthEnd = new Date(visibleMonth.getFullYear(), visibleMonth.getMonth() + 1, 0);
+    const monthStartKey = formatDateKey(monthStart);
+    const monthEndKey = formatDateKey(monthEnd);
+    const visibleExternalEventsInCurrentMonth = visibleExternalCalendarEvents.filter((event) => {
+      const dateKey = getExternalEventDateKey(event);
+      return dateKey >= monthStartKey && dateKey <= monthEndKey;
+    });
+    const visibleExternalEventsForSelectedDay = visibleExternalCalendarEvents.filter((event) => getExternalEventDateKey(event) === selectedDateKey);
+
+    console.info("External calendar display debug", {
+      externalCalendarsLoaded: externalCalendars.length,
+      externalEventsLoaded: externalCalendarEvents.length,
+      visibleExternalEventsLoaded: visibleExternalCalendarEvents.length,
+      visibleExternalEventsInCurrentMonth: visibleExternalEventsInCurrentMonth.length,
+      visibleExternalEventsForSelectedDay: visibleExternalEventsForSelectedDay.length,
+      currentMonth: `${visibleMonth.getFullYear()}-${String(visibleMonth.getMonth() + 1).padStart(2, "0")}`,
+      selectedDateKey,
+      currentUserRole: profile?.role ?? null,
+    });
+  }, [externalCalendars.length, externalCalendarEvents.length, profile?.role, selectedDateKey, visibleExternalCalendarEvents, visibleMonth]);
 
   useEffect(() => {
     onlineRef.current = online;
