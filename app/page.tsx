@@ -104,17 +104,6 @@ type UserProfile = {
   createdAt: string;
 };
 
-type OfflineBootPath = "initial" | "live" | "cached" | "failed";
-
-type OfflineDebugInfo = {
-  cachedSessionExists: boolean;
-  cachedProfileExists: boolean;
-  cachedProfileRole: UserRole | null;
-  lastCacheWriteAt: string | null;
-  online: boolean;
-  bootPath: OfflineBootPath;
-};
-
 type AppPermissions = {
   canManageEvents: boolean;
   canManageOperational: boolean;
@@ -614,10 +603,6 @@ function getCachedUserProfile(userId: string) {
   return getLocalStorageJson<UserProfile>(`${cachedProfileKeyPrefix}${userId}`);
 }
 
-function getCachedProfileWriteTime(userId: string) {
-  return getLocalStorageJson<CachedProfileMeta>(`${cachedProfileMetaKeyPrefix}${userId}`)?.cachedAt ?? null;
-}
-
 function cacheAuthSession(session: Session) {
   setLocalStorageJson(cachedAuthSessionKey, {
     session,
@@ -627,25 +612,6 @@ function cacheAuthSession(session: Session) {
 
 function getCachedAuthSession() {
   return getLocalStorageJson<CachedAuthSession>(cachedAuthSessionKey)?.session ?? null;
-}
-
-function getCachedAuthSessionWriteTime() {
-  return getLocalStorageJson<CachedAuthSession>(cachedAuthSessionKey)?.cachedAt ?? null;
-}
-
-function readOfflineDebugInfo(userId: string | null, bootPath: OfflineBootPath): OfflineDebugInfo {
-  const cachedSession = getCachedAuthSession();
-  const effectiveUserId = userId ?? cachedSession?.user.id ?? null;
-  const cachedProfile = effectiveUserId ? getCachedUserProfile(effectiveUserId) : null;
-  const profileWriteTime = effectiveUserId ? getCachedProfileWriteTime(effectiveUserId) : null;
-  return {
-    cachedSessionExists: Boolean(cachedSession),
-    cachedProfileExists: Boolean(cachedProfile),
-    cachedProfileRole: cachedProfile?.role ?? null,
-    lastCacheWriteAt: profileWriteTime ?? getCachedAuthSessionWriteTime(),
-    online: typeof navigator === "undefined" ? true : navigator.onLine,
-    bootPath,
-  };
 }
 
 function readCachedAuthState(): CachedAuthState | null {
@@ -2403,11 +2369,6 @@ export default function Home() {
   const [pendingSyncCount, setPendingSyncCount] = useState(0);
   const [syncingPendingActions, setSyncingPendingActions] = useState(false);
   const [pendingSyncError, setPendingSyncError] = useState<string | null>(null);
-  const [offlineBootPath, setOfflineBootPath] = useState<OfflineBootPath>(() => initialCachedAuth ? "cached" : "initial");
-  const [offlineDebugInfo, setOfflineDebugInfo] = useState<OfflineDebugInfo>(() => readOfflineDebugInfo(initialCachedAuth?.session.user.id ?? null, initialCachedAuth ? "cached" : "initial"));
-  const [offlineDebugOpen, setOfflineDebugOpen] = useState(false);
-  const [offlinePrepareStatus, setOfflinePrepareStatus] = useState<"idle" | "preparing" | "ready" | "error">("idle");
-  const [offlinePrepareMessage, setOfflinePrepareMessage] = useState<string | null>(null);
   const [deletedEvents, setDeletedEvents] = useState<ProductionEvent[]>([]);
   const [trashLoading, setTrashLoading] = useState(false);
   const [trashError, setTrashError] = useState<string | null>(null);
@@ -2428,15 +2389,6 @@ export default function Home() {
   const processPendingSyncQueueRef = useRef<((options?: { forceOnline?: boolean }) => Promise<void>) | null>(null);
   const todayKey = formatDateKey(today);
 
-  function refreshOfflineDebugInfo(path: OfflineBootPath = offlineBootPath, userId: string | null = authSession?.user.id ?? profile?.id ?? null) {
-    setOfflineDebugInfo(readOfflineDebugInfo(userId, path));
-  }
-
-  function setBootPath(path: OfflineBootPath, userId: string | null = authSession?.user.id ?? profile?.id ?? null) {
-    setOfflineBootPath(path);
-    setOfflineDebugInfo(readOfflineDebugInfo(userId, path));
-  }
-
   function schedulePendingSyncReplay(source: "browser" | "capacitor" | "state" | "enqueue") {
     if (typeof window === "undefined") return;
     if (pendingNetworkSyncTimeoutRef.current) {
@@ -2455,7 +2407,6 @@ export default function Home() {
     setAuthSession(cachedState.session);
     setProfile(cachedState.profile);
     setAuthError(null);
-    setBootPath("cached", cachedState.session.user.id);
 
     if (cachedState.appData) {
       setEvents(cachedState.appData.events);
@@ -2503,14 +2454,12 @@ export default function Home() {
     function handleOnline() {
       onlineRef.current = true;
       setOnline(true);
-      refreshOfflineDebugInfo();
       schedulePendingSyncReplay("browser");
     }
 
     function handleOffline() {
       onlineRef.current = false;
       setOnline(false);
-      refreshOfflineDebugInfo();
       if (pendingNetworkSyncTimeoutRef.current) {
         window.clearTimeout(pendingNetworkSyncTimeoutRef.current);
         pendingNetworkSyncTimeoutRef.current = null;
@@ -2525,7 +2474,6 @@ export default function Home() {
         if (cancelled) return;
         onlineRef.current = status.connected;
         setOnline(status.connected);
-        refreshOfflineDebugInfo();
         if (status.connected) {
           schedulePendingSyncReplay("capacitor");
         }
@@ -2538,7 +2486,6 @@ export default function Home() {
       if (cancelled) return;
       onlineRef.current = status.connected;
       setOnline(status.connected);
-      refreshOfflineDebugInfo();
       if (status.connected) {
         schedulePendingSyncReplay("capacitor");
       } else if (pendingNetworkSyncTimeoutRef.current) {
@@ -2589,7 +2536,6 @@ export default function Home() {
 
       if (!session) {
         console.info("[MSTV offline boot] no session available");
-        setBootPath("failed", null);
         setProfile(null);
         setEvents([]);
         setExternalCalendars([]);
@@ -2606,7 +2552,6 @@ export default function Home() {
         cacheUserProfile(nextProfile);
         if (!cancelled) {
           setProfile(nextProfile);
-          setBootPath("live", session.user.id);
         }
       } catch (profileError) {
         console.error("Failed to load authenticated profile. Apply supabase/migrations/013_auth_profiles.sql if needed.", profileError);
@@ -2622,7 +2567,6 @@ export default function Home() {
             cacheAuthSession(session);
             setProfile(cachedProfile);
             setAuthError(null);
-            setBootPath("cached", session.user.id);
             if (isNetworkOrUnavailableError(profileError)) {
               setOnline(false);
             }
@@ -2632,7 +2576,6 @@ export default function Home() {
         if (!cancelled) {
           console.info("[MSTV offline boot] fatal profile error, no cached profile", { userId: session.user.id });
           setProfile(null);
-          setBootPath("failed", session.user.id);
           setAuthError(
             isNetworkOrUnavailableError(profileError)
               ? "Hors ligne. Connectez-vous une première fois avec du réseau pour préparer l'accès offline."
@@ -2764,7 +2707,6 @@ export default function Home() {
       }
       setLoading(false);
       setError(null);
-      setBootPath("cached", authSession.user.id);
       return;
     }
     void reloadData();
@@ -2977,60 +2919,6 @@ export default function Home() {
       if (!options.silent) {
         setLoading(false);
       }
-    }
-  }
-
-  async function prepareOfflineMode() {
-    if (!supabase) {
-      setOfflinePrepareStatus("error");
-      setOfflinePrepareMessage("Configuration Supabase manquante.");
-      return;
-    }
-
-    setOfflinePrepareStatus("preparing");
-    setOfflinePrepareMessage("Préparation du mode hors ligne...");
-
-    try {
-      const { data, error: sessionError } = await supabase.auth.getSession();
-      const currentSession = data.session ?? authSession;
-      if (sessionError && !currentSession) {
-        throw sessionError;
-      }
-      if (!currentSession) {
-        throw new Error("Aucune session active à mettre en cache.");
-      }
-
-      cacheAuthSession(currentSession);
-      setAuthSession(currentSession);
-
-      const nextProfile = await fetchOrCreateProfile(currentSession);
-      cacheUserProfile(nextProfile);
-      setProfile(nextProfile);
-      setBootPath("live", currentSession.user.id);
-
-      const [nextEvents, nextExternalCalendars, nextExternalEvents] = await Promise.all([
-        fetchEvents(),
-        fetchExternalCalendars(),
-        fetchExternalCalendarEvents(),
-      ]);
-      cacheAppData(currentSession.user.id, {
-        events: nextEvents,
-        externalCalendars: nextExternalCalendars,
-        externalCalendarEvents: nextExternalEvents,
-      });
-      setEvents(nextEvents);
-      setExternalCalendars(nextExternalCalendars);
-      setExternalCalendarEvents(nextExternalEvents);
-      setLoading(false);
-      setError(null);
-      setOfflinePrepareStatus("ready");
-      setOfflinePrepareMessage("Mode hors ligne prêt");
-      refreshOfflineDebugInfo("live", currentSession.user.id);
-    } catch (prepareError) {
-      console.error("[MSTV offline boot] prepare offline mode failed", prepareError);
-      setOfflinePrepareStatus("error");
-      setOfflinePrepareMessage(prepareError instanceof Error ? prepareError.message : "Impossible de préparer le mode hors ligne.");
-      refreshOfflineDebugInfo();
     }
   }
 
@@ -6262,25 +6150,7 @@ export default function Home() {
   }
 
   if (authError && !profile) {
-    return (
-      <FullScreenStatus tone="error">
-        <div className="w-full max-w-sm">
-          <p>{authError}</p>
-          <OfflineDebugPanel info={offlineDebugInfo} className="mt-4 text-left" />
-          <button
-            type="button"
-            onClick={() => void prepareOfflineMode()}
-            disabled={offlinePrepareStatus === "preparing"}
-            className="mt-3 w-full rounded-full border border-stone-200 bg-white px-4 py-2 text-base font-semibold text-stone-700 transition hover:bg-stone-50 disabled:text-stone-300"
-          >
-            {offlinePrepareStatus === "preparing" ? "Préparation..." : "Préparer le mode hors ligne"}
-          </button>
-          {offlinePrepareMessage && (
-            <p className={cn("mt-2 text-sm font-semibold", offlinePrepareStatus === "ready" ? "text-emerald-700" : "text-stone-500")}>{offlinePrepareMessage}</p>
-          )}
-        </div>
-      </FullScreenStatus>
-    );
+    return <FullScreenStatus tone="error">{authError}</FullScreenStatus>;
   }
 
   return (
@@ -6337,14 +6207,6 @@ export default function Home() {
           pendingSyncCount={pendingSyncCount}
           syncingPendingActions={syncingPendingActions}
           pendingSyncError={pendingSyncError}
-          offlineDebugInfo={offlineDebugInfo}
-          offlinePrepareStatus={offlinePrepareStatus}
-          offlinePrepareMessage={offlinePrepareMessage}
-          onPrepareOfflineMode={prepareOfflineMode}
-          onOpenOfflineDebug={() => {
-            refreshOfflineDebugInfo();
-            setOfflineDebugOpen(true);
-          }}
           onImportQuote={() => {
             if (!permissions.canManageEvents) return;
             openQuoteImport();
@@ -6489,14 +6351,6 @@ export default function Home() {
           pendingSyncCount={pendingSyncCount}
           syncingPendingActions={syncingPendingActions}
           pendingSyncError={pendingSyncError}
-          offlineDebugInfo={offlineDebugInfo}
-          offlinePrepareStatus={offlinePrepareStatus}
-          offlinePrepareMessage={offlinePrepareMessage}
-          onPrepareOfflineMode={prepareOfflineMode}
-          onOpenOfflineDebug={() => {
-            refreshOfflineDebugInfo();
-            setOfflineDebugOpen(true);
-          }}
           onGoToday={() => {
             goToday();
             setYearOverviewOpen(false);
@@ -6707,17 +6561,6 @@ export default function Home() {
         <ExternalCalendarEventDetails event={externalCalendarDetail} onClose={() => setExternalCalendarDetail(null)} />
       )}
 
-      {offlineDebugOpen && (
-        <OfflineDebugSheet
-          info={offlineDebugInfo}
-          prepareStatus={offlinePrepareStatus}
-          prepareMessage={offlinePrepareMessage}
-          onPrepare={() => void prepareOfflineMode()}
-          onRefresh={() => refreshOfflineDebugInfo()}
-          onClose={() => setOfflineDebugOpen(false)}
-        />
-      )}
-
       {historyOpen && selectedEvent && (
         <EventHistorySheet
           event={selectedEvent}
@@ -6759,11 +6602,6 @@ function AppHeader({
   pendingSyncCount,
   syncingPendingActions,
   pendingSyncError,
-  offlineDebugInfo,
-  offlinePrepareStatus,
-  offlinePrepareMessage,
-  onPrepareOfflineMode,
-  onOpenOfflineDebug,
   onImportQuote,
   onImportNativeMstvCalendar,
   onSearch,
@@ -6802,11 +6640,6 @@ function AppHeader({
   pendingSyncCount: number;
   syncingPendingActions: boolean;
   pendingSyncError: string | null;
-  offlineDebugInfo: OfflineDebugInfo;
-  offlinePrepareStatus: "idle" | "preparing" | "ready" | "error";
-  offlinePrepareMessage: string | null;
-  onPrepareOfflineMode: () => Promise<void>;
-  onOpenOfflineDebug: () => void;
   onImportQuote: () => void;
   onImportNativeMstvCalendar: () => void;
   onSearch: () => void;
@@ -6931,11 +6764,6 @@ function AppHeader({
           onOpenUserManagement={onOpenUserManagement}
           canManageExternalCalendars={canManageExternalCalendars}
           onOpenExternalCalendars={onOpenExternalCalendars}
-          offlineDebugInfo={offlineDebugInfo}
-          offlinePrepareStatus={offlinePrepareStatus}
-          offlinePrepareMessage={offlinePrepareMessage}
-          onPrepareOfflineMode={onPrepareOfflineMode}
-          onOpenOfflineDebug={onOpenOfflineDebug}
           onLogout={onLogout}
         />
       </div>
@@ -7163,11 +6991,6 @@ function YearOverviewOverlay({
   pendingSyncCount,
   syncingPendingActions,
   pendingSyncError,
-  offlineDebugInfo,
-  offlinePrepareStatus,
-  offlinePrepareMessage,
-  onPrepareOfflineMode,
-  onOpenOfflineDebug,
   onGoToday,
   onImportQuote,
   onImportNativeMstvCalendar,
@@ -7198,11 +7021,6 @@ function YearOverviewOverlay({
   pendingSyncCount: number;
   syncingPendingActions: boolean;
   pendingSyncError: string | null;
-  offlineDebugInfo: OfflineDebugInfo;
-  offlinePrepareStatus: "idle" | "preparing" | "ready" | "error";
-  offlinePrepareMessage: string | null;
-  onPrepareOfflineMode: () => Promise<void>;
-  onOpenOfflineDebug: () => void;
   onGoToday: () => void;
   onImportQuote: () => void;
   onImportNativeMstvCalendar: () => void;
@@ -7406,11 +7224,6 @@ function YearOverviewOverlay({
           pendingSyncCount={pendingSyncCount}
           syncingPendingActions={syncingPendingActions}
           pendingSyncError={pendingSyncError}
-          offlineDebugInfo={offlineDebugInfo}
-          offlinePrepareStatus={offlinePrepareStatus}
-          offlinePrepareMessage={offlinePrepareMessage}
-          onPrepareOfflineMode={onPrepareOfflineMode}
-          onOpenOfflineDebug={onOpenOfflineDebug}
           onImportQuote={onImportQuote}
           onImportNativeMstvCalendar={onImportNativeMstvCalendar}
           onSearch={onSearch}
@@ -12733,11 +12546,6 @@ function AccountMenu({
   email,
   canManageExternalCalendars,
   onOpenExternalCalendars,
-  offlineDebugInfo,
-  offlinePrepareStatus,
-  offlinePrepareMessage,
-  onPrepareOfflineMode,
-  onOpenOfflineDebug,
   onLogout,
 }: {
   profile: UserProfile | null;
@@ -12746,11 +12554,6 @@ function AccountMenu({
   onOpenUserManagement: () => void;
   canManageExternalCalendars: boolean;
   onOpenExternalCalendars: () => void;
-  offlineDebugInfo: OfflineDebugInfo;
-  offlinePrepareStatus: "idle" | "preparing" | "ready" | "error";
-  offlinePrepareMessage: string | null;
-  onPrepareOfflineMode: () => Promise<void>;
-  onOpenOfflineDebug: () => void;
   onLogout: () => void;
 }) {
   const [open, setOpen] = useState(false);
@@ -12800,31 +12603,6 @@ function AccountMenu({
             >
               Calendriers externes
             </button>
-          )}
-          <button
-            type="button"
-            onClick={() => {
-              void onPrepareOfflineMode();
-            }}
-            disabled={offlinePrepareStatus === "preparing"}
-            className="block w-full rounded-xl px-3 py-2 text-right text-sm font-medium text-stone-700 transition hover:bg-[#bb2720]/[0.05] hover:text-stone-950 disabled:text-stone-300"
-          >
-            {offlinePrepareStatus === "preparing" ? "Préparation..." : "Préparer le mode hors ligne"}
-          </button>
-          <button
-            type="button"
-            onClick={() => {
-              setOpen(false);
-              onOpenOfflineDebug();
-            }}
-            className="block w-full rounded-xl px-3 py-2 text-right text-sm font-medium text-stone-700 transition hover:bg-[#bb2720]/[0.05] hover:text-stone-950"
-          >
-            Debug offline
-          </button>
-          {(offlinePrepareMessage || offlineDebugInfo.bootPath !== "initial") && (
-            <div className="px-3 py-1.5 text-right text-xs font-semibold text-stone-400">
-              {offlinePrepareMessage ?? `Boot: ${offlineDebugInfo.bootPath}`}
-            </div>
           )}
           <button
             type="button"
@@ -13046,88 +12824,6 @@ function StatusMessage({ children, tone = "neutral" }: { children: React.ReactNo
         {tone === "error" && <AlertCircle className="h-4 w-4" />}
         {children}
       </span>
-    </div>
-  );
-}
-
-function OfflineDebugPanel({ info, className }: { info: OfflineDebugInfo; className?: string }) {
-  const rows = [
-    ["Session cachée", info.cachedSessionExists ? "oui" : "non"],
-    ["Profil caché", info.cachedProfileExists ? "oui" : "non"],
-    ["Rôle profil caché", info.cachedProfileRole ? getRoleLabel(info.cachedProfileRole) : "-"],
-    ["Dernière écriture cache", info.lastCacheWriteAt ? formatHistoryTimestamp(info.lastCacheWriteAt) : "-"],
-    ["Statut réseau", info.online ? "online" : "offline"],
-    ["Chemin boot", info.bootPath],
-  ];
-
-  return (
-    <div className={cn("rounded-2xl border border-stone-200 bg-white/90 p-3 text-stone-700", className)}>
-      <p className="mb-2 text-sm font-bold uppercase tracking-normal text-stone-500">Debug offline</p>
-      <div className="space-y-1">
-        {rows.map(([label, value]) => (
-          <div key={label} className="flex items-center justify-between gap-3 text-xs font-semibold">
-            <span className="text-stone-400">{label}</span>
-            <span className="text-right text-stone-800">{value}</span>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-function OfflineDebugSheet({
-  info,
-  prepareStatus,
-  prepareMessage,
-  onPrepare,
-  onRefresh,
-  onClose,
-}: {
-  info: OfflineDebugInfo;
-  prepareStatus: "idle" | "preparing" | "ready" | "error";
-  prepareMessage: string | null;
-  onPrepare: () => void;
-  onRefresh: () => void;
-  onClose: () => void;
-}) {
-  return (
-    <div className="fixed inset-0 z-50 flex items-end justify-center bg-stone-950/10 p-3 sm:items-center sm:p-6">
-      <div className="w-full max-w-sm rounded-3xl border border-stone-200 bg-white p-4">
-        <div className="mb-3 flex items-center justify-between gap-3">
-          <p className="text-base font-semibold text-stone-950">Mode hors ligne</p>
-          <button
-            type="button"
-            onClick={onClose}
-            className="flex h-8 w-8 items-center justify-center rounded-full border border-stone-200 bg-white text-stone-600"
-            aria-label="Fermer"
-          >
-            <X className="h-4 w-4" />
-          </button>
-        </div>
-        <OfflineDebugPanel info={info} />
-        {prepareMessage && (
-          <p className={cn("mt-3 rounded-2xl px-3 py-2 text-sm font-semibold", prepareStatus === "ready" ? "bg-emerald-50 text-emerald-700" : prepareStatus === "error" ? "bg-rose-50 text-rose-700" : "bg-stone-50 text-stone-600")}>
-            {prepareMessage}
-          </p>
-        )}
-        <div className="mt-4 grid grid-cols-2 gap-2">
-          <button
-            type="button"
-            onClick={onRefresh}
-            className="rounded-full border border-stone-200 bg-white px-3 py-2 text-sm font-semibold text-stone-600 transition hover:bg-stone-50"
-          >
-            Actualiser
-          </button>
-          <button
-            type="button"
-            onClick={onPrepare}
-            disabled={prepareStatus === "preparing"}
-            className="rounded-full bg-[#bb2720] px-3 py-2 text-sm font-semibold text-white transition hover:bg-[#a9231d] disabled:bg-stone-300"
-          >
-            {prepareStatus === "preparing" ? "Préparation..." : "Préparer"}
-          </button>
-        </div>
-      </div>
     </div>
   );
 }
