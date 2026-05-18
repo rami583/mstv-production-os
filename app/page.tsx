@@ -3656,9 +3656,14 @@ export default function Home() {
   }
 
   function selectYearOverviewMonth(year: number, monthIndex: number) {
+    const now = new Date();
     const nextMonth = new Date(year, monthIndex, 1);
     setVisibleMonth(nextMonth);
-    setSelectedDateKey(getPreferredDateKeyForMonth(nextMonth, events));
+    setSelectedDateKey(
+      year === now.getFullYear() && monthIndex === now.getMonth()
+        ? formatDateKey(now)
+        : `${year}-${String(monthIndex + 1).padStart(2, "0")}-01`,
+    );
     setYearOverviewOpen(false);
     setScreen("calendar");
   }
@@ -7176,7 +7181,7 @@ function YearOverviewOverlay({
   canOpenTrash: boolean;
 }) {
   const [displayYear, setDisplayYear] = useState(initialYear);
-  const swipeStartRef = useRef<{ pointerId: number; x: number; y: number } | null>(null);
+  const swipeStartRef = useRef<{ pointerId: number; x: number; y: number; year: number | null; monthIndex: number | null } | null>(null);
   const touchSwipeStartRef = useRef<{ x: number; y: number } | null>(null);
   const yearPagerRef = useRef<HTMLDivElement | null>(null);
   const wheelLockRef = useRef<number | null>(null);
@@ -7282,10 +7287,14 @@ function YearOverviewOverlay({
   function handlePointerDown(pointerEvent: ReactPointerEvent<HTMLDivElement>) {
     if (pointerEvent.pointerType === "touch" || yearTransitioningRef.current) return;
 
+    const monthCard = (pointerEvent.target as HTMLElement).closest<HTMLElement>("[data-year-month]");
+
     swipeStartRef.current = {
       pointerId: pointerEvent.pointerId,
       x: pointerEvent.clientX,
       y: pointerEvent.clientY,
+      year: monthCard?.dataset.year ? Number(monthCard.dataset.year) : null,
+      monthIndex: monthCard?.dataset.monthIndex ? Number(monthCard.dataset.monthIndex) : null,
     };
     setYearTransitionEnabled(false);
     pointerEvent.currentTarget.setPointerCapture(pointerEvent.pointerId);
@@ -7310,6 +7319,16 @@ function YearOverviewOverlay({
 
     const deltaX = pointerEvent.clientX - swipeStart.x;
     const deltaY = pointerEvent.clientY - swipeStart.y;
+    if (swipeStart.year !== null && swipeStart.monthIndex !== null && Math.max(Math.abs(deltaX), Math.abs(deltaY)) <= 10) {
+      const selectedYear = swipeStart.year;
+      const selectedMonthIndex = swipeStart.monthIndex;
+      swipeStartRef.current = null;
+      setYearTransitionEnabled(false);
+      setYearPagerOffset(0);
+      onSelectMonth(selectedYear, selectedMonthIndex);
+      return;
+    }
+
     settleYearSwipe(deltaY, deltaX);
   }
 
@@ -7521,6 +7540,9 @@ function YearOverviewMiniMonth({
   return (
     <button
       type="button"
+      data-year-month
+      data-year={year}
+      data-month-index={monthIndex}
       onClick={onSelect}
       className={cn(
         "flex min-h-0 min-w-0 flex-col overflow-hidden rounded-[1.1rem] p-1.5 text-left transition hover:bg-white/70 sm:rounded-[1.25rem] sm:p-2.5 lg:p-3",
