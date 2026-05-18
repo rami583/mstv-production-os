@@ -1200,6 +1200,26 @@ function uniqueLabels(labels: string[]) {
     });
 }
 
+function formatServiceLabel(label: string) {
+  return label
+    .trim()
+    .toLocaleLowerCase("fr-FR")
+    .replace(/^([\p{L}])/u, (letter) => letter.toLocaleUpperCase("fr-FR"))
+    .replace(/\b(Sas|Sarl|Sa|Tv)\b/g, (acronym) => acronym.toLocaleUpperCase("fr-FR"));
+}
+
+function uniqueServiceLabels(labels: string[]) {
+  const seen = new Set<string>();
+  return labels
+    .map((label) => formatServiceLabel(label))
+    .filter((label) => {
+      const key = normalizeLabel(label);
+      if (!key || seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+}
+
 function parseFrenchDateToKey(value: string) {
   const numericMatch = value.match(/\b(\d{1,2})[\/.-](\d{1,2})[\/.-](\d{2,4})\b/);
   if (numericMatch) {
@@ -1228,6 +1248,33 @@ function parseFrenchDateToKey(value: string) {
 
   const [, day, monthName, year] = textMatch;
   return `${year}-${monthByName[monthName]}-${day.padStart(2, "0")}`;
+}
+
+function parseFrenchDateToKeyWithDefaultYear(value: string, defaultYear?: string) {
+  const explicitDate = parseFrenchDateToKey(value);
+  if (explicitDate) return explicitDate;
+  if (!defaultYear) return "";
+
+  const monthByName: Record<string, string> = {
+    janvier: "01",
+    fevrier: "02",
+    mars: "03",
+    avril: "04",
+    mai: "05",
+    juin: "06",
+    juillet: "07",
+    aout: "08",
+    septembre: "09",
+    octobre: "10",
+    novembre: "11",
+    decembre: "12",
+  };
+  const normalized = normalizeLabel(value);
+  const textMatch = normalized.match(/\b(\d{1,2})\s+(janvier|fevrier|mars|avril|mai|juin|juillet|aout|septembre|octobre|novembre|decembre)\b/);
+  if (!textMatch) return "";
+
+  const [, day, monthName] = textMatch;
+  return `${defaultYear}-${monthByName[monthName]}-${day.padStart(2, "0")}`;
 }
 
 function parseFrenchTimeMatch(hours: string, minutes?: string) {
@@ -1281,25 +1328,21 @@ function extractMstvClientName(lines: string[]) {
 }
 
 function findMstvProductionLine(lines: string[]) {
-  const withDateAndRange = lines.find((line) => parseFrenchDateToKey(line) && parseFrenchTimeRange(line).startTime);
+  const withDateAndRange = lines.find((line) => /\ble\s+\d{1,2}\s+[A-Za-zéûîôàèùç]+(?:\s+\d{4})?\b/i.test(line) && parseFrenchTimeRange(line).startTime);
   if (withDateAndRange) return withDateAndRange;
 
   const compactText = lines.join(" ");
-  const match = compactText.match(/([^.:\n]*(?:le\s+)?\d{1,2}\s+[A-Za-zéûîôàèùç]+\s+\d{4}\s+(?:de\s+)?\d{1,2}\s*(?:h|H|:)\s*\d{0,2}\s*(?:-|–|—|à|a)\s*\d{1,2}\s*(?:h|H|:)\s*\d{0,2}[^.:\n]*)/i);
+  const match = compactText.match(/([^.:\n]*(?:le\s+)?\d{1,2}\s+[A-Za-zéûîôàèùç]+(?:\s+\d{4})?\s+(?:de\s+)?\d{1,2}\s*(?:h|H|:)\s*\d{0,2}\s*(?:-|–|—|à|a)\s*\d{1,2}\s*(?:h|H|:)\s*\d{0,2}[^.:\n]*)/i);
   return match?.[1]?.trim() ?? "";
 }
 
-function extractMstvEventName(productionLine: string) {
-  if (!productionLine) return "";
-  const title = productionLine
-    .replace(/\s+(?:le\s+)?\d{1,2}\s+[A-Za-zéûîôàèùç]+\s+\d{4}.*$/i, "")
-    .replace(/\s+tout\s+[ée]quip[ée](?:\s|$).*$/i, "")
-    .replace(/\s+de\s+\d{1,2}\s*(?:h|H|:).*$/i, "")
-    .trim();
-  if (!title) return "";
-
-  const sentenceTitle = title.toLocaleLowerCase("fr-FR");
-  return `${sentenceTitle.charAt(0).toLocaleUpperCase("fr-FR")}${sentenceTitle.slice(1)}`;
+function extractQuoteDocumentYear(lines: string[]) {
+  const dateLine = findLineValue(lines, [
+    /\bdate(?:\s+(?:facturation|de\s+facture|du\s+devis|devis))?\s*[:#-]\s*(.+)$/i,
+    /\b(?:devis|facture)\s+du\s+(.+)$/i,
+  ]);
+  const date = parseFrenchDateToKey(dateLine);
+  return date ? date.slice(0, 4) : "";
 }
 
 function extractQuoteServices(text: string) {
@@ -1323,7 +1366,7 @@ function extractQuoteServices(text: string) {
   const normalizedText = normalizeLabel(text);
   const keywordServices = serviceRules.filter((rule) => rule.keywords.some((keyword) => normalizedText.includes(normalizeLabel(keyword)))).map((rule) => rule.label);
   const lineItemServices = extractQuoteLineItemLabels(text);
-  return lineItemServices.length > 0 ? uniqueLabels(lineItemServices) : uniqueLabels(keywordServices);
+  return lineItemServices.length > 0 ? uniqueServiceLabels(lineItemServices) : uniqueServiceLabels(keywordServices);
 }
 
 function extractQuoteLineItemLabels(text: string) {
@@ -1336,10 +1379,14 @@ function extractQuoteLineItemLabels(text: string) {
 
   for (const line of lines) {
     const normalizedLine = normalizeLabel(line);
-    const pricedLineMatch = line.match(/^(.+?)\s+\d+(?:[,.]\d{2})\s+\d+(?:[,.]\d+)?\s+\d+(?:[,.]\d{2})$/);
+    const pricedLineMatch = line.match(/^(.+?)\s+\d[\d\s]*(?:[,.]\d{2})\s+\d+(?:[,.]\d+)?\s+\d[\d\s]*(?:[,.]\d{2})$/);
     if (pricedLineMatch?.[1]) {
       const pricedLabel = pricedLineMatch[1].replace(/^[-•*\d.)\s]+/, "").trim();
-      if (pricedLabel && !/^\d+$/.test(pricedLabel) && !/\b(total|tva|montant|condition|r[eè]glement)\b/i.test(pricedLabel)) {
+      if (
+        pricedLabel &&
+        !/^\d+$/.test(pricedLabel) &&
+        !/\b(total|tva|montant|condition|r[eè]glement|location du studio|studio tout [ée]quip[ée])\b/i.test(pricedLabel)
+      ) {
         labels.push(pricedLabel);
       }
       continue;
@@ -1403,6 +1450,7 @@ function getCommercialQuoteText(text: string) {
 function extractQuoteReference(text: string, fileName: string) {
   const candidates = `${fileName}\n${text}`;
   const referenceMatch =
+    candidates.match(/\b((?:DE|FA)\d{6}-\d{3,})\b/i) ||
     candidates.match(/\b(DE\d{6}-\d{3,})\b/i) ||
     candidates.match(/\b(?:devis|quote)\s*(?:n[°o.]?|#|:)?\s*([A-Z]{1,4}\d{4,8}-\d{2,6})\b/i);
   return referenceMatch?.[1]?.toLocaleUpperCase("fr-FR") ?? "";
@@ -1430,6 +1478,7 @@ function extractQuoteFields(text: string, fallbackDate: string, fileName: string
   const compactText = parsingLines.join(" ");
   const productionLine = findMstvProductionLine(parsingLines);
   const productionTimeRange = parseFrenchTimeRange(productionLine);
+  const documentYear = extractQuoteDocumentYear(parsingLines);
   const clientName =
     extractMstvClientName(parsingLines) ||
     formatTitleCase(
@@ -1439,24 +1488,16 @@ function extractQuoteFields(text: string, fallbackDate: string, fileName: string
         /\bentreprise\s*[:#-]\s*(.+)$/i,
       ]),
     );
-  const eventName =
-    extractMstvEventName(productionLine) ||
-    formatTitleCase(
-      findLineValue(parsingLines, [
-        /\b(?:événement|evenement|event|projet|prestation)\s*[:#-]\s*(.+)$/i,
-        /\bobjet\s*[:#-]\s*(.+)$/i,
-      ]),
-    ) || formatTitleCase(fileName.replace(/\.[^.]+$/, "").replace(/[-_]+/g, " "));
   const date =
-    parseFrenchDateToKey(productionLine) ||
-    parseFrenchDateToKey(
+    parseFrenchDateToKeyWithDefaultYear(productionLine, documentYear) ||
+    parseFrenchDateToKeyWithDefaultYear(
       findLineValue(parsingLines, [
         /\b(?:date\s+(?:de\s+)?(?:l['’])?(?:événement|evenement)|jour\s+(?:de\s+)?(?:l['’])?(?:événement|evenement))\s*[:#-]\s*(.+)$/i,
-        /\b(?:le)\s+(\d{1,2}\s+[A-Za-zéûîôàèùç]+\s+\d{4})\b/i,
+        /\b(?:le)\s+(\d{1,2}\s+[A-Za-zéûîôàèùç]+(?:\s+\d{4})?)\b/i,
       ]) || "",
+      documentYear,
     ) ||
     fallbackDate;
-  const arrivalMatch = compactText.match(/\barriv[eé]e(?:\s+client)?\D{0,24}(\d{1,2})(?:\s*[:hH]\s*(\d{2}))?\b/i);
   const services = extractQuoteServices(commercialText);
   const quoteReference = extractQuoteReference(commercialText, fileName);
   const quoteVersion = extractQuoteVersion(commercialText);
@@ -1472,7 +1513,6 @@ function extractQuoteFields(text: string, fallbackDate: string, fileName: string
     detectedQuoteReference: quoteReference || null,
     detectedQuoteVersion: quoteVersion || null,
     detectedClient: clientName || null,
-    detectedEventName: eventName || null,
     detectedDate: date || null,
     detectedStartTime: productionTimeRange.startTime || null,
     detectedEndTime: productionTimeRange.endTime || null,
@@ -1482,9 +1522,9 @@ function extractQuoteFields(text: string, fallbackDate: string, fileName: string
 
   return {
     clientName,
-    eventName,
+    eventName: "Événement",
     date,
-    clientArrivalTime: arrivalMatch ? normalizeCompactTimeInput(`${arrivalMatch[1]}${arrivalMatch[2] ?? ""}`) : "",
+    clientArrivalTime: "",
     startTime: productionTimeRange.startTime,
     endTime: productionTimeRange.endTime,
     endOfDayTime: "",
@@ -1735,7 +1775,8 @@ function formatTitleCase(label: string) {
     .toLocaleLowerCase("fr-FR")
     .replace(/(^|[^\p{L}\p{N}])([\p{L}])/gu, (_, separator: string, letter: string) => {
       return `${separator}${letter.toLocaleUpperCase("fr-FR")}`;
-    });
+    })
+    .replace(/\b(Sas|Sarl|Sa|Tv)\b/g, (acronym) => acronym.toLocaleUpperCase("fr-FR"));
 }
 
 function findMatchingQuoteEvent(events: ProductionEvent[], input: CreateEventInput) {
@@ -1750,12 +1791,11 @@ function findMatchingQuoteEvent(events: ProductionEvent[], input: CreateEventInp
   const scoredMatches = activeEvents
     .map((event) => {
       const clientSimilarity = getTextSimilarity(event.clientName, input.clientName);
-      const eventNameSimilarity = getTextSimilarity(event.eventName, input.eventName);
       const sameDate = event.date === input.date;
-      const score = (sameDate ? 0.45 : 0) + clientSimilarity * 0.35 + eventNameSimilarity * 0.2;
+      const score = (sameDate ? 0.58 : 0) + clientSimilarity * 0.42;
       return { event, score };
     })
-    .filter((match) => match.score >= 0.64)
+    .filter((match) => match.score >= 0.7)
     .sort((a, b) => b.score - a.score);
 
   return scoredMatches[0]?.event ?? null;
@@ -1771,12 +1811,9 @@ function getQuoteImportDifferences(existingEvent: ProductionEvent, input: Create
   };
 
   addDifference("Client", existingEvent.clientName, input.clientName);
-  addDifference("Événement", existingEvent.eventName, input.eventName);
   addDifference("Date", formatFullDate(existingEvent.date), formatFullDate(input.date));
-  addDifference("Arrivée client", toTimeInputValue(existingEvent.clientArrivalTime), input.clientArrivalTime);
   addDifference("Début", toTimeInputValue(existingEvent.startTime), input.startTime);
   addDifference("Fin", toTimeInputValue(existingEvent.endTime), input.endTime);
-  addDifference("Fin journée", toTimeInputValue(existingEvent.endOfDayTime), input.endOfDayTime);
 
   const existingOptionKeys = new Set(existingEvent.options.map((option) => normalizeLabel(option.label)));
   const importedOptionKeys = new Set((input.optionLabels ?? []).map(normalizeLabel));
@@ -11030,12 +11067,12 @@ function QuoteImportModal({
       const extracted = payload.extracted;
       setForm({
         clientName: extracted.clientName,
-        eventName: extracted.eventName,
+        eventName: "Événement",
         date: extracted.date,
-        clientArrivalTime: extracted.clientArrivalTime,
+        clientArrivalTime: "",
         startTime: extracted.startTime,
         endTime: extracted.endTime,
-        endOfDayTime: extracted.endOfDayTime,
+        endOfDayTime: "",
         optionLabels: extracted.services,
         quoteReference: extracted.quoteReference || null,
         quoteVersion: extracted.quoteVersion || null,
@@ -11130,7 +11167,7 @@ function QuoteImportModal({
         <div className="mb-5 flex items-center justify-between gap-4">
           <div>
             <h2 className="text-base font-semibold text-stone-950">
-              {step === "upload" ? "Importer un devis" : step === "resolve" ? "Un événement existant semble correspondre à ce devis." : "Voici ce que j'ai compris du devis"}
+              {step === "upload" ? "Importer un devis ou une facture" : step === "resolve" ? "Un événement existant semble correspondre à ce document." : "Voici ce que j'ai compris"}
             </h2>
             {fileName && <p className="mt-1 truncate text-base font-medium text-stone-500">{fileName}</p>}
           </div>
@@ -11149,7 +11186,7 @@ function QuoteImportModal({
             className="flex min-h-44 cursor-pointer flex-col items-center justify-center rounded-3xl border border-dashed border-stone-300 bg-stone-50 px-4 py-8 text-center transition hover:bg-stone-100/70"
           >
             <FileText className="mb-3 h-7 w-7 text-stone-500" />
-            <span className="text-base font-semibold text-stone-800">{extracting ? "Lecture du devis..." : "Déposez un PDF ici"}</span>
+            <span className="text-base font-semibold text-stone-800">{extracting ? "Lecture du PDF..." : "Déposez un PDF ici"}</span>
             <span className="mt-1 text-base font-medium text-stone-500">ou cliquez pour sélectionner un fichier</span>
             <input
               ref={fileInputRef}
@@ -11166,13 +11203,11 @@ function QuoteImportModal({
               <div className="rounded-2xl border border-stone-200 bg-stone-50 px-3 py-3">
                 <p className="text-base font-semibold text-stone-500">Événement existant</p>
                 <p className="mt-1 text-base font-semibold text-stone-950">{resolution.existingEvent.clientName}</p>
-                <p className="text-base font-medium text-stone-600">{resolution.existingEvent.eventName}</p>
                 <p className="mt-1 text-base font-medium text-stone-500">{formatFullDate(resolution.existingEvent.date)}</p>
               </div>
               <div className="rounded-2xl border border-[#bb2720]/20 bg-[#bb2720]/[0.04] px-3 py-3">
-                <p className="text-base font-semibold text-[#bb2720]">Nouveau devis</p>
+                <p className="text-base font-semibold text-[#bb2720]">Nouveau PDF</p>
                 <p className="mt-1 text-base font-semibold text-stone-950">{resolution.input.clientName}</p>
-                <p className="text-base font-medium text-stone-600">{resolution.input.eventName}</p>
                 <p className="mt-1 text-base font-medium text-stone-500">{formatFullDate(resolution.input.date)}</p>
               </div>
             </div>
@@ -11200,9 +11235,6 @@ function QuoteImportModal({
               <Field label="Client">
                 <input required value={form.clientName} onChange={(event) => updateField("clientName", event.target.value)} className={formInputClassName} />
               </Field>
-              <Field label="Événement">
-                <input required value={form.eventName} onChange={(event) => updateField("eventName", event.target.value)} className={formInputClassName} />
-              </Field>
               <Field label="Date">
                 <button
                   type="button"
@@ -11212,17 +11244,11 @@ function QuoteImportModal({
                   {formatFullDate(form.date)}
                 </button>
               </Field>
-              <Field label="Arrivée client">
-                <TimeTextInput value={form.clientArrivalTime} onChange={(value) => updateField("clientArrivalTime", value)} className={formInputClassName} />
-              </Field>
               <Field label="Début">
                 <TimeTextInput value={form.startTime} onChange={(value) => updateField("startTime", value)} className={formInputClassName} />
               </Field>
               <Field label="Fin">
                 <TimeTextInput value={form.endTime} onChange={(value) => updateField("endTime", value)} className={formInputClassName} />
-              </Field>
-              <Field label="Fin journée">
-                <TimeTextInput value={form.endOfDayTime} onChange={(value) => updateField("endOfDayTime", value)} className={formInputClassName} />
               </Field>
             </div>
 

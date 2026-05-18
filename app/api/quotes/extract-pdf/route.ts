@@ -77,13 +77,22 @@ function formatTitleCase(label: string) {
   return label
     .trim()
     .toLocaleLowerCase("fr-FR")
-    .replace(/(^|[^\p{L}\p{N}])([\p{L}])/gu, (_, separator: string, letter: string) => `${separator}${letter.toLocaleUpperCase("fr-FR")}`);
+    .replace(/(^|[^\p{L}\p{N}])([\p{L}])/gu, (_, separator: string, letter: string) => `${separator}${letter.toLocaleUpperCase("fr-FR")}`)
+    .replace(/\b(Sas|Sarl|Sa|Tv)\b/g, (acronym) => acronym.toLocaleUpperCase("fr-FR"));
+}
+
+function formatServiceLabel(label: string) {
+  return label
+    .trim()
+    .toLocaleLowerCase("fr-FR")
+    .replace(/^([\p{L}])/u, (letter) => letter.toLocaleUpperCase("fr-FR"))
+    .replace(/\b(Sas|Sarl|Sa|Tv)\b/g, (acronym) => acronym.toLocaleUpperCase("fr-FR"));
 }
 
 function uniqueLabels(labels: string[]) {
   const seen = new Set<string>();
   return labels
-    .map((label) => formatTitleCase(label))
+    .map((label) => formatServiceLabel(label))
     .filter((label) => {
       const key = normalizeLabel(label);
       if (!key || seen.has(key)) return false;
@@ -120,6 +129,34 @@ function parseFrenchDateToKey(value: string) {
 
   const [, day, monthName, year] = textMatch;
   return `${year}-${monthByName[monthName]}-${day.padStart(2, "0")}`;
+}
+
+function parseFrenchDateToKeyWithDefaultYear(value: string, defaultYear?: string) {
+  const explicitDate = parseFrenchDateToKey(value);
+  if (explicitDate) return explicitDate;
+
+  if (!defaultYear) return "";
+
+  const monthByName: Record<string, string> = {
+    janvier: "01",
+    fevrier: "02",
+    mars: "03",
+    avril: "04",
+    mai: "05",
+    juin: "06",
+    juillet: "07",
+    aout: "08",
+    septembre: "09",
+    octobre: "10",
+    novembre: "11",
+    decembre: "12",
+  };
+  const normalized = normalizeLabel(value);
+  const textMatch = normalized.match(/\b(\d{1,2})\s+(janvier|fevrier|mars|avril|mai|juin|juillet|aout|septembre|octobre|novembre|decembre)\b/);
+  if (!textMatch) return "";
+
+  const [, day, monthName] = textMatch;
+  return `${defaultYear}-${monthByName[monthName]}-${day.padStart(2, "0")}`;
 }
 
 function parseFrenchTimeMatch(hours: string, minutes?: string) {
@@ -196,25 +233,21 @@ function extractMstvClientName(lines: string[]) {
 }
 
 function findMstvProductionLine(lines: string[]) {
-  const withDateAndRange = lines.find((line) => parseFrenchDateToKey(line) && parseFrenchTimeRange(line).startTime);
+  const withDateAndRange = lines.find((line) => /\ble\s+\d{1,2}\s+[A-Za-zéûîôàèùç]+(?:\s+\d{4})?\b/i.test(line) && parseFrenchTimeRange(line).startTime);
   if (withDateAndRange) return withDateAndRange;
 
   const compactText = lines.join(" ");
-  const match = compactText.match(/([^.:\n]*(?:le\s+)?\d{1,2}\s+[A-Za-zéûîôàèùç]+\s+\d{4}\s+(?:de\s+)?\d{1,2}\s*(?:h|H|:)\s*\d{0,2}\s*(?:-|–|—|à|a)\s*\d{1,2}\s*(?:h|H|:)\s*\d{0,2}[^.:\n]*)/i);
+  const match = compactText.match(/([^.:\n]*(?:le\s+)?\d{1,2}\s+[A-Za-zéûîôàèùç]+(?:\s+\d{4})?\s+(?:de\s+)?\d{1,2}\s*(?:h|H|:)\s*\d{0,2}\s*(?:-|–|—|à|a)\s*\d{1,2}\s*(?:h|H|:)\s*\d{0,2}[^.:\n]*)/i);
   return match?.[1]?.trim() ?? "";
 }
 
-function extractMstvEventName(productionLine: string) {
-  if (!productionLine) return "";
-  const title = productionLine
-    .replace(/\s+(?:le\s+)?\d{1,2}\s+[A-Za-zéûîôàèùç]+\s+\d{4}.*$/i, "")
-    .replace(/\s+tout\s+[ée]quip[ée](?:\s|$).*$/i, "")
-    .replace(/\s+de\s+\d{1,2}\s*(?:h|H|:).*$/i, "")
-    .trim();
-  if (!title) return "";
-
-  const sentenceTitle = title.toLocaleLowerCase("fr-FR");
-  return `${sentenceTitle.charAt(0).toLocaleUpperCase("fr-FR")}${sentenceTitle.slice(1)}`;
+function extractQuoteDocumentYear(lines: string[]) {
+  const dateLine = findLineValue(lines, [
+    /\bdate(?:\s+(?:facturation|de\s+facture|du\s+devis|devis))?\s*[:#-]\s*(.+)$/i,
+    /\b(?:devis|facture)\s+du\s+(.+)$/i,
+  ]);
+  const date = parseFrenchDateToKey(dateLine);
+  return date ? date.slice(0, 4) : "";
 }
 
 function extractQuoteLineItemLabels(text: string) {
@@ -227,10 +260,14 @@ function extractQuoteLineItemLabels(text: string) {
 
   for (const line of lines) {
     const normalizedLine = normalizeLabel(line);
-    const pricedLineMatch = line.match(/^(.+?)\s+\d+(?:[,.]\d{2})\s+\d+(?:[,.]\d+)?\s+\d+(?:[,.]\d{2})$/);
+    const pricedLineMatch = line.match(/^(.+?)\s+\d[\d\s]*(?:[,.]\d{2})\s+\d+(?:[,.]\d+)?\s+\d[\d\s]*(?:[,.]\d{2})$/);
     if (pricedLineMatch?.[1]) {
       const pricedLabel = pricedLineMatch[1].replace(/^[-•*\d.)\s]+/, "").trim();
-      if (pricedLabel && !/^\d+$/.test(pricedLabel) && !/\b(total|tva|montant|condition|r[eè]glement)\b/i.test(pricedLabel)) {
+      if (
+        pricedLabel &&
+        !/^\d+$/.test(pricedLabel) &&
+        !/\b(total|tva|montant|condition|r[eè]glement|location du studio|studio tout [ée]quip[ée])\b/i.test(pricedLabel)
+      ) {
         labels.push(pricedLabel);
       }
       continue;
@@ -290,6 +327,7 @@ function normalizeQuoteText(text: string) {
 function extractQuoteReference(text: string, fileName: string) {
   const candidates = `${fileName}\n${text}`;
   const referenceMatch =
+    candidates.match(/\b((?:DE|FA)\d{6}-\d{3,})\b/i) ||
     candidates.match(/\b(DE\d{6}-\d{3,})\b/i) ||
     candidates.match(/\b(?:devis|quote)\s*(?:n[°o.]?|#|:)?\s*([A-Z]{1,4}\d{4,8}-\d{2,6})\b/i);
   return referenceMatch?.[1]?.toLocaleUpperCase("fr-FR") ?? "";
@@ -317,6 +355,7 @@ function extractQuoteFields(text: string, fallbackDate: string, fileName: string
   const compactText = parsingLines.join(" ");
   const productionLine = findMstvProductionLine(parsingLines);
   const productionTimeRange = parseFrenchTimeRange(productionLine);
+  const documentYear = extractQuoteDocumentYear(parsingLines);
   const clientName =
     extractMstvClientName(parsingLines) ||
     formatTitleCase(
@@ -326,24 +365,16 @@ function extractQuoteFields(text: string, fallbackDate: string, fileName: string
         /\bentreprise\s*[:#-]\s*(.+)$/i,
       ]),
     );
-  const eventName =
-    extractMstvEventName(productionLine) ||
-    formatTitleCase(
-      findLineValue(parsingLines, [
-        /\b(?:événement|evenement|event|projet|prestation)\s*[:#-]\s*(.+)$/i,
-        /\bobjet\s*[:#-]\s*(.+)$/i,
-      ]),
-    ) || formatTitleCase(fileName.replace(/\.[^.]+$/, "").replace(/[-_]+/g, " "));
   const date =
-    parseFrenchDateToKey(productionLine) ||
-    parseFrenchDateToKey(
+    parseFrenchDateToKeyWithDefaultYear(productionLine, documentYear) ||
+    parseFrenchDateToKeyWithDefaultYear(
       findLineValue(parsingLines, [
         /\b(?:date\s+(?:de\s+)?(?:l['’])?(?:événement|evenement)|jour\s+(?:de\s+)?(?:l['’])?(?:événement|evenement))\s*[:#-]\s*(.+)$/i,
-        /\b(?:le)\s+(\d{1,2}\s+[A-Za-zéûîôàèùç]+\s+\d{4})\b/i,
+        /\b(?:le)\s+(\d{1,2}\s+[A-Za-zéûîôàèùç]+(?:\s+\d{4})?)\b/i,
       ]) || "",
+      documentYear,
     ) ||
     fallbackDate;
-  const arrivalMatch = compactText.match(/\barriv[eé]e(?:\s+client)?\D{0,24}(\d{1,2})(?:\s*[:hH]\s*(\d{2}))?\b/i);
   const services = extractQuoteServices(commercialText);
   const quoteReference = extractQuoteReference(commercialText, fileName);
   const quoteVersion = extractQuoteVersion(commercialText);
@@ -359,7 +390,6 @@ function extractQuoteFields(text: string, fallbackDate: string, fileName: string
     detectedQuoteReference: quoteReference || null,
     detectedQuoteVersion: quoteVersion || null,
     detectedClient: clientName || null,
-    detectedEventName: eventName || null,
     detectedDate: date || null,
     detectedStartTime: productionTimeRange.startTime || null,
     detectedEndTime: productionTimeRange.endTime || null,
@@ -368,9 +398,9 @@ function extractQuoteFields(text: string, fallbackDate: string, fileName: string
 
   return {
     clientName,
-    eventName,
+    eventName: "Événement",
     date,
-    clientArrivalTime: arrivalMatch ? normalizeCompactTimeInput(`${arrivalMatch[1]}${arrivalMatch[2] ?? ""}`) : "",
+    clientArrivalTime: "",
     startTime: productionTimeRange.startTime,
     endTime: productionTimeRange.endTime,
     endOfDayTime: "",
