@@ -1992,14 +1992,14 @@ function isCapacitorRuntime() {
   return window.location.protocol === "capacitor:" || Boolean(maybeCapacitor?.isNativePlatform?.());
 }
 
-function getAppApiUrl(path: string) {
+function getAppApiUrl(path: string, unavailableMessage = "Service serveur indisponible: configurez NEXT_PUBLIC_SITE_URL vers l’app web déployée.") {
   if (typeof window === "undefined") return path;
   const configuredUrl = process.env.NEXT_PUBLIC_SITE_URL?.trim();
   if (isCapacitorRuntime() && configuredUrl) {
     return new URL(path, configuredUrl.endsWith("/") ? configuredUrl : `${configuredUrl}/`).toString();
   }
   if (isCapacitorRuntime()) {
-    throw new Error("Synchronisation ICS indisponible: configurez NEXT_PUBLIC_SITE_URL vers l’app web déployée.");
+    throw new Error(unavailableMessage);
   }
   return path;
 }
@@ -3238,7 +3238,7 @@ export default function Home() {
     setExternalCalendarSettingsError(null);
 
     try {
-      const response = await fetch(getAppApiUrl("/api/external-calendars/fetch-ics"), {
+      const response = await fetch(getAppApiUrl("/api/external-calendars/fetch-ics", "Synchronisation ICS indisponible: configurez NEXT_PUBLIC_SITE_URL vers l’app web déployée."), {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -11014,7 +11014,7 @@ function QuoteImportModal({
       formData.append("file", file);
       formData.append("fallbackDate", selectedDateKey);
 
-      const response = await fetch(getAppApiUrl("/api/quotes/extract-pdf"), {
+      const response = await fetch(getAppApiUrl("/api/quotes/extract-pdf", "Import devis indisponible: configurez NEXT_PUBLIC_SITE_URL vers l’app web déployée."), {
         method: "POST",
         headers: {
           Authorization: `Bearer ${accessToken}`,

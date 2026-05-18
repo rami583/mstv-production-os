@@ -413,6 +413,56 @@ function getDebugError(error: unknown) {
   };
 }
 
+class FallbackDOMMatrix {
+  a = 1;
+  b = 0;
+  c = 0;
+  d = 1;
+  e = 0;
+  f = 0;
+
+  constructor(init?: number[]) {
+    if (Array.isArray(init) && init.length >= 6) {
+      [this.a, this.b, this.c, this.d, this.e, this.f] = init;
+    }
+  }
+
+  multiplySelf() {
+    return this;
+  }
+
+  preMultiplySelf() {
+    return this;
+  }
+
+  translate() {
+    return this;
+  }
+
+  scale() {
+    return this;
+  }
+
+  invertSelf() {
+    return this;
+  }
+}
+
+async function ensurePdfJsNodePolyfills() {
+  const pdfGlobal = globalThis as Record<string, unknown>;
+
+  try {
+    const canvas = await import("@napi-rs/canvas");
+    pdfGlobal.DOMMatrix ??= canvas.DOMMatrix as unknown;
+    pdfGlobal.ImageData ??= canvas.ImageData as unknown;
+    pdfGlobal.Path2D ??= canvas.Path2D as unknown;
+  } catch (polyfillError) {
+    console.warn("Quote PDF server could not load @napi-rs/canvas polyfills; using minimal DOMMatrix fallback.", getDebugError(polyfillError));
+  }
+
+  pdfGlobal.DOMMatrix ??= FallbackDOMMatrix;
+}
+
 async function extractPdfTextServer(file: File) {
   const debugId = `quote-pdf-server-${Date.now()}`;
   const arrayBuffer = await file.arrayBuffer();
@@ -438,6 +488,7 @@ async function extractPdfTextServer(file: File) {
     throw new Error("Le fichier reçu ne ressemble pas à un PDF valide.");
   }
 
+  await ensurePdfJsNodePolyfills();
   const pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs");
   pdfjs.GlobalWorkerOptions.workerSrc = path.join(process.cwd(), "public", "pdf.worker.mjs");
 
