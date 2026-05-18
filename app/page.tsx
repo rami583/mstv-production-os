@@ -2596,6 +2596,7 @@ export default function Home() {
   const [authSession, setAuthSession] = useState<Session | null>(() => initialCachedAuth?.session ?? null);
   const [profile, setProfile] = useState<UserProfile | null>(() => initialCachedAuth?.profile ?? null);
   const [authLoading, setAuthLoading] = useState(() => !initialCachedAuth);
+  const [isBootHydrated, setIsBootHydrated] = useState(false);
   const [authError, setAuthError] = useState<string | null>(null);
   const [passwordRecoveryOpen, setPasswordRecoveryOpen] = useState(false);
   const [screen, setScreen] = useState<Screen>("calendar");
@@ -2699,6 +2700,10 @@ export default function Home() {
   const isSelectedDateToday = selectedDateKey === todayKey;
   const yearLabel = String(visibleMonth.getFullYear());
   const permissions = useMemo(() => getPermissionsForRole(profile?.role ?? "team"), [profile?.role]);
+  const headerCanOpenTrash = permissions.canRestoreEvents || permissions.canPermanentDeleteEvents;
+  const headerHasCreateMenuActions =
+    permissions.canManageEvents || headerCanOpenTrash || (permissions.canSoftDeleteEvents && screen === "detail" && Boolean(selectedEvent));
+  const headerReady = isBootHydrated && Boolean(authSession && profile);
   const actorName = getProfileDisplayName(profile);
   const visibleExternalCalendarEvents = useMemo(
     () =>
@@ -2964,7 +2969,11 @@ export default function Home() {
       void loadAuthenticatedProfile(session);
     }) ?? { data: { subscription: null } };
 
-    void initializeAuth();
+    void initializeAuth().finally(() => {
+      if (!cancelled) {
+        setIsBootHydrated(true);
+      }
+    });
 
     return () => {
       cancelled = true;
@@ -6549,71 +6558,81 @@ export default function Home() {
         }}
         className="relative mx-auto flex h-full min-h-0 w-full max-w-7xl flex-col px-4 pb-[calc(1.25rem+env(safe-area-inset-bottom))] pt-[calc(1.25rem+env(safe-area-inset-top))] sm:px-6 sm:pb-[calc(1.5rem+env(safe-area-inset-bottom))] sm:pt-[calc(1.5rem+env(safe-area-inset-top))] lg:px-8"
       >
-        <AppHeader
-          screen={screen}
-          setScreen={setScreen}
-          yearLabel={yearLabel}
-          detailDateLabel={screen === "detail" && selectedEvent ? formatFullDate(selectedEvent.date) : null}
-          onEditDetailDate={screen === "detail" && selectedEvent && permissions.canManageEvents ? () => setDateEditorOpen(true) : undefined}
-          goToday={goToday}
-          isSelectedDateToday={isSelectedDateToday}
-          createMenuOpen={createMenuOpen && !yearOverviewOpen}
-          setCreateMenuOpen={setCreateMenuOpen}
-          profile={profile}
-          email={authSession.user.email}
-          onLogout={signOut}
-          canManageUsers={permissions.canManageUsers}
-          onOpenUserManagement={() => setUserManagementOpen(true)}
-          canManageExternalCalendars={Boolean(profile)}
-          onOpenExternalCalendars={() => setExternalCalendarSettingsOpen(true)}
-          online={online}
-          pendingSyncCount={pendingSyncCount}
-          syncingPendingActions={syncingPendingActions}
-          pendingSyncError={pendingSyncError}
-          onImportQuote={() => {
-            if (!permissions.canManageEvents) return;
-            openQuoteImport();
-          }}
-          onImportNativeMstvCalendar={openNativeMstvIcsImport}
-          onSearch={() => setSearchOpen(true)}
-          canOpenHistory={permissions.canManageEvents && screen === "detail" && Boolean(selectedEvent)}
-          onOpenHistory={openHistory}
-          canOpenTrash={permissions.canRestoreEvents || permissions.canPermanentDeleteEvents}
-          onOpenTrash={() => {
-            setTrashOpen(true);
-            setCreateMenuOpen(false);
-          }}
-          onOpenYearOverview={() => setYearOverviewOpen(true)}
-          onCreateEvent={() => {
-            if (!permissions.canManageEvents) return;
-            setEditingEvent(null);
-            setEditingReturnScreen("calendar");
-            setCreateModalOpen(true);
-            setCreateMenuOpen(false);
-          }}
-          canCreateEvent={permissions.canManageEvents}
-          canImportQuote={permissions.canManageEvents}
-          canImportNativeMstvCalendar={permissions.canManageEvents}
-          canDuplicateEvent={permissions.canManageEvents && screen === "detail" && Boolean(selectedEvent)}
-          onDuplicateEvent={() => {
-            if (selectedEvent && !selectedEvent.deletedAt) {
-              setDuplicateDatePickerEvent(selectedEvent);
-            }
-            setCreateMenuOpen(false);
-          }}
-          canDeleteEvent={permissions.canSoftDeleteEvents && screen === "detail" && Boolean(selectedEvent)}
-          onDeleteEvent={() => {
-            console.log("Delete event menu action clicked", {
-              eventId: selectedEvent?.id ?? null,
-              clientName: selectedEvent?.clientName ?? null,
-              eventName: selectedEvent?.eventName ?? null,
-            });
-            if (selectedEvent) {
-              setDeleteDialogEvent(selectedEvent);
-            }
-            setCreateMenuOpen(false);
-          }}
-        />
+        {headerReady ? (
+          <AppHeader
+            screen={screen}
+            setScreen={setScreen}
+            yearLabel={yearLabel}
+            detailDateLabel={screen === "detail" && selectedEvent ? formatFullDate(selectedEvent.date) : null}
+            onEditDetailDate={screen === "detail" && selectedEvent && permissions.canManageEvents ? () => setDateEditorOpen(true) : undefined}
+            goToday={goToday}
+            isSelectedDateToday={isSelectedDateToday}
+            createMenuOpen={createMenuOpen && !yearOverviewOpen}
+            setCreateMenuOpen={setCreateMenuOpen}
+            profile={profile}
+            email={authSession.user.email}
+            onLogout={signOut}
+            canManageUsers={permissions.canManageUsers}
+            onOpenUserManagement={() => setUserManagementOpen(true)}
+            canManageExternalCalendars={Boolean(profile)}
+            onOpenExternalCalendars={() => setExternalCalendarSettingsOpen(true)}
+            online={online}
+            pendingSyncCount={pendingSyncCount}
+            syncingPendingActions={syncingPendingActions}
+            pendingSyncError={pendingSyncError}
+            onImportQuote={() => {
+              if (!permissions.canManageEvents) return;
+              openQuoteImport();
+            }}
+            onImportNativeMstvCalendar={openNativeMstvIcsImport}
+            onSearch={() => setSearchOpen(true)}
+            canOpenHistory={permissions.canManageEvents && screen === "detail" && Boolean(selectedEvent)}
+            onOpenHistory={openHistory}
+            canOpenTrash={headerCanOpenTrash}
+            onOpenTrash={() => {
+              setTrashOpen(true);
+              setCreateMenuOpen(false);
+            }}
+            onOpenYearOverview={() => setYearOverviewOpen(true)}
+            onCreateEvent={() => {
+              if (!permissions.canManageEvents) return;
+              setEditingEvent(null);
+              setEditingReturnScreen("calendar");
+              setCreateModalOpen(true);
+              setCreateMenuOpen(false);
+            }}
+            canCreateEvent={permissions.canManageEvents}
+            canImportQuote={permissions.canManageEvents}
+            canImportNativeMstvCalendar={permissions.canManageEvents}
+            canDuplicateEvent={permissions.canManageEvents && screen === "detail" && Boolean(selectedEvent)}
+            onDuplicateEvent={() => {
+              if (selectedEvent && !selectedEvent.deletedAt) {
+                setDuplicateDatePickerEvent(selectedEvent);
+              }
+              setCreateMenuOpen(false);
+            }}
+            canDeleteEvent={permissions.canSoftDeleteEvents && screen === "detail" && Boolean(selectedEvent)}
+            onDeleteEvent={() => {
+              console.log("Delete event menu action clicked", {
+                eventId: selectedEvent?.id ?? null,
+                clientName: selectedEvent?.clientName ?? null,
+                eventName: selectedEvent?.eventName ?? null,
+              });
+              if (selectedEvent) {
+                setDeleteDialogEvent(selectedEvent);
+              }
+              setCreateMenuOpen(false);
+            }}
+          />
+        ) : (
+          <AppHeaderPlaceholder
+            screen={screen}
+            yearLabel={yearLabel}
+            detailDateLabel={screen === "detail" && selectedEvent ? formatFullDate(selectedEvent.date) : null}
+            showHistory={permissions.canManageEvents && screen === "detail" && Boolean(selectedEvent)}
+            showCreateMenuSlot={headerHasCreateMenuActions}
+          />
+        )}
 
         <div className="flex min-h-0 flex-1 flex-col">
           {error && <StatusMessage tone="error">{error}</StatusMessage>}
@@ -7135,6 +7154,52 @@ function AppHeader({
           onOpenExternalCalendars={onOpenExternalCalendars}
           onLogout={onLogout}
         />
+      </div>
+    </header>
+  );
+}
+
+function AppHeaderPlaceholder({
+  screen,
+  yearLabel,
+  detailDateLabel,
+  showHistory,
+  showCreateMenuSlot,
+}: {
+  screen: Screen;
+  yearLabel: string;
+  detailDateLabel: string | null;
+  showHistory: boolean;
+  showCreateMenuSlot: boolean;
+}) {
+  return (
+    <header className="relative mb-5 flex items-center justify-between gap-2 px-1 py-1" aria-hidden>
+      <div className="flex min-w-0 items-center gap-2 sm:gap-3">
+        <div className="flex items-center gap-3 text-left">
+          <img src="/brand/mon-studio-tv-icon.png" alt="" className="h-11 w-auto" />
+        </div>
+        {screen === "calendar" && (
+          <div className="rounded-full border border-stone-200 bg-white px-2.5 py-1.5 text-base font-semibold text-stone-700 sm:px-3">
+            {yearLabel}
+          </div>
+        )}
+        {screen === "detail" && detailDateLabel && (
+          <div className="rounded-full border border-stone-200 bg-white px-2.5 py-1.5 text-base font-semibold text-stone-700 sm:px-3">
+            {detailDateLabel}
+          </div>
+        )}
+      </div>
+      <div className="flex shrink-0 items-center gap-1.5 sm:gap-2">
+        {screen === "calendar" && (
+          <div className="rounded-full border border-stone-200 bg-white px-2.5 py-2 text-base font-semibold text-stone-700 sm:px-3">
+            Aujourd'hui
+          </div>
+        )}
+        {showHistory && <div className="h-10 w-10 rounded-full border border-stone-200 bg-white" />}
+        <div className="h-10 w-10 rounded-full border border-stone-200 bg-white" />
+        {showCreateMenuSlot && <div className="h-10 w-10 rounded-full bg-[#bb2720]" />}
+        <div className="invisible h-10 min-w-10 rounded-full border border-sky-200 bg-sky-50 px-2 sm:px-3" />
+        <div className="h-10 w-10 rounded-full border border-stone-200 bg-white" />
       </div>
     </header>
   );
