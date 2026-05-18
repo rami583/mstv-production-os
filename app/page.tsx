@@ -13142,12 +13142,8 @@ function SectionHeader({
   addLabel: string;
   onAdd?: () => void;
 }) {
-  const addTone =
-    tone === "option"
-      ? "border-emerald-700 bg-emerald-700 text-white hover:border-emerald-800 hover:bg-emerald-800"
-      : tone === "link"
-        ? "border-sky-700 bg-sky-700 text-white hover:border-sky-800 hover:bg-sky-800"
-        : "border-amber-600 bg-amber-600 text-white hover:border-amber-700 hover:bg-amber-700";
+  const activeTone = tone === "option" ? getOptionTone("completed") : tone === "link" ? getLinkTone("available") : getDocumentTone(true);
+  const addTone = cn(activeTone.surface, activeTone.border, activeTone.hover, activeTone.text);
 
   return (
     <div className={cn("mb-2 flex min-w-0 items-center gap-1.5 sm:mb-3 sm:gap-2", align === "right" ? "justify-end" : "justify-start")}>
@@ -13155,7 +13151,7 @@ function SectionHeader({
         <button
           type="button"
           onClick={onAdd}
-          className={cn("flex h-6 w-6 shrink-0 items-center justify-center rounded-full border text-base font-semibold leading-none transition active:scale-95", addTone)}
+          className={cn("flex h-6 w-6 shrink-0 items-center justify-center rounded-full border-2 text-base font-semibold leading-none transition active:scale-95", addTone)}
           aria-label={addLabel}
           title={addLabel}
         >
