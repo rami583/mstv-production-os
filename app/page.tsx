@@ -37,6 +37,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { Keyboard } from "@capacitor/keyboard";
+import { Network } from "@capacitor/network";
 import {
   useCallback,
   useEffect,
@@ -2422,6 +2423,9 @@ export default function Home() {
   const [keyboardHeight, setKeyboardHeight] = useState(0);
   const timelineTimeSaveRef = useRef<(() => Promise<void>) | null>(null);
   const processingPendingActionsRef = useRef(false);
+  const pendingNetworkSyncTimeoutRef = useRef<number | null>(null);
+  const onlineRef = useRef(online);
+  const processPendingSyncQueueRef = useRef<((options?: { forceOnline?: boolean }) => Promise<void>) | null>(null);
   const todayKey = formatDateKey(today);
 
   function refreshOfflineDebugInfo(path: OfflineBootPath = offlineBootPath, userId: string | null = authSession?.user.id ?? profile?.id ?? null) {
@@ -2431,6 +2435,20 @@ export default function Home() {
   function setBootPath(path: OfflineBootPath, userId: string | null = authSession?.user.id ?? profile?.id ?? null) {
     setOfflineBootPath(path);
     setOfflineDebugInfo(readOfflineDebugInfo(userId, path));
+  }
+
+  function schedulePendingSyncReplay(source: "browser" | "capacitor" | "state" | "enqueue") {
+    if (typeof window === "undefined") return;
+    if (pendingNetworkSyncTimeoutRef.current) {
+      window.clearTimeout(pendingNetworkSyncTimeoutRef.current);
+    }
+
+    pendingNetworkSyncTimeoutRef.current = window.setTimeout(() => {
+      pendingNetworkSyncTimeoutRef.current = null;
+      console.info("[MSTV offline sync] network online, replaying pending queue", { source });
+      void refreshPendingSyncState();
+      void processPendingSyncQueueRef.current?.({ forceOnline: true });
+    }, 450);
   }
 
   function hydrateFromCachedAuthState(cachedState: CachedAuthState) {
@@ -2474,30 +2492,86 @@ export default function Home() {
   );
 
   useEffect(() => {
+    onlineRef.current = online;
+  }, [online]);
+
+  useEffect(() => {
     void refreshPendingSyncState();
+    let cancelled = false;
+    let networkListener: { remove: () => Promise<void> } | null = null;
 
     function handleOnline() {
+      onlineRef.current = true;
       setOnline(true);
       refreshOfflineDebugInfo();
-      void processPendingSyncQueue();
+      schedulePendingSyncReplay("browser");
     }
 
     function handleOffline() {
+      onlineRef.current = false;
       setOnline(false);
       refreshOfflineDebugInfo();
+      if (pendingNetworkSyncTimeoutRef.current) {
+        window.clearTimeout(pendingNetworkSyncTimeoutRef.current);
+        pendingNetworkSyncTimeoutRef.current = null;
+      }
     }
 
     window.addEventListener("online", handleOnline);
     window.addEventListener("offline", handleOffline);
+
+    void Network.getStatus()
+      .then((status) => {
+        if (cancelled) return;
+        onlineRef.current = status.connected;
+        setOnline(status.connected);
+        refreshOfflineDebugInfo();
+        if (status.connected) {
+          schedulePendingSyncReplay("capacitor");
+        }
+      })
+      .catch((networkError) => {
+        console.warn("Capacitor Network status unavailable; using browser online events.", networkError);
+      });
+
+    void Network.addListener("networkStatusChange", (status) => {
+      if (cancelled) return;
+      onlineRef.current = status.connected;
+      setOnline(status.connected);
+      refreshOfflineDebugInfo();
+      if (status.connected) {
+        schedulePendingSyncReplay("capacitor");
+      } else if (pendingNetworkSyncTimeoutRef.current) {
+        window.clearTimeout(pendingNetworkSyncTimeoutRef.current);
+        pendingNetworkSyncTimeoutRef.current = null;
+      }
+    })
+      .then((listener) => {
+        if (cancelled) {
+          void listener.remove();
+        } else {
+          networkListener = listener;
+        }
+      })
+      .catch((networkError) => {
+        console.warn("Capacitor Network listener unavailable; using browser online events.", networkError);
+      });
+
     return () => {
+      cancelled = true;
       window.removeEventListener("online", handleOnline);
       window.removeEventListener("offline", handleOffline);
+      if (pendingNetworkSyncTimeoutRef.current) {
+        window.clearTimeout(pendingNetworkSyncTimeoutRef.current);
+        pendingNetworkSyncTimeoutRef.current = null;
+      }
+      void networkListener?.remove();
     };
   }, []);
 
   useEffect(() => {
     if (online && authSession) {
-      void processPendingSyncQueue();
+      schedulePendingSyncReplay("state");
     }
   }, [authSession, online]);
 
@@ -3403,12 +3477,12 @@ export default function Home() {
     setPendingSyncError(null);
     await refreshPendingSyncState();
     if (online) {
-      void processPendingSyncQueue();
+      schedulePendingSyncReplay("enqueue");
     }
   }
 
-  async function processPendingSyncQueue() {
-    if (!online || processingPendingActionsRef.current || !supabase) return;
+  async function processPendingSyncQueue(options: { forceOnline?: boolean } = {}) {
+    if ((!options.forceOnline && !onlineRef.current) || processingPendingActionsRef.current || !supabase) return;
     processingPendingActionsRef.current = true;
     setSyncingPendingActions(true);
     setPendingSyncError(null);
@@ -3455,6 +3529,8 @@ export default function Home() {
       await refreshPendingSyncState();
     }
   }
+
+  processPendingSyncQueueRef.current = processPendingSyncQueue;
 
   function assertCanManageEvents() {
     if (!permissions.canManageEvents) {
