@@ -6688,6 +6688,7 @@ export default function Home() {
 
       {quoteImportOpen && (
         <QuoteImportModal
+          accessToken={authSession?.access_token ?? null}
           initialFile={quoteImportFile}
           selectedDateKey={selectedDateKey}
           events={events}
@@ -10952,6 +10953,7 @@ function NativeMstvIcsImportModal({
 }
 
 function QuoteImportModal({
+  accessToken,
   initialFile,
   selectedDateKey,
   events,
@@ -10959,6 +10961,7 @@ function QuoteImportModal({
   onCreateEvent,
   onUpdateEvent,
 }: {
+  accessToken: string | null;
   initialFile?: File | null;
   selectedDateKey: string;
   events: ProductionEvent[];
@@ -10997,14 +11000,34 @@ function QuoteImportModal({
       setError("Importez un fichier PDF.");
       return;
     }
+    if (!accessToken) {
+      setError("Session invalide. Reconnectez-vous pour importer un devis.");
+      return;
+    }
 
     setExtracting(true);
     setError(null);
     setFileName(file.name);
 
     try {
-      const text = await extractPdfText(file);
-      const extracted = extractQuoteFields(text, selectedDateKey, file.name);
+      const formData = new FormData();
+      formData.append("file", file);
+      formData.append("fallbackDate", selectedDateKey);
+
+      const response = await fetch(getAppApiUrl("/api/quotes/extract-pdf"), {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+        },
+        body: formData,
+      });
+      const payload = (await response.json().catch(() => null)) as { extracted?: QuoteExtractionResult; error?: string } | null;
+
+      if (!response.ok || !payload?.extracted) {
+        throw new Error(payload?.error || "Impossible d'extraire les données du devis.");
+      }
+
+      const extracted = payload.extracted;
       setForm({
         clientName: extracted.clientName,
         eventName: extracted.eventName,
@@ -11022,18 +11045,14 @@ function QuoteImportModal({
       setResolution(null);
       setStep("review");
     } catch (extractError) {
-      console.error("Failed to extract quote PDF text", {
+      console.error("Failed to extract quote PDF on server", {
         fileName: file.name,
         fileType: file.type || "(empty)",
         fileSize: file.size,
         error: getDebugError(extractError),
-        cause:
-          extractError instanceof PdfImportError && extractError.causeDetails
-            ? getDebugError(extractError.causeDetails)
-            : null,
       });
       setError(
-        extractError instanceof PdfImportError
+        extractError instanceof Error
           ? extractError.message
           : "Impossible de lire ce PDF. Vérifiez qu'il contient bien du texte sélectionnable.",
       );
