@@ -7606,7 +7606,7 @@ function CalendarDashboard({
   const [pagerTransitionEnabled, setPagerTransitionEnabled] = useState(false);
   const [pagerAnimatingDirection, setPagerAnimatingDirection] = useState<-1 | 1 | null>(null);
   const pagerViewportRef = useRef<HTMLDivElement | null>(null);
-  const monthSwipeStartRef = useRef<{ pointerId: number; x: number; y: number; axis: "horizontal" | "vertical" | null } | null>(null);
+  const monthSwipeStartRef = useRef<{ pointerId: number; x: number; y: number; axis: "horizontal" | "vertical" | null; dateKey: string | null } | null>(null);
   const monthTransitioningRef = useRef(false);
   const monthTransitionIdRef = useRef(0);
   const monthTransitionTimeoutRef = useRef<number | null>(null);
@@ -7664,11 +7664,14 @@ function CalendarDashboard({
   function handleMonthSwipePointerDown(pointerEvent: ReactPointerEvent<HTMLDivElement>) {
     if (monthTransitioningRef.current) return;
 
+    const dayCell = (pointerEvent.target as HTMLElement).closest<HTMLElement>("[data-calendar-date-key]");
+
     monthSwipeStartRef.current = {
       pointerId: pointerEvent.pointerId,
       x: pointerEvent.clientX,
       y: pointerEvent.clientY,
       axis: null,
+      dateKey: dayCell?.dataset.calendarDateKey ?? null,
     };
     setPagerTransitionEnabled(false);
     setPagerOffset(0);
@@ -7711,11 +7714,19 @@ function CalendarDashboard({
     const viewportWidth = pagerViewportRef.current?.clientWidth ?? pointerEvent.currentTarget.clientWidth;
     const swipeThreshold = getSwipeThreshold(viewportWidth);
     const isHorizontalSwipe = swipeStart.axis === "horizontal" && Math.abs(deltaX) > Math.abs(deltaY) * 1.2;
+    const isTapSelection = Boolean(swipeStart.dateKey) && Math.max(Math.abs(deltaX), Math.abs(deltaY)) <= 10;
 
     monthSwipeStartRef.current = null;
     window.setTimeout(() => {
       suppressMonthClickRef.current = false;
     }, 0);
+
+    if (isTapSelection && swipeStart.dateKey) {
+      setSelectedDateKey(swipeStart.dateKey);
+      setPagerTransitionEnabled(false);
+      setPagerOffset(0);
+      return;
+    }
 
     if (!isHorizontalSwipe || Math.abs(deltaX) < swipeThreshold) {
       setPagerTransitionEnabled(true);
@@ -7789,14 +7800,7 @@ function CalendarDashboard({
               suppressMonthClickRef.current = false;
               clickEvent.preventDefault();
               clickEvent.stopPropagation();
-              return;
             }
-
-            const dayCell = (clickEvent.target as HTMLElement).closest<HTMLElement>("[data-calendar-date-key]");
-            const dateKey = dayCell?.dataset.calendarDateKey;
-            if (!dateKey) return;
-
-            setSelectedDateKey(dateKey);
           }}
           interactive={!pagerAnimatingDirection}
         />
