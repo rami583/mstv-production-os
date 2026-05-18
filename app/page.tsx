@@ -1323,7 +1323,7 @@ function extractQuoteServices(text: string) {
   const normalizedText = normalizeLabel(text);
   const keywordServices = serviceRules.filter((rule) => rule.keywords.some((keyword) => normalizedText.includes(normalizeLabel(keyword)))).map((rule) => rule.label);
   const lineItemServices = extractQuoteLineItemLabels(text);
-  return uniqueLabels([...keywordServices, ...lineItemServices]);
+  return lineItemServices.length > 0 ? uniqueLabels(lineItemServices) : uniqueLabels(keywordServices);
 }
 
 function extractQuoteLineItemLabels(text: string) {
@@ -1336,6 +1336,14 @@ function extractQuoteLineItemLabels(text: string) {
 
   for (const line of lines) {
     const normalizedLine = normalizeLabel(line);
+    const pricedLineMatch = line.match(/^(.+?)\s+\d+(?:[,.]\d{2})\s+\d+(?:[,.]\d+)?\s+\d+(?:[,.]\d{2})$/);
+    if (pricedLineMatch?.[1]) {
+      const pricedLabel = pricedLineMatch[1].replace(/^[-•*\d.)\s]+/, "").trim();
+      if (pricedLabel && !/^\d+$/.test(pricedLabel) && !/\b(total|tva|montant|condition|r[eè]glement)\b/i.test(pricedLabel)) {
+        labels.push(pricedLabel);
+      }
+      continue;
+    }
 
     if (/\b(d[eé]signation|description|prestation|service|option)\b/i.test(line) && /\b(prix|total|qt[eé]|quantit[eé]|montant|ht|ttc)\b/i.test(line)) {
       inItemsSection = true;
@@ -1502,6 +1510,11 @@ function getPdfWorkerSrc() {
   return new URL("/pdf.worker.mjs", window.location.href).toString();
 }
 
+function getPdfAssetUrl(path: string) {
+  if (typeof window === "undefined") return path;
+  return new URL(path, window.location.href).toString();
+}
+
 function formatBytesForDebug(bytes: Uint8Array, byteCount = 16) {
   const sample = bytes.slice(0, byteCount);
   return {
@@ -1587,6 +1600,9 @@ async function extractPdfText(file: File) {
       data: bytes.slice(),
       useWorkerFetch: false,
       useWasm: false,
+      standardFontDataUrl: getPdfAssetUrl("/pdfjs/standard_fonts/"),
+      cMapUrl: getPdfAssetUrl("/pdfjs/cmaps/"),
+      cMapPacked: true,
     });
     pdf = await loadingTask.promise;
     console.info("[Quote PDF import] pdfjs loaded document", {
