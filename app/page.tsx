@@ -11488,6 +11488,7 @@ function ExternalCalendarsSheet({
   const selectedCalendar = selectedCalendarId ? calendars.find((calendar) => calendar.id === selectedCalendarId) ?? null : null;
   const selectedCalendarEvents = selectedCalendar ? events.filter((event) => event.externalCalendarId === selectedCalendar.id) : [];
   const canCreateExternalCalendar = Boolean(profile?.id);
+  const isMobileFormView = view === "add" || view === "detail";
 
   useEffect(() => {
     setDraft((current) => ({
@@ -11528,9 +11529,12 @@ function ExternalCalendarsSheet({
     setView("list");
   }
 
-  function cancelAdd() {
+  function cancelForm() {
     setLocalError(null);
-    setDraft({ name: "", icsUrl: "", color: "", visibility: defaultVisibility });
+    if (view === "add") {
+      setDraft({ name: "", icsUrl: "", color: "", visibility: defaultVisibility });
+    }
+    setSelectedCalendarId(null);
     setView("list");
   }
 
@@ -11538,28 +11542,28 @@ function ExternalCalendarsSheet({
     <div
       className={cn(
         "fixed inset-0 z-50 flex bg-stone-950/10",
-        view === "add" ? "items-stretch p-0 sm:items-center sm:justify-center sm:p-6" : "items-end p-3 sm:items-center sm:justify-center sm:p-6",
+        isMobileFormView ? "items-stretch p-0 sm:items-center sm:justify-center sm:p-6" : "items-end p-3 sm:items-center sm:justify-center sm:p-6",
       )}
     >
       <div
         className={cn(
           "flex w-full flex-col bg-white",
-          view === "add"
+          isMobileFormView
             ? "h-[100dvh] max-h-[100dvh] rounded-none border-0 px-4 pb-[calc(env(safe-area-inset-bottom)+1rem)] pt-[calc(env(safe-area-inset-top)+1rem)] sm:h-auto sm:max-h-[86vh] sm:max-w-2xl sm:rounded-3xl sm:border sm:border-stone-200 sm:p-5"
             : "max-h-[86vh] rounded-3xl border border-stone-200 p-4 sm:max-w-2xl sm:p-5",
         )}
       >
-        {view === "add" && (
+        {isMobileFormView && (
           <div className="mb-5 flex items-center justify-between sm:hidden">
-            <button type="button" onClick={cancelAdd} className="rounded-full px-1 py-1 text-base font-semibold text-stone-500">
+            <button type="button" onClick={cancelForm} className="rounded-full px-1 py-1 text-base font-semibold text-stone-500">
               Annuler
             </button>
-            <h2 className="text-base font-semibold text-stone-950">Ajouter un calendrier</h2>
+            <h2 className="text-base font-semibold text-stone-950">{view === "detail" ? "Modifier le calendrier" : "Ajouter un calendrier"}</h2>
             <span className="w-[58px]" aria-hidden="true" />
           </div>
         )}
 
-        <div className={cn("mb-4 flex items-start justify-between gap-3", view === "add" && "hidden sm:flex")}>
+        <div className={cn("mb-4 flex items-start justify-between gap-3", isMobileFormView && "hidden sm:flex")}>
           <div className="flex min-w-0 items-start gap-2">
             {view !== "list" && (
               <button
@@ -11585,7 +11589,7 @@ function ExternalCalendarsSheet({
 
         {(error || localError) && <div className="mb-3 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-base font-medium text-rose-700">{localError || error}</div>}
 
-        <div className={cn("no-scrollbar min-h-0 flex-1 overflow-y-auto overscroll-contain", view === "add" && "pb-8 sm:pb-0")}>
+        <div className={cn("no-scrollbar min-h-0 flex-1 overflow-y-auto overscroll-contain", isMobileFormView && "pb-8 sm:pb-0")}>
           {view === "list" && (
             <ExternalCalendarsListView
               calendars={calendars}
