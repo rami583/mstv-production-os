@@ -512,6 +512,54 @@ function isNetworkOrUnavailableError(error: unknown) {
   return /failed to fetch|network|load failed|fetch failed|internet|offline|timeout|unavailable/i.test(message);
 }
 
+function getRawErrorMessage(error: unknown) {
+  if (error instanceof Error) return error.message;
+  if (typeof error === "string") return error;
+  return String(error ?? "");
+}
+
+function getUserFacingErrorMessage(error: unknown, fallback = "Une erreur est survenue.") {
+  const rawMessage = getRawErrorMessage(error).trim();
+  const normalizedMessage = rawMessage.toLocaleLowerCase("fr-FR");
+
+  if (!rawMessage) return fallback;
+  if (isNetworkOrUnavailableError(error)) return "Connexion réseau indisponible.";
+  if (/invalid login credentials|invalid credentials|email not confirmed|invalid grant/.test(normalizedMessage)) {
+    return "Email ou mot de passe incorrect.";
+  }
+  if (/password should be at least|weak password|password.*characters/.test(normalizedMessage)) {
+    return "Le mot de passe doit contenir au moins 6 caractères.";
+  }
+  if (/rate limit|too many requests|over request rate limit/.test(normalizedMessage)) {
+    return "Trop de tentatives. Réessayez dans quelques instants.";
+  }
+  if (/jwt|session|refresh token|invalid token|token.*expired/.test(normalizedMessage)) {
+    return "Session expirée. Reconnectez-vous.";
+  }
+  if (/row-level security|rls|permission denied|not authorized|unauthorized|forbidden|policy/.test(normalizedMessage)) {
+    return "Action non autorisée.";
+  }
+  if (/duplicate key|unique constraint|already exists/.test(normalizedMessage)) {
+    return "Cet élément existe déjà.";
+  }
+  if (/not found|no rows|object.*does not exist/.test(normalizedMessage)) {
+    return "Élément introuvable.";
+  }
+  if (/storage|bucket|upload/.test(normalizedMessage)) {
+    return fallback;
+  }
+
+  const looksTechnical = /supabase|migration|policy|constraint|stack|dommatrix|indexeddb|next_public|on conflict|http\s*\d|failed to fetch|fetch failed|load failed|json|syntaxerror/i.test(rawMessage);
+  const looksFrench =
+    /[àâçéèêëîïôûùüÿœ’]/i.test(rawMessage) ||
+    /^(impossible|vous|votre|le|la|les|un|une|aucun|aucune|action|session|configuration|hors ligne|importez|ajoutez|ce|cette|ancien|ancienne|suppression|restauration|gestion|nom|email|mot de passe|connexion)/i.test(
+      rawMessage,
+    );
+
+  if (looksFrench && !looksTechnical) return rawMessage;
+  return fallback;
+}
+
 function openPendingSyncDb() {
   return new Promise<IDBDatabase>((resolve, reject) => {
     if (typeof indexedDB === "undefined") {
@@ -2029,7 +2077,7 @@ function isCapacitorRuntime() {
   return window.location.protocol === "capacitor:" || Boolean(maybeCapacitor?.isNativePlatform?.());
 }
 
-function getAppApiUrl(path: string, unavailableMessage = "Service serveur indisponible: configurez NEXT_PUBLIC_SITE_URL vers l’app web déployée.") {
+function getAppApiUrl(path: string, unavailableMessage = "Service momentanément indisponible.") {
   if (typeof window === "undefined") return path;
   const configuredUrl = process.env.NEXT_PUBLIC_SITE_URL?.trim();
   if (isCapacitorRuntime() && configuredUrl) {
@@ -2824,7 +2872,7 @@ export default function Home() {
           setProfile(null);
           setAuthError(
             isNetworkOrUnavailableError(profileError)
-              ? "Hors ligne. Connectez-vous une première fois avec du réseau pour préparer l'accès offline."
+              ? "Hors ligne. Connectez-vous une première fois avec du réseau pour préparer l'accès hors ligne."
               : "Impossible de charger le profil utilisateur.",
           );
         }
@@ -2834,7 +2882,7 @@ export default function Home() {
     async function initializeAuth() {
       if (!supabase) {
         setAuthLoading(false);
-        setAuthError("Configuration Supabase manquante.");
+        setAuthError("Service momentanément indisponible.");
         return;
       }
 
@@ -2883,7 +2931,7 @@ export default function Home() {
         if (error) {
           await loadAuthenticatedProfile(null);
           if (!cancelled) {
-            setAuthError(isNetworkOrUnavailableError(error) ? "Hors ligne. Aucune session locale disponible." : error.message);
+            setAuthError(getUserFacingErrorMessage(error, "Impossible de charger la session utilisateur."));
           }
           if (!cancelled) setAuthLoading(false);
           return;
@@ -2900,13 +2948,7 @@ export default function Home() {
           return;
         }
         if (!cancelled) {
-          setAuthError(
-            isNetworkOrUnavailableError(sessionError)
-              ? "Hors ligne. Aucune session locale disponible."
-              : sessionError instanceof Error
-                ? sessionError.message
-                : "Impossible de charger la session utilisateur.",
-          );
+          setAuthError(getUserFacingErrorMessage(sessionError, "Impossible de charger la session utilisateur."));
         }
       }
       if (!cancelled) setAuthLoading(false);
@@ -3159,7 +3201,7 @@ export default function Home() {
         setError(null);
         setOnline(false);
       } else {
-        setError(supabaseError instanceof Error ? supabaseError.message : "Impossible de charger les données.");
+        setError(getUserFacingErrorMessage(supabaseError, "Impossible de charger les données."));
       }
     } finally {
       if (!options.silent) {
@@ -3176,7 +3218,7 @@ export default function Home() {
       setDeletedEvents(await fetchEvents("deleted"));
     } catch (trashLoadError) {
       console.error("Failed to load deleted events. Apply supabase/migrations/012_soft_delete_events.sql if columns are missing.", trashLoadError);
-      setTrashError("Impossible de charger la corbeille. Vérifiez la migration 012_soft_delete_events.sql.");
+      setTrashError("Impossible de charger la corbeille.");
     } finally {
       setTrashLoading(false);
     }
@@ -3275,7 +3317,7 @@ export default function Home() {
     setExternalCalendarSettingsError(null);
 
     try {
-      const response = await fetch(getAppApiUrl("/api/external-calendars/fetch-ics", "Synchronisation ICS indisponible: configurez NEXT_PUBLIC_SITE_URL vers l’app web déployée."), {
+      const response = await fetch(getAppApiUrl("/api/external-calendars/fetch-ics", "Synchronisation du calendrier momentanément indisponible."), {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -3377,7 +3419,7 @@ export default function Home() {
             errorDetails: upsertError.details,
             errorHint: upsertError.hint,
           });
-          throw new Error(`Synchronisation interrompue au lot ${batchNumber}/${totalBatches}: ${upsertError.message}`);
+          throw new Error(`Synchronisation interrompue au lot ${batchNumber}/${totalBatches}.`);
         }
 
         setExternalCalendarSyncProgress({
@@ -3434,7 +3476,7 @@ export default function Home() {
       setActivityLog(await fetchActivityLog(eventId));
     } catch (logError) {
       console.error("Failed to load event activity log. Apply supabase/migrations/011_event_activity_log.sql if the table is missing.", logError);
-      setActivityError("Impossible de charger l'historique. Vérifiez la migration 011_event_activity_log.sql.");
+      setActivityError("Impossible de charger l'historique.");
     } finally {
       setActivityLoading(false);
     }
@@ -3709,7 +3751,7 @@ export default function Home() {
           await deletePendingSyncAction(syncingAction.id);
           syncedSomething = true;
         } catch (syncError) {
-          const message = syncError instanceof Error ? syncError.message : "Synchronisation impossible.";
+          const message = getUserFacingErrorMessage(syncError, "Synchronisation impossible.");
           await putPendingSyncAction({
             ...syncingAction,
             status: "failed",
@@ -3804,7 +3846,7 @@ export default function Home() {
 
       await refreshActivityLog(entry.eventId);
     } catch (restoreError) {
-      setActivityError(restoreError instanceof Error ? restoreError.message : "Impossible de restaurer cette valeur.");
+      setActivityError(getUserFacingErrorMessage(restoreError, "Impossible de restaurer cette valeur."));
     } finally {
       setRestoringActivityId(null);
     }
@@ -4818,7 +4860,7 @@ export default function Home() {
         });
         return;
       }
-      setError(updateError.message);
+      setError(getUserFacingErrorMessage(updateError, "Impossible de modifier l'événement."));
       return;
     }
 
@@ -4859,7 +4901,7 @@ export default function Home() {
     const { error: updateError } = await supabase.from("event_options").update(updatePayload).eq("id", option.id);
 
     if (updateError) {
-      setError(updateError.message);
+      setError(getUserFacingErrorMessage(updateError, "Impossible de modifier l'événement."));
       throw updateError;
     }
 
@@ -5957,7 +5999,7 @@ export default function Home() {
   async function uploadEventDocument(group: EventDocumentGroup, file: globalThis.File) {
     assertCanManageOperational();
     if (!online) {
-      throw new Error("Upload document indisponible hors ligne. Le fichier n'est pas perdu: réessayez quand le réseau revient.");
+      throw new Error("Envoi de document indisponible hors ligne. Le fichier n'est pas perdu: réessayez quand le réseau revient.");
     }
     if (!supabase) {
       throw new Error("Configuration Supabase manquante.");
@@ -6326,7 +6368,7 @@ export default function Home() {
       setSelectedDateKey(data.date);
       setVisibleMonth(new Date(`${data.date}T12:00:00`));
     } catch (restoreError) {
-      setTrashError(restoreError instanceof Error ? restoreError.message : "Impossible de restaurer cet événement.");
+      setTrashError(getUserFacingErrorMessage(restoreError, "Impossible de restaurer cet événement."));
     } finally {
       setRestoringEventId(null);
     }
@@ -6425,7 +6467,7 @@ export default function Home() {
         errorMessage: roleError instanceof Error ? roleError.message : null,
         error: roleError,
       });
-      setManagedProfilesError(roleError instanceof Error ? roleError.message : "Impossible de modifier le rôle.");
+      setManagedProfilesError(getUserFacingErrorMessage(roleError, "Impossible de modifier le rôle."));
     } finally {
       setUpdatingProfileId(null);
     }
@@ -6850,7 +6892,7 @@ export default function Home() {
               await deleteExternalCalendar(calendar);
             } catch (deleteError) {
               console.error("External calendar delete failed", deleteError);
-              setExternalCalendarSettingsError(deleteError instanceof Error ? deleteError.message : "Impossible de supprimer ce calendrier.");
+              setExternalCalendarSettingsError(getUserFacingErrorMessage(deleteError, "Impossible de supprimer ce calendrier."));
             }
           }}
           onSync={async (calendar) => {
@@ -6858,7 +6900,7 @@ export default function Home() {
               return await syncExternalCalendar(calendar);
             } catch (syncError) {
               console.error("External calendar sync failed", syncError);
-              setExternalCalendarSettingsError(syncError instanceof Error ? syncError.message : "Impossible de synchroniser ce calendrier.");
+              setExternalCalendarSettingsError(getUserFacingErrorMessage(syncError, "Impossible de synchroniser ce calendrier."));
               throw syncError;
             }
           }}
@@ -8819,7 +8861,7 @@ function ProductionDetail({
       setAddForm(null);
       setContextSelection({ type: "option", optionId: option.id });
     } catch (createError) {
-      setManageError(createError instanceof Error ? createError.message : "Impossible d'ajouter l'option.");
+      setManageError(getUserFacingErrorMessage(createError, "Impossible d'ajouter l'option."));
     } finally {
       setSubmittingAdd(false);
     }
@@ -8836,7 +8878,7 @@ function ProductionDetail({
       setAddForm(null);
       setContextSelection({ type: "link", linkId: link.id });
     } catch (createError) {
-      setManageError(createError instanceof Error ? createError.message : "Impossible d'ajouter le lien.");
+      setManageError(getUserFacingErrorMessage(createError, "Impossible d'ajouter le lien."));
     } finally {
       setSubmittingAdd(false);
     }
@@ -8853,7 +8895,7 @@ function ProductionDetail({
       setAddForm(null);
       setContextSelection({ type: "document", groupId: group.id });
     } catch (createError) {
-      setManageError(createError instanceof Error ? createError.message : "Impossible d'ajouter le document.");
+      setManageError(getUserFacingErrorMessage(createError, "Impossible d'ajouter le document."));
     } finally {
       setSubmittingAdd(false);
     }
@@ -8892,7 +8934,7 @@ function ProductionDetail({
       setConfirmDelete(null);
       setDeleteConfirmationOpen(false);
     } catch (deleteError) {
-      setManageError(deleteError instanceof Error ? deleteError.message : "Impossible de supprimer cet élément.");
+      setManageError(getUserFacingErrorMessage(deleteError, "Impossible de supprimer cet élément."));
     } finally {
       setDeletingItem(false);
     }
@@ -10201,7 +10243,7 @@ function ContextDetailBlock({
       setLastSavedLinkEntrySignature(updatedSignature);
     } catch (saveError) {
       console.error("Unable to save link entry draft", saveError);
-      setLinkSaveError(saveError instanceof Error ? saveError.message : "Impossible d'enregistrer le lien.");
+      setLinkSaveError(getUserFacingErrorMessage(saveError, "Impossible d'enregistrer le lien."));
       throw saveError;
     }
   }
@@ -10235,7 +10277,7 @@ function ContextDetailBlock({
       }
       setDraggingDocumentFiles(false);
     } catch (uploadError) {
-      setDocumentOpenError(uploadError instanceof Error ? uploadError.message : "Impossible d'ajouter le fichier.");
+      setDocumentOpenError(getUserFacingErrorMessage(uploadError, "Impossible d'ajouter le fichier."));
     } finally {
       setUploadingDocumentFiles(false);
     }
@@ -10247,7 +10289,7 @@ function ContextDetailBlock({
     try {
       await onDeleteDocumentFile(file);
     } catch (deleteError) {
-      setDocumentOpenError(deleteError instanceof Error ? deleteError.message : "Impossible de supprimer ce fichier.");
+      setDocumentOpenError(getUserFacingErrorMessage(deleteError, "Impossible de supprimer ce fichier."));
     }
   }
 
@@ -10257,7 +10299,7 @@ function ContextDetailBlock({
     try {
       await onOpenDocument(file);
     } catch (openError) {
-      setDocumentOpenError(openError instanceof Error ? openError.message : "Impossible d'ouvrir le document.");
+      setDocumentOpenError(getUserFacingErrorMessage(openError, "Impossible d'ouvrir le document."));
     }
   }
 
@@ -10267,7 +10309,7 @@ function ContextDetailBlock({
     try {
       await onDownloadDocument(file);
     } catch (downloadError) {
-      setDocumentOpenError(downloadError instanceof Error ? downloadError.message : "Impossible de télécharger le document.");
+      setDocumentOpenError(getUserFacingErrorMessage(downloadError, "Impossible de télécharger le document."));
     }
   }
 
@@ -10284,7 +10326,7 @@ function ContextDetailBlock({
       setAddingOptionItem(false);
     } catch (saveError) {
       console.error("Unable to add option detail item", saveError);
-      setOptionItemError(saveError instanceof Error ? saveError.message : "Impossible d'ajouter cette note.");
+      setOptionItemError(getUserFacingErrorMessage(saveError, "Impossible d'ajouter cette note."));
     } finally {
       setSavingOptionItem(false);
     }
@@ -10299,7 +10341,7 @@ function ContextDetailBlock({
       await onDeleteOptionItem(selectedOption, optionItem);
     } catch (deleteError) {
       console.error("Unable to delete option detail item", deleteError);
-      setOptionItemError(deleteError instanceof Error ? deleteError.message : "Impossible de supprimer cette note.");
+      setOptionItemError(getUserFacingErrorMessage(deleteError, "Impossible de supprimer cette note."));
     }
   }
 
@@ -10310,7 +10352,7 @@ function ContextDetailBlock({
     try {
       await onRenameOption(selectedOption, label);
     } catch (renameError) {
-      setTitleRenameError(renameError instanceof Error ? renameError.message : "Impossible de renommer l'option.");
+      setTitleRenameError(getUserFacingErrorMessage(renameError, "Impossible de renommer l'option."));
       throw renameError;
     }
   }
@@ -10332,7 +10374,7 @@ function ContextDetailBlock({
       await onChangeOptionCompletedBy(selectedOption, choice, nextCustomLabel);
       setCompletedByOverrideChoiceValue(choice.value);
     } catch (overrideError) {
-      setCompletedByOverrideError(overrideError instanceof Error ? overrideError.message : "Impossible de modifier le champ Fait par.");
+      setCompletedByOverrideError(getUserFacingErrorMessage(overrideError, "Impossible de modifier le champ Fait par."));
     } finally {
       setSavingCompletedByOverride(false);
     }
@@ -10353,7 +10395,7 @@ function ContextDetailBlock({
     try {
       await onRenameLink(selectedLink, label);
     } catch (renameError) {
-      setTitleRenameError(renameError instanceof Error ? renameError.message : "Impossible de renommer le lien.");
+      setTitleRenameError(getUserFacingErrorMessage(renameError, "Impossible de renommer le lien."));
       throw renameError;
     }
   }
@@ -10365,7 +10407,7 @@ function ContextDetailBlock({
     try {
       await onRenameDocumentGroup(selectedDocumentGroup, label);
     } catch (renameError) {
-      setTitleRenameError(renameError instanceof Error ? renameError.message : "Impossible de renommer le document.");
+      setTitleRenameError(getUserFacingErrorMessage(renameError, "Impossible de renommer le document."));
       throw renameError;
     }
   }
@@ -10478,7 +10520,7 @@ function ContextDetailBlock({
               )}
             >
               <label className="flex min-h-16 cursor-pointer items-center justify-center rounded-lg border border-dashed border-amber-200 bg-amber-50/60 px-3 text-center text-base font-semibold text-amber-800 transition hover:bg-amber-100">
-                {uploadingDocumentFiles ? "Upload..." : "Déposer ou choisir"}
+                {uploadingDocumentFiles ? "Envoi..." : "Déposer ou choisir"}
                 <input
                   type="file"
                   multiple
@@ -10739,7 +10781,7 @@ function CreateEventModal({
       setForm(normalizedForm);
       await onSubmit(normalizedForm);
     } catch (createError) {
-      setError(createError instanceof Error ? createError.message : isEditing ? "Impossible de modifier l'événement." : "Impossible de créer l'événement.");
+      setError(getUserFacingErrorMessage(createError, isEditing ? "Impossible de modifier l'événement." : "Impossible de créer l'événement."));
     } finally {
       setSubmitting(false);
     }
@@ -10872,7 +10914,7 @@ function NativeMstvIcsImportModal({
       setStep("review");
     } catch (parseError) {
       console.error("Native MSTV ICS import parsing failed", parseError);
-      setError(parseError instanceof Error ? parseError.message : "Impossible de lire ce calendrier ICS.");
+      setError(getUserFacingErrorMessage(parseError, "Impossible de lire ce calendrier ICS."));
     } finally {
       setParsing(false);
     }
@@ -10886,7 +10928,7 @@ function NativeMstvIcsImportModal({
       await onImport(reviewEvents);
     } catch (importError) {
       console.error("Native MSTV ICS import failed", importError);
-      setError(importError instanceof Error ? importError.message : "Impossible d'importer ce calendrier.");
+      setError(getUserFacingErrorMessage(importError, "Impossible d'importer ce calendrier."));
     } finally {
       setImporting(false);
     }
@@ -11051,7 +11093,7 @@ function QuoteImportModal({
       formData.append("file", file);
       formData.append("fallbackDate", selectedDateKey);
 
-      const response = await fetch(getAppApiUrl("/api/quotes/extract-pdf", "Import devis indisponible: configurez NEXT_PUBLIC_SITE_URL vers l’app web déployée."), {
+      const response = await fetch(getAppApiUrl("/api/quotes/extract-pdf", "Import PDF momentanément indisponible."), {
         method: "POST",
         headers: {
           Authorization: `Bearer ${accessToken}`,
@@ -11088,11 +11130,7 @@ function QuoteImportModal({
         fileSize: file.size,
         error: getDebugError(extractError),
       });
-      setError(
-        extractError instanceof Error
-          ? extractError.message
-          : "Impossible de lire ce PDF. Vérifiez qu'il contient bien du texte sélectionnable.",
-      );
+      setError(getUserFacingErrorMessage(extractError, "Le fichier PDF n’a pas pu être lu."));
     } finally {
       setExtracting(false);
     }
@@ -11127,7 +11165,7 @@ function QuoteImportModal({
 
       await onCreateEvent(normalizedForm);
     } catch (submitError) {
-      setError(submitError instanceof Error ? submitError.message : "Impossible de créer l'événement depuis ce devis.");
+      setError(getUserFacingErrorMessage(submitError, "Impossible de créer l'événement depuis ce devis."));
     } finally {
       setSubmitting(false);
     }
@@ -11141,7 +11179,7 @@ function QuoteImportModal({
     try {
       await onCreateEvent(resolution.input);
     } catch (submitError) {
-      setError(submitError instanceof Error ? submitError.message : "Impossible de créer l'événement depuis ce devis.");
+      setError(getUserFacingErrorMessage(submitError, "Impossible de créer l'événement depuis ce devis."));
     } finally {
       setSubmitting(false);
     }
@@ -11155,7 +11193,7 @@ function QuoteImportModal({
     try {
       await onUpdateEvent(resolution.existingEvent, resolution.input);
     } catch (submitError) {
-      setError(submitError instanceof Error ? submitError.message : "Impossible de mettre à jour l'événement depuis ce devis.");
+      setError(getUserFacingErrorMessage(submitError, "Impossible de mettre à jour l'événement depuis ce devis."));
     } finally {
       setSubmitting(false);
     }
@@ -11721,7 +11759,7 @@ function ExternalCalendarsSheet({
       setDraft({ name: "", icsUrl: "", color: "", visibility: defaultVisibility });
       setView("list");
     } catch (createError) {
-      setLocalError(createError instanceof Error ? createError.message : "Impossible d'ajouter ce calendrier.");
+      setLocalError(getUserFacingErrorMessage(createError, "Impossible d'ajouter ce calendrier."));
     } finally {
       setSavingNew(false);
     }
@@ -11860,7 +11898,7 @@ function getExternalCalendarStatusLine(events: ExternalCalendarEvent[]) {
     .at(-1);
 
   if (!latestSync) return "Jamais synchronisé";
-  return `${events.length} événement${events.length > 1 ? "s" : ""} · Sync ${formatHistoryTimestamp(latestSync)}`;
+  return `${events.length} événement${events.length > 1 ? "s" : ""} · Synchro ${formatHistoryTimestamp(latestSync)}`;
 }
 
 function ExternalCalendarsListView({
@@ -12037,7 +12075,7 @@ function ExternalCalendarSettingsDetail({
     try {
       await onUpdate(calendar, draft);
     } catch (saveError) {
-      setRowError(saveError instanceof Error ? saveError.message : "Impossible d'enregistrer ce calendrier.");
+      setRowError(getUserFacingErrorMessage(saveError, "Impossible d'enregistrer ce calendrier."));
     } finally {
       setSaving(false);
     }
@@ -12050,7 +12088,7 @@ function ExternalCalendarSettingsDetail({
     try {
       await onDelete(calendar);
     } catch (deleteError) {
-      setRowError(deleteError instanceof Error ? deleteError.message : "Impossible de supprimer ce calendrier.");
+      setRowError(getUserFacingErrorMessage(deleteError, "Impossible de supprimer ce calendrier."));
       setDeleting(false);
     }
   }
@@ -12066,7 +12104,7 @@ function ExternalCalendarSettingsDetail({
       const result = await onSync({ ...calendar, ...draft });
       setSyncSummary(`${result.synced.toLocaleString("fr-FR")} événement${result.synced > 1 ? "s" : ""} synchronisé${result.synced > 1 ? "s" : ""}.`);
     } catch (syncError) {
-      setRowError(syncError instanceof Error ? syncError.message : "Impossible de synchroniser ce calendrier.");
+      setRowError(getUserFacingErrorMessage(syncError, "Impossible de synchroniser ce calendrier."));
     } finally {
       setSaving(false);
     }
@@ -12294,7 +12332,7 @@ function DuplicateEventDialog({
     try {
       await onConfirm(request);
     } catch (duplicateError) {
-      setError(duplicateError instanceof Error ? duplicateError.message : "Impossible de dupliquer l'événement.");
+      setError(getUserFacingErrorMessage(duplicateError, "Impossible de dupliquer l'événement."));
       setDuplicating(false);
     }
   }
@@ -12366,7 +12404,7 @@ function DeleteEventDialog({
     try {
       await onConfirm(event);
     } catch (deleteError) {
-      setError(deleteError instanceof Error ? deleteError.message : "Impossible de supprimer l'événement.");
+      setError(getUserFacingErrorMessage(deleteError, "Impossible de supprimer l'événement."));
       setDeleting(false);
     }
   }
@@ -12425,7 +12463,7 @@ function PermanentDeleteEventDialog({
     try {
       await onConfirm(event);
     } catch (deleteError) {
-      setError(deleteError instanceof Error ? deleteError.message : "Impossible de supprimer définitivement l'événement.");
+      setError(getUserFacingErrorMessage(deleteError, "Impossible de supprimer définitivement l'événement."));
       setDeleting(false);
     }
   }
@@ -12523,7 +12561,7 @@ function SharedDatePicker({
     try {
       await onSelectDate(dateKey);
     } catch (saveError) {
-      setError(saveError instanceof Error ? saveError.message : "Impossible de modifier la date.");
+      setError(getUserFacingErrorMessage(saveError, "Impossible de modifier la date."));
       setSaving(false);
     }
   }
@@ -12850,7 +12888,7 @@ function DocumentPreviewModal({
     try {
       await onDownload(preview.file);
     } catch (error) {
-      setDownloadError(error instanceof Error ? error.message : "Impossible de télécharger le document.");
+      setDownloadError(getUserFacingErrorMessage(error, "Impossible de télécharger le document."));
     }
   }
 
@@ -13023,9 +13061,9 @@ function SyncStatusIndicator({
       ? `${pendingCount} en attente`
       : "Hors ligne"
     : syncing
-      ? "Sync"
+      ? "Synchro"
       : error
-        ? "Erreur sync"
+        ? "Erreur synchro"
         : `${pendingCount} en attente`;
 
   return (
@@ -13041,7 +13079,7 @@ function SyncStatusIndicator({
       title={error ?? label}
       aria-live="polite"
     >
-      <span className="sm:hidden">{error ? "!" : !online ? "Off" : pendingCount}</span>
+      <span className="sm:hidden">{error ? "!" : !online ? "HL" : pendingCount}</span>
       <span className="hidden sm:inline">{label}</span>
     </div>
   );
@@ -13364,7 +13402,7 @@ function UpdatePasswordScreen({
   async function submitPassword(formEvent: React.FormEvent<HTMLFormElement>) {
     formEvent.preventDefault();
     if (!supabase) {
-      setError("Configuration Supabase manquante.");
+      setError("Service momentanément indisponible.");
       return;
     }
     if (password.length < 6) {
@@ -13381,7 +13419,7 @@ function UpdatePasswordScreen({
 
     const { error: updateError } = await supabase.auth.updateUser({ password });
     if (updateError) {
-      setError(updateError.message);
+      setError(getUserFacingErrorMessage(updateError, "Impossible de mettre à jour le mot de passe."));
       setSubmitting(false);
       return;
     }
@@ -13468,7 +13506,7 @@ function LoginScreen({ error }: { error: string | null }) {
   async function submitLogin(formEvent: React.FormEvent<HTMLFormElement>) {
     formEvent.preventDefault();
     if (!supabase) {
-      setLoginError("Configuration Supabase manquante.");
+      setLoginError("Service momentanément indisponible.");
       return;
     }
 
@@ -13481,14 +13519,14 @@ function LoginScreen({ error }: { error: string | null }) {
     });
 
     if (signInError) {
-      setLoginError(signInError.message);
+      setLoginError(getUserFacingErrorMessage(signInError, "Impossible de se connecter."));
       setSubmitting(false);
     }
   }
 
   async function sendPasswordReset() {
     if (!supabase) {
-      setLoginError("Configuration Supabase manquante.");
+      setLoginError("Service momentanément indisponible.");
       return;
     }
 
@@ -13507,7 +13545,7 @@ function LoginScreen({ error }: { error: string | null }) {
     });
 
     if (resetError) {
-      setLoginError(resetError.message);
+      setLoginError(getUserFacingErrorMessage(resetError, "Impossible d'envoyer l'email de réinitialisation."));
     } else {
       setResetMessage("Un email de réinitialisation vous a été envoyé.");
     }

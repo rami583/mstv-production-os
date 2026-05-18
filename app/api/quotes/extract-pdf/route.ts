@@ -659,9 +659,14 @@ export async function POST(request: Request) {
     return jsonResponse({ extracted });
   } catch (error) {
     console.error("Quote PDF extraction API error", getDebugError(error));
+    const message = error instanceof Error ? error.message : "";
+    const publicMessage =
+      message && /^Le fichier|^Le PDF|^PDF manquant|^Importez un fichier PDF|^Session invalide/i.test(message)
+        ? message
+        : "Le fichier PDF n’a pas pu être lu.";
     return jsonResponse(
       {
-        error: error instanceof Error ? error.message : "Impossible de lire ce PDF.",
+        error: publicMessage,
       },
       { status: 500 },
     );
