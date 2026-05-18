@@ -1990,7 +1990,7 @@ function getAppApiUrl(path: string) {
 
 function getCompletedByNameForDisplay(option: EventOption) {
   const label = option.completedByLabel?.trim();
-  if (label && label !== "Externe") return label;
+  if (label) return label;
 
   const initials = option.completedByInitials?.trim().toLocaleUpperCase("fr-FR");
   if (initials) return completedByLegacyInitialLabels[initials] ?? label ?? initials;
@@ -10030,6 +10030,7 @@ function ContextDetailBlock({
   const [optionItemError, setOptionItemError] = useState<string | null>(null);
   const [savingCompletedByOverride, setSavingCompletedByOverride] = useState(false);
   const [completedByOverrideError, setCompletedByOverrideError] = useState<string | null>(null);
+  const [completedByOverrideChoiceValue, setCompletedByOverrideChoiceValue] = useState("");
   const [completedByExternalName, setCompletedByExternalName] = useState("");
   const [titleRenameError, setTitleRenameError] = useState<string | null>(null);
   const [draggingDocumentFiles, setDraggingDocumentFiles] = useState(false);
@@ -10066,6 +10067,7 @@ function ContextDetailBlock({
     setOptionItemError(null);
     setSavingCompletedByOverride(false);
     setCompletedByOverrideError(null);
+    setCompletedByOverrideChoiceValue("");
     setCompletedByExternalName("");
     setTitleRenameError(null);
     setDraggingDocumentFiles(false);
@@ -10075,11 +10077,16 @@ function ContextDetailBlock({
 
   useEffect(() => {
     if (!selectedOption || selectedOption.status !== "completed") return;
-    const matchingInternalChoice = completedByOverrideChoices.find((choice) => choice.value !== "externe" && choice.label === selectedOption.completedByLabel);
+    const matchingInternalChoice = completedByOverrideChoices.find((choice) => choice.value !== "externe" && (choice.initials === selectedOption.completedByInitials || choice.label === selectedOption.completedByLabel));
+    setCompletedByOverrideChoiceValue(matchingInternalChoice?.value ?? "externe");
+    if (matchingInternalChoice) {
+      setCompletedByExternalName("");
+      return;
+    }
     if (!matchingInternalChoice && selectedOption.completedByLabel && selectedOption.completedByLabel !== "Externe") {
       setCompletedByExternalName(selectedOption.completedByLabel);
     }
-  }, [selectedOptionId, selectedOption?.completedByLabel, selectedOption?.status]);
+  }, [selectedOptionId, selectedOption?.completedByInitials, selectedOption?.completedByLabel, selectedOption?.status]);
 
   async function copyLinkValue(value: string | null | undefined, field: string) {
     const valueToCopy = value?.trim();
@@ -10259,12 +10266,17 @@ function ContextDetailBlock({
     const choice = completedByOverrideChoices.find((item) => item.value === value);
     if (!choice) return;
     const nextCustomLabel = customLabel?.trim();
+    if (choice.value === "externe" && !nextCustomLabel) {
+      setCompletedByOverrideChoiceValue("externe");
+      return;
+    }
 
     setSavingCompletedByOverride(true);
     setCompletedByOverrideError(null);
 
     try {
       await onChangeOptionCompletedBy(selectedOption, choice, nextCustomLabel);
+      setCompletedByOverrideChoiceValue(choice.value);
     } catch (overrideError) {
       setCompletedByOverrideError(overrideError instanceof Error ? overrideError.message : "Impossible de modifier le champ Fait par.");
     } finally {
@@ -10273,9 +10285,10 @@ function ContextDetailBlock({
   }
 
   async function commitCompletedByExternalName() {
-    if (!selectedOption || completedByChoiceValue !== "externe") return;
+    if (!selectedOption || completedByOverrideChoiceValue !== "externe") return;
     const nextName = completedByExternalName.trim();
-    if (!nextName || nextName === selectedOption.completedByLabel) return;
+    if (!nextName) return;
+    if (nextName === selectedOption.completedByLabel && selectedOption.completedByProfileId === null) return;
     await changeSelectedOptionCompletedBy("externe", nextName);
   }
 
@@ -10485,9 +10498,10 @@ function ContextDetailBlock({
   if (!selectedOption) return null;
 
   const optionTone = getOptionTone(selectedOption.status);
-  const completedByChoiceValue =
+  const persistedCompletedByChoiceValue =
     completedByOverrideChoices.find((choice) => choice.value !== "externe" && (choice.initials === selectedOption.completedByInitials || choice.label === selectedOption.completedByLabel))?.value
     ?? (selectedOption.completedByInitials === "EXT" || (selectedOption.completedByLabel && !completedByOverrideChoices.some((choice) => choice.value !== "externe" && choice.label === selectedOption.completedByLabel)) ? "externe" : "");
+  const completedByChoiceValue = completedByOverrideChoiceValue || persistedCompletedByChoiceValue;
   const completedByDisplay = getCompletedByNameForDisplay(selectedOption) ?? "Non renseigné";
   const canOverrideCompletedBy = permissions.canManageEvents && selectedOption.status === "completed";
 
@@ -10530,10 +10544,13 @@ function ContextDetailBlock({
               disabled={savingCompletedByOverride}
               onChange={(event) => {
                 const nextValue = event.target.value;
+                setCompletedByOverrideChoiceValue(nextValue);
                 if (nextValue === "externe") {
                   const nextExternalName = completedByExternalName.trim() || (selectedOption.completedByLabel && selectedOption.completedByLabel !== "Externe" ? selectedOption.completedByLabel : "");
                   setCompletedByExternalName(nextExternalName);
-                  void changeSelectedOptionCompletedBy("externe", nextExternalName || "Externe");
+                  if (nextExternalName) {
+                    void changeSelectedOptionCompletedBy("externe", nextExternalName);
+                  }
                   return;
                 }
                 void changeSelectedOptionCompletedBy(nextValue);
@@ -10567,7 +10584,7 @@ function ContextDetailBlock({
                   event.currentTarget.blur();
                 }
               }}
-              placeholder="Prénom externe"
+              placeholder="Prénom"
               disabled={savingCompletedByOverride}
               className="h-8 w-full rounded-full border border-emerald-200 bg-white px-3 text-base font-semibold text-emerald-800 outline-none transition placeholder:text-emerald-300 focus:border-emerald-500 disabled:text-emerald-400 sm:w-40"
             />
