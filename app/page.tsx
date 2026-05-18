@@ -1321,13 +1321,75 @@ function extractQuoteServices(text: string) {
     { label: "Wifi", keywords: ["wifi", "wi fi", "internet"] },
   ];
   const normalizedText = normalizeLabel(text);
-  return uniqueLabels(serviceRules.filter((rule) => rule.keywords.some((keyword) => normalizedText.includes(normalizeLabel(keyword)))).map((rule) => rule.label));
+  const keywordServices = serviceRules.filter((rule) => rule.keywords.some((keyword) => normalizedText.includes(normalizeLabel(keyword)))).map((rule) => rule.label);
+  const lineItemServices = extractQuoteLineItemLabels(text);
+  return uniqueLabels([...keywordServices, ...lineItemServices]);
+}
+
+function extractQuoteLineItemLabels(text: string) {
+  const lines = text
+    .split(/\n+/)
+    .map((line) => line.replace(/\s+/g, " ").trim())
+    .filter(Boolean);
+  const labels: string[] = [];
+  let inItemsSection = false;
+
+  for (const line of lines) {
+    const normalizedLine = normalizeLabel(line);
+
+    if (/\b(d[eé]signation|description|prestation|service|option)\b/i.test(line) && /\b(prix|total|qt[eé]|quantit[eé]|montant|ht|ttc)\b/i.test(line)) {
+      inItemsSection = true;
+      continue;
+    }
+
+    if (inItemsSection && /\b(total|sous[-\s]?total|conditions|bon pour accord|validit[eé]|tva|net [aà] payer)\b/i.test(line)) {
+      break;
+    }
+
+    if (!inItemsSection) continue;
+    if (line.length < 3 || line.length > 90) continue;
+    if (/^\d+([,.]\d+)?\s*(€|eur|ht|ttc)?$/i.test(line)) continue;
+    if (/\b\d+[,.]\d{2}\s*(€|eur)?\b/i.test(line)) continue;
+    if (/^(qt[eé]|quantit[eé]|prix|total|montant|remise|tva|ht|ttc)$/i.test(normalizedLine)) continue;
+    if (/\b(mon studio tv|siret|tva intracom|iban|bic|adresse|email|tel|devis|facture|page)\b/i.test(normalizedLine)) continue;
+
+    labels.push(line.replace(/^[-•*\d.)\s]+/, "").trim());
+  }
+
+  return labels;
 }
 
 function normalizeQuoteText(text: string) {
   return text
     .replace(/\s+/g, " ")
     .trim();
+}
+
+function normalizeQuoteDebugSnippet(text: string, maxLength = 240) {
+  return normalizeQuoteText(text).slice(0, maxLength);
+}
+
+function findCommercialQuoteTextBoundary(text: string) {
+  const cgvPatterns = [
+    /conditions\s+g[eé]n[eé]rales\s+de\s+vente/i,
+    /conditions\s+generales\s+de\s+vente/i,
+    /conditions\s+g[eé]n[eé]rales/i,
+    /\bCGV\b/i,
+  ];
+  const boundary = cgvPatterns
+    .map((pattern) => {
+      const match = text.match(pattern);
+      return typeof match?.index === "number" ? match.index : -1;
+    })
+    .filter((index) => index >= 0)
+    .sort((a, b) => a - b)[0];
+
+  return typeof boundary === "number" ? boundary : -1;
+}
+
+function getCommercialQuoteText(text: string) {
+  const boundary = findCommercialQuoteTextBoundary(text);
+  return boundary >= 0 ? text.slice(0, boundary) : text;
 }
 
 function extractQuoteReference(text: string, fileName: string) {
@@ -1347,17 +1409,23 @@ function extractQuoteVersion(text: string) {
 }
 
 function extractQuoteFields(text: string, fallbackDate: string, fileName: string): QuoteExtractionResult {
+  const commercialText = getCommercialQuoteText(text);
   const lines = text
     .split(/\n+/)
     .map((line) => line.replace(/\s+/g, " ").trim())
     .filter(Boolean);
-  const compactText = lines.join(" ");
-  const productionLine = findMstvProductionLine(lines);
+  const commercialLines = commercialText
+    .split(/\n+/)
+    .map((line) => line.replace(/\s+/g, " ").trim())
+    .filter(Boolean);
+  const parsingLines = commercialLines.length > 0 ? commercialLines : lines;
+  const compactText = parsingLines.join(" ");
+  const productionLine = findMstvProductionLine(parsingLines);
   const productionTimeRange = parseFrenchTimeRange(productionLine);
   const clientName =
-    extractMstvClientName(lines) ||
+    extractMstvClientName(parsingLines) ||
     formatTitleCase(
-      findLineValue(lines, [
+      findLineValue(parsingLines, [
         /\bclient\s*[:#-]\s*(.+)$/i,
         /\bsoci[eé]t[eé]\s*[:#-]\s*(.+)$/i,
         /\bentreprise\s*[:#-]\s*(.+)$/i,
@@ -1366,7 +1434,7 @@ function extractQuoteFields(text: string, fallbackDate: string, fileName: string
   const eventName =
     extractMstvEventName(productionLine) ||
     formatTitleCase(
-      findLineValue(lines, [
+      findLineValue(parsingLines, [
         /\b(?:événement|evenement|event|projet|prestation)\s*[:#-]\s*(.+)$/i,
         /\bobjet\s*[:#-]\s*(.+)$/i,
       ]),
@@ -1374,13 +1442,35 @@ function extractQuoteFields(text: string, fallbackDate: string, fileName: string
   const date =
     parseFrenchDateToKey(productionLine) ||
     parseFrenchDateToKey(
-      findLineValue(lines, [
+      findLineValue(parsingLines, [
         /\b(?:date\s+(?:de\s+)?(?:l['’])?(?:événement|evenement)|jour\s+(?:de\s+)?(?:l['’])?(?:événement|evenement))\s*[:#-]\s*(.+)$/i,
         /\b(?:le)\s+(\d{1,2}\s+[A-Za-zéûîôàèùç]+\s+\d{4})\b/i,
       ]) || "",
     ) ||
     fallbackDate;
   const arrivalMatch = compactText.match(/\barriv[eé]e(?:\s+client)?\D{0,24}(\d{1,2})(?:\s*[:hH]\s*(\d{2}))?\b/i);
+  const services = extractQuoteServices(commercialText);
+  const quoteReference = extractQuoteReference(commercialText, fileName);
+  const quoteVersion = extractQuoteVersion(commercialText);
+
+  console.info("[Quote PDF import] parser diagnostics", {
+    fileName,
+    originalTextLength: text.length,
+    commercialTextLength: commercialText.length,
+    cgvBoundary: findCommercialQuoteTextBoundary(text),
+    lineCount: lines.length,
+    commercialLineCount: commercialLines.length,
+    productionLine,
+    detectedQuoteReference: quoteReference || null,
+    detectedQuoteVersion: quoteVersion || null,
+    detectedClient: clientName || null,
+    detectedEventName: eventName || null,
+    detectedDate: date || null,
+    detectedStartTime: productionTimeRange.startTime || null,
+    detectedEndTime: productionTimeRange.endTime || null,
+    detectedServiceCount: services.length,
+    firstCommercialText: normalizeQuoteDebugSnippet(commercialText),
+  });
 
   return {
     clientName,
@@ -1390,10 +1480,10 @@ function extractQuoteFields(text: string, fallbackDate: string, fileName: string
     startTime: productionTimeRange.startTime,
     endTime: productionTimeRange.endTime,
     endOfDayTime: "",
-    services: extractQuoteServices(text),
-    quoteReference: extractQuoteReference(text, fileName),
-    quoteVersion: extractQuoteVersion(text),
-    sourceQuoteText: normalizeQuoteText(text),
+    services,
+    quoteReference,
+    quoteVersion,
+    sourceQuoteText: normalizeQuoteText(commercialText),
   };
 }
 
@@ -1519,6 +1609,7 @@ async function extractPdfText(file: File) {
   }
 
   const pages: string[] = [];
+  let stoppedAtCgvPage: number | null = null;
 
   for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber += 1) {
     try {
@@ -1537,7 +1628,25 @@ async function extractPdfText(file: File) {
         pageNumber,
         itemCount: content.items.length,
         textLength: pageText.trim().length,
+        startsCgvSection: findCommercialQuoteTextBoundary(pageText) >= 0,
+        sample: normalizeQuoteDebugSnippet(pageText, 160),
       });
+
+      const cgvBoundary = findCommercialQuoteTextBoundary(pageText);
+      if (cgvBoundary >= 0) {
+        const commercialPageText = pageText.slice(0, cgvBoundary).trim();
+        if (commercialPageText) {
+          pages.push(commercialPageText);
+        }
+        stoppedAtCgvPage = pageNumber;
+        console.info("[Quote PDF import] stopped before CGV pages", {
+          debugId,
+          pageNumber,
+          keptTextLengthOnPage: commercialPageText.length,
+        });
+        break;
+      }
+
       pages.push(pageText);
     } catch (pageError) {
       console.error("[Quote PDF import] page text extraction failed", {
@@ -1545,14 +1654,27 @@ async function extractPdfText(file: File) {
         pageNumber,
         error: getDebugError(pageError),
       });
+      if (pages.join("\n").trim().length > 120) {
+        console.warn("[Quote PDF import] keeping previously extracted commercial pages after later page failure", {
+          debugId,
+          pageNumber,
+          keptPages: pages.length,
+          keptTextLength: pages.join("\n").trim().length,
+        });
+        break;
+      }
       throw new PdfImportError("Le PDF s’ouvre, mais l’extraction du texte a échoué.", pageError);
     }
   }
 
-  const text = pages.join("\n");
+  const text = getCommercialQuoteText(pages.join("\n"));
   console.info("[Quote PDF import] extracted document text", {
     debugId,
     totalTextLength: text.trim().length,
+    extractedPages: pages.length,
+    stoppedAtCgvPage,
+    cgvBoundary: findCommercialQuoteTextBoundary(text),
+    sample: normalizeQuoteDebugSnippet(text),
   });
 
   if (!text.trim()) {
