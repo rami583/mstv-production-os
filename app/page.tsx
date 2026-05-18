@@ -84,6 +84,17 @@ type ExternalCalendarEventRow = Database["public"]["Tables"]["external_calendar_
 
 type UserRole = "admin" | "team";
 type ExternalCalendarVisibility = "admin_only" | "team" | "private";
+type ExternalCalendarSyncProgress = {
+  calendarId: string;
+  synced: number;
+  total: number;
+};
+type ExternalCalendarSyncResult = {
+  synced: number;
+  total: number;
+};
+
+const EXTERNAL_CALENDAR_UPSERT_BATCH_SIZE = 250;
 
 type EventQueryRow = EventRow & {
   event_options: EventOptionRow[] | null;
@@ -2373,6 +2384,7 @@ export default function Home() {
   const [externalCalendarSettingsLoading, setExternalCalendarSettingsLoading] = useState(false);
   const [externalCalendarSettingsError, setExternalCalendarSettingsError] = useState<string | null>(null);
   const [syncingExternalCalendarId, setSyncingExternalCalendarId] = useState<string | null>(null);
+  const [externalCalendarSyncProgress, setExternalCalendarSyncProgress] = useState<ExternalCalendarSyncProgress | null>(null);
   const [online, setOnline] = useState(() => typeof navigator === "undefined" ? true : navigator.onLine);
   const [pendingSyncCount, setPendingSyncCount] = useState(0);
   const [syncingPendingActions, setSyncingPendingActions] = useState(false);
@@ -3022,7 +3034,7 @@ export default function Home() {
     await refreshExternalCalendarSettings();
   }
 
-  async function syncExternalCalendar(calendar: ExternalCalendar) {
+  async function syncExternalCalendar(calendar: ExternalCalendar): Promise<ExternalCalendarSyncResult> {
     if (!supabase) throw new Error("Configuration Supabase manquante.");
     if (!authSession?.access_token) throw new Error("Session utilisateur introuvable.");
     if (!canManageExternalCalendar(permissions, profile, calendar)) {
@@ -3033,6 +3045,7 @@ export default function Home() {
     }
 
     setSyncingExternalCalendarId(calendar.id);
+    setExternalCalendarSyncProgress(null);
     setExternalCalendarSettingsError(null);
 
     try {
@@ -3090,14 +3103,42 @@ export default function Home() {
         last_synced_at: now,
       }));
 
-      const { error: upsertError } = await supabase
-        .from("external_calendar_events")
-        .upsert(rows, { onConflict: "external_calendar_id,external_event_id" });
+      const totalBatches = Math.ceil(rows.length / EXTERNAL_CALENDAR_UPSERT_BATCH_SIZE);
+      setExternalCalendarSyncProgress({ calendarId: calendar.id, synced: 0, total: rows.length });
 
-      if (upsertError) throw upsertError;
+      for (let startIndex = 0; startIndex < rows.length; startIndex += EXTERNAL_CALENDAR_UPSERT_BATCH_SIZE) {
+        const batch = rows.slice(startIndex, startIndex + EXTERNAL_CALENDAR_UPSERT_BATCH_SIZE);
+        const batchNumber = Math.floor(startIndex / EXTERNAL_CALENDAR_UPSERT_BATCH_SIZE) + 1;
+        const { error: upsertError } = await supabase
+          .from("external_calendar_events")
+          .upsert(batch, { onConflict: "external_calendar_id,external_event_id" });
+
+        if (upsertError) {
+          console.error("External calendar batch upsert failed", {
+            calendarId: calendar.id,
+            batchNumber,
+            totalBatches,
+            batchSize: batch.length,
+            errorCode: upsertError.code,
+            errorMessage: upsertError.message,
+            errorDetails: upsertError.details,
+            errorHint: upsertError.hint,
+          });
+          throw new Error(`Synchronisation interrompue au lot ${batchNumber}/${totalBatches}: ${upsertError.message}`);
+        }
+
+        setExternalCalendarSyncProgress({
+          calendarId: calendar.id,
+          synced: Math.min(startIndex + batch.length, rows.length),
+          total: rows.length,
+        });
+      }
+
       await refreshExternalCalendarSettings();
+      return { synced: rows.length, total: parsedEvents.length };
     } finally {
       setSyncingExternalCalendarId(null);
+      setExternalCalendarSyncProgress(null);
     }
   }
 
@@ -6541,6 +6582,7 @@ export default function Home() {
           loading={externalCalendarSettingsLoading}
           error={externalCalendarSettingsError}
           syncingCalendarId={syncingExternalCalendarId}
+          syncProgress={externalCalendarSyncProgress}
           onClose={() => setExternalCalendarSettingsOpen(false)}
           onCreate={createExternalCalendar}
           onUpdate={updateExternalCalendar}
@@ -6554,10 +6596,11 @@ export default function Home() {
           }}
           onSync={async (calendar) => {
             try {
-              await syncExternalCalendar(calendar);
+              return await syncExternalCalendar(calendar);
             } catch (syncError) {
               console.error("External calendar sync failed", syncError);
               setExternalCalendarSettingsError(syncError instanceof Error ? syncError.message : "Impossible de synchroniser ce calendrier.");
+              throw syncError;
             }
           }}
         />
@@ -11332,6 +11375,7 @@ function ExternalCalendarsSheet({
   loading,
   error,
   syncingCalendarId,
+  syncProgress,
   onClose,
   onCreate,
   onUpdate,
@@ -11345,11 +11389,12 @@ function ExternalCalendarsSheet({
   loading: boolean;
   error: string | null;
   syncingCalendarId: string | null;
+  syncProgress: ExternalCalendarSyncProgress | null;
   onClose: () => void;
   onCreate: (input: { name: string; icsUrl: string; color: string; visibility: ExternalCalendarVisibility }) => Promise<void>;
   onUpdate: (calendar: ExternalCalendar, input: { name: string; icsUrl: string; color: string; visibility: ExternalCalendarVisibility }) => Promise<void>;
   onDelete: (calendar: ExternalCalendar) => Promise<void>;
-  onSync: (calendar: ExternalCalendar) => Promise<void>;
+  onSync: (calendar: ExternalCalendar) => Promise<ExternalCalendarSyncResult>;
 }) {
   const [view, setView] = useState<"list" | "add" | "detail">("list");
   const [selectedCalendarId, setSelectedCalendarId] = useState<string | null>(null);
@@ -11470,6 +11515,7 @@ function ExternalCalendarsSheet({
               permissions={permissions}
               profile={profile}
               syncing={syncingCalendarId === selectedCalendar.id}
+              syncProgress={syncProgress?.calendarId === selectedCalendar.id ? syncProgress : null}
               onUpdate={onUpdate}
               onDelete={async (calendar) => {
                 await onDelete(calendar);
@@ -11627,6 +11673,7 @@ function ExternalCalendarSettingsDetail({
   permissions,
   profile,
   syncing,
+  syncProgress,
   onUpdate,
   onDelete,
   onSync,
@@ -11636,9 +11683,10 @@ function ExternalCalendarSettingsDetail({
   permissions: AppPermissions;
   profile: UserProfile | null;
   syncing: boolean;
+  syncProgress: ExternalCalendarSyncProgress | null;
   onUpdate: (calendar: ExternalCalendar, input: { name: string; icsUrl: string; color: string; visibility: ExternalCalendarVisibility }) => Promise<void>;
   onDelete: (calendar: ExternalCalendar) => Promise<void>;
-  onSync: (calendar: ExternalCalendar) => Promise<void>;
+  onSync: (calendar: ExternalCalendar) => Promise<ExternalCalendarSyncResult>;
 }) {
   const [draft, setDraft] = useState<{ name: string; icsUrl: string; color: string; visibility: ExternalCalendarVisibility }>({
     name: calendar.name,
@@ -11649,6 +11697,7 @@ function ExternalCalendarSettingsDetail({
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [rowError, setRowError] = useState<string | null>(null);
+  const [syncSummary, setSyncSummary] = useState<string | null>(null);
   const canManage = canManageExternalCalendar(permissions, profile, calendar);
   const hasChanges =
     draft.name.trim() !== calendar.name ||
@@ -11667,6 +11716,7 @@ function ExternalCalendarSettingsDetail({
 
   async function handleSave() {
     setRowError(null);
+    setSyncSummary(null);
     setSaving(true);
     try {
       await onUpdate(calendar, draft);
@@ -11679,6 +11729,7 @@ function ExternalCalendarSettingsDetail({
 
   async function handleDelete() {
     setRowError(null);
+    setSyncSummary(null);
     setDeleting(true);
     try {
       await onDelete(calendar);
@@ -11690,12 +11741,14 @@ function ExternalCalendarSettingsDetail({
 
   async function handleSync() {
     setRowError(null);
+    setSyncSummary(null);
     setSaving(true);
     try {
       if (hasChanges) {
         await onUpdate(calendar, draft);
       }
-      await onSync({ ...calendar, ...draft });
+      const result = await onSync({ ...calendar, ...draft });
+      setSyncSummary(`${result.synced.toLocaleString("fr-FR")} événement${result.synced > 1 ? "s" : ""} synchronisé${result.synced > 1 ? "s" : ""}.`);
     } catch (syncError) {
       setRowError(syncError instanceof Error ? syncError.message : "Impossible de synchroniser ce calendrier.");
     } finally {
@@ -11746,6 +11799,12 @@ function ExternalCalendarSettingsDetail({
           </select>
         </div>
         {rowError && <p className="text-sm font-semibold text-rose-600">{rowError}</p>}
+        {syncProgress && (
+          <p className="text-sm font-semibold text-indigo-600">
+            Synchronisation... {syncProgress.synced.toLocaleString("fr-FR")} / {syncProgress.total.toLocaleString("fr-FR")}
+          </p>
+        )}
+        {syncSummary && !syncing && <p className="text-sm font-semibold text-emerald-600">{syncSummary}</p>}
         <div className="flex justify-end gap-2">
           {canManage && hasChanges && (
             <button
@@ -11763,7 +11822,11 @@ function ExternalCalendarSettingsDetail({
             disabled={!canManage || syncing || saving || !draft.icsUrl.trim()}
             className="rounded-full border border-indigo-200 bg-indigo-50 px-3 py-1.5 text-base font-semibold text-indigo-700 transition hover:bg-indigo-100 disabled:border-stone-200 disabled:bg-white disabled:text-stone-300"
           >
-            {syncing ? "Synchronisation..." : "Synchroniser"}
+            {syncProgress
+              ? `${syncProgress.synced.toLocaleString("fr-FR")} / ${syncProgress.total.toLocaleString("fr-FR")}`
+              : syncing
+                ? "Synchronisation..."
+                : "Synchroniser"}
           </button>
           {canManage && (
             <button
