@@ -11960,6 +11960,37 @@ function ExternalCalendarSettingsDetail({
   );
 }
 
+function getExternalEventDescriptionView(description?: string | null) {
+  if (!description?.trim()) {
+    return {
+      usefulLines: [] as string[],
+      joinUrls: [] as string[],
+      notesText: null as string | null,
+    };
+  }
+
+  const normalized = description.replace(/\r\n/g, "\n").replace(/\r/g, "\n").trim();
+  const lines = normalized
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+  const urlMatches = Array.from(new Set(normalized.match(/https?:\/\/[^\s<>"')]+/g) ?? []));
+  const technicalLinePattern =
+    /^([-_=]{5,}|Microsoft Teams$|Need help\?|Learn More|Meeting options|Legal|Privacy and security|For organizers:|Join with a video conferencing device|Video ID:)/i;
+  const usefulLinePattern =
+    /(rejoindre|join|teams|réunion|meeting|passcode|code secret|mot de passe|conference|conférence|numéro|number|ID de réunion|meeting id|https?:\/\/)/i;
+  const readableLines = lines.filter((line) => !technicalLinePattern.test(line));
+  const usefulLines = readableLines.filter((line) => usefulLinePattern.test(line)).slice(0, 8);
+  const fallbackLines = usefulLines.length > 0 ? usefulLines : readableLines.slice(0, 5);
+  const notesText = normalized.length > 520 || readableLines.length > fallbackLines.length + 2 ? normalized : null;
+
+  return {
+    usefulLines: fallbackLines,
+    joinUrls: urlMatches.slice(0, 4),
+    notesText,
+  };
+}
+
 function ExternalCalendarEventDetails({
   event,
   onClose,
@@ -11970,24 +12001,71 @@ function ExternalCalendarEventDetails({
   const tone = getExternalCalendarTone(event.calendarColor);
   const dateLabel = event.allDay ? formatFullDate(event.startTime.slice(0, 10)) : formatFullDate(formatDateKey(new Date(event.startTime)));
   const timeRange = formatExternalEventTimeRange(event);
+  const descriptionView = getExternalEventDescriptionView(event.description);
 
   return (
     <div className="fixed inset-0 z-50 flex items-end bg-stone-950/10 p-3 sm:items-center sm:justify-center sm:p-6">
-      <div className="w-full rounded-3xl border border-stone-200 bg-white p-4 sm:max-w-lg sm:p-5">
-        <div className="mb-4 flex items-start justify-between gap-3">
+      <div className="flex max-h-[calc(100dvh-1.5rem)] w-full flex-col overflow-hidden rounded-3xl border border-stone-200 bg-white p-4 sm:max-h-[min(760px,calc(100dvh-3rem))] sm:max-w-lg sm:p-5">
+        <div className="mb-4 flex shrink-0 items-start justify-between gap-3">
           <div className="min-w-0">
             <p className={cn("mb-1 text-sm font-semibold", tone.meta)}>{event.calendarName}</p>
-            <h2 className="text-base font-semibold text-stone-950">{event.title}</h2>
+            <h2 className="text-base font-semibold text-stone-950" style={{ overflowWrap: "anywhere" }}>
+              {event.title}
+            </h2>
           </div>
           <button type="button" onClick={onClose} className="rounded-full border border-stone-200 bg-white px-3 py-1.5 text-base font-semibold text-stone-600 transition hover:bg-stone-50">
             Fermer
           </button>
         </div>
-        <div style={tone.bgStyle} className={cn("grid gap-3 rounded-2xl px-4 py-3", tone.bg)}>
-          <p className={cn("text-base font-semibold", tone.title)}>{dateLabel}</p>
-          {timeRange && <p className={cn("text-base font-medium", tone.meta)}>{timeRange}</p>}
-          {event.location && <p className="text-base font-medium text-stone-600">{event.location}</p>}
-          {event.description && <p className="whitespace-pre-wrap text-base font-medium leading-relaxed text-stone-600">{event.description}</p>}
+        <div className="min-h-0 overflow-y-auto overscroll-contain">
+          <div style={tone.bgStyle} className={cn("grid min-w-0 gap-3 rounded-2xl px-4 py-3", tone.bg)}>
+            <p className={cn("text-base font-semibold", tone.title)} style={{ overflowWrap: "anywhere" }}>
+              {dateLabel}
+            </p>
+            {timeRange && (
+              <p className={cn("text-base font-medium", tone.meta)} style={{ overflowWrap: "anywhere" }}>
+                {timeRange}
+              </p>
+            )}
+            {event.location && (
+              <p className="text-base font-medium text-stone-600" style={{ overflowWrap: "anywhere", wordBreak: "break-word" }}>
+                {event.location}
+              </p>
+            )}
+            {descriptionView.usefulLines.length > 0 && (
+              <div className="grid gap-2">
+                {descriptionView.usefulLines.map((line, index) => (
+                  <p key={`${line}-${index}`} className="whitespace-pre-wrap text-base font-medium leading-relaxed text-stone-600" style={{ overflowWrap: "anywhere", wordBreak: "break-word" }}>
+                    {line}
+                  </p>
+                ))}
+              </div>
+            )}
+            {descriptionView.joinUrls.length > 0 && (
+              <div className="grid gap-1">
+                {descriptionView.joinUrls.map((url) => (
+                  <a
+                    key={url}
+                    href={url}
+                    target="_blank"
+                    rel="noreferrer"
+                    className={cn("text-base font-semibold underline decoration-current/30 underline-offset-4", tone.title)}
+                    style={{ overflowWrap: "anywhere", wordBreak: "break-word" }}
+                  >
+                    {url}
+                  </a>
+                ))}
+              </div>
+            )}
+            {descriptionView.notesText && (
+              <div className="min-w-0 rounded-2xl bg-white/70 px-3 py-2">
+                <p className="mb-1 text-xs font-semibold uppercase tracking-normal text-stone-400">Notes</p>
+                <div className="max-h-56 overflow-y-auto overscroll-contain whitespace-pre-wrap text-sm font-medium leading-relaxed text-stone-600" style={{ overflowWrap: "anywhere", wordBreak: "break-word" }}>
+                  {descriptionView.notesText}
+                </div>
+              </div>
+            )}
+          </div>
         </div>
       </div>
     </div>
