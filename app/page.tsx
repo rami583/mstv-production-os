@@ -224,6 +224,13 @@ type EventActivityLog = {
   createdAt: string;
 };
 
+type EventDateSwipeTransition = {
+  currentOffset: number;
+  incomingOffset: number;
+  incomingDateLabel: string | null;
+  dragging: boolean;
+};
+
 type AppNotification = {
   id: string;
   userId: string;
@@ -2721,6 +2728,12 @@ export default function Home() {
   const [notifications, setNotifications] = useState<AppNotification[]>([]);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [notificationsHydrated, setNotificationsHydrated] = useState(false);
+  const [eventDateSwipeTransition, setEventDateSwipeTransition] = useState<EventDateSwipeTransition>({
+    currentOffset: 0,
+    incomingOffset: 0,
+    incomingDateLabel: null,
+    dragging: false,
+  });
   const [online, setOnline] = useState(() => typeof navigator === "undefined" ? true : navigator.onLine);
   const [pendingSyncCount, setPendingSyncCount] = useState(0);
   const [syncingPendingActions, setSyncingPendingActions] = useState(false);
@@ -3089,6 +3102,16 @@ export default function Home() {
     if (!authSession || !profile || !online) return;
     void refreshNotifications({ silent: true });
   }, [authSession?.user.id, profile?.id, online]);
+
+  useEffect(() => {
+    if (screen === "detail") return;
+    setEventDateSwipeTransition({
+      currentOffset: 0,
+      incomingOffset: 0,
+      incomingDateLabel: null,
+      dragging: false,
+    });
+  }, [screen]);
 
   useEffect(() => {
     if (!authSession || !profile || loading || !notificationsHydrated) return;
@@ -7051,6 +7074,7 @@ export default function Home() {
           setScreen={setScreen}
           yearLabel={yearLabel}
           detailDateLabel={screen === "detail" && selectedEvent ? formatFullDate(selectedEvent.date) : null}
+          detailDateTransition={screen === "detail" ? eventDateSwipeTransition : undefined}
           onEditDetailDate={screen === "detail" && selectedEvent && headerPermissions.canManageEvents ? () => setDateEditorOpen(true) : undefined}
           goToday={goToday}
           isSelectedDateToday={isSelectedDateToday}
@@ -7177,6 +7201,7 @@ export default function Home() {
               onDownloadDocument={downloadEventDocument}
               onTimelineTimeEditStart={startTimelineTimeEditing}
               onTimelineTimeEditEnd={endTimelineTimeEditing}
+              onEventDateSwipeTransitionChange={setEventDateSwipeTransition}
               permissions={permissions}
               profile={profile}
             />
@@ -7469,6 +7494,7 @@ function AppHeader({
   setScreen,
   yearLabel,
   detailDateLabel,
+  detailDateTransition,
   onEditDetailDate,
   goToday,
   isSelectedDateToday,
@@ -7512,6 +7538,7 @@ function AppHeader({
   setScreen: (screen: Screen) => void;
   yearLabel: string;
   detailDateLabel: string | null;
+  detailDateTransition?: EventDateSwipeTransition;
   onEditDetailDate?: () => void;
   goToday: () => void;
   isSelectedDateToday: boolean;
@@ -7643,13 +7670,11 @@ function AppHeader({
             </button>
           )}
           {screen === "detail" && detailDateLabel && (
-            <button
-              type="button"
-              onClick={onEditDetailDate}
-              className="max-w-full truncate rounded-full border border-stone-200 bg-white px-2.5 py-1.5 text-base font-semibold text-stone-700 transition hover:bg-stone-50 sm:px-3"
-            >
-              {detailDateLabel}
-            </button>
+            <DetailDateControl
+              label={detailDateLabel}
+              transition={detailDateTransition}
+              onEdit={onEditDetailDate}
+            />
           )}
         </div>
         <div className="flex shrink-0 items-center justify-end gap-1.5 sm:gap-2">
@@ -7676,6 +7701,51 @@ function AppHeader({
         </div>
       </div>
     </header>
+  );
+}
+
+function DetailDateControl({
+  label,
+  transition,
+  onEdit,
+}: {
+  label: string;
+  transition?: EventDateSwipeTransition;
+  onEdit?: () => void;
+}) {
+  const buttonClassName =
+    "max-w-full truncate rounded-full border border-stone-200 bg-white px-2.5 py-1.5 text-base font-semibold text-stone-700 transition-colors hover:bg-stone-50 sm:px-3";
+  const transformTransition = transition?.dragging ? undefined : `transform ${PAGE_TRANSITION_MS}ms ${PAGE_TRANSITION_EASING}`;
+  const currentOffset = transition?.currentOffset ?? 0;
+  const incomingOffset = transition?.incomingOffset ?? 0;
+  const incomingDateLabel = transition?.incomingDateLabel ?? null;
+
+  return (
+    <span className="relative inline-flex max-w-full overflow-visible">
+      <button
+        type="button"
+        onClick={onEdit}
+        className={buttonClassName}
+        style={{
+          transform: `translate3d(${currentOffset}px, 0, 0)`,
+          transition: transformTransition,
+        }}
+      >
+        {label}
+      </button>
+      {incomingDateLabel && (
+        <span
+          aria-hidden="true"
+          className={cn(buttonClassName, "pointer-events-none absolute left-0 top-0")}
+          style={{
+            transform: `translate3d(${incomingOffset}px, 0, 0)`,
+            transition: transformTransition,
+          }}
+        >
+          {incomingDateLabel}
+        </span>
+      )}
+    </span>
   );
 }
 
@@ -8158,6 +8228,7 @@ function YearOverviewOverlay({
           setScreen={() => undefined}
           yearLabel={String(displayYear)}
           detailDateLabel={null}
+          detailDateTransition={undefined}
           onEditDetailDate={undefined}
           goToday={onGoToday}
           isSelectedDateToday={isSelectedDateToday}
@@ -9243,6 +9314,7 @@ function ProductionDetail({
   onDownloadDocument,
   onTimelineTimeEditStart,
   onTimelineTimeEditEnd,
+  onEventDateSwipeTransitionChange,
   permissions,
   profile,
 }: {
@@ -9275,6 +9347,7 @@ function ProductionDetail({
   onDownloadDocument: (document: EventDocument) => Promise<void>;
   onTimelineTimeEditStart: (saveTime: () => Promise<void>) => void;
   onTimelineTimeEditEnd: () => void;
+  onEventDateSwipeTransitionChange: (transition: EventDateSwipeTransition) => void;
   permissions: AppPermissions;
   profile: UserProfile | null;
 }) {
@@ -9300,6 +9373,21 @@ function ProductionDetail({
   const [eventSwipeIncomingEvent, setEventSwipeIncomingEvent] = useState<ProductionEvent | null>(null);
   const [isEventSwipeDragging, setIsEventSwipeDragging] = useState(false);
   const [eventSwipeAnimating, setEventSwipeAnimating] = useState(false);
+
+  useEffect(() => {
+    onEventDateSwipeTransitionChange({
+      currentOffset: eventSwipeOffset,
+      incomingOffset: eventSwipeIncomingOffset,
+      incomingDateLabel: eventSwipeIncomingEvent ? formatFullDate(eventSwipeIncomingEvent.date) : null,
+      dragging: isEventSwipeDragging,
+    });
+  }, [
+    eventSwipeIncomingEvent,
+    eventSwipeIncomingOffset,
+    eventSwipeOffset,
+    isEventSwipeDragging,
+    onEventDateSwipeTransitionChange,
+  ]);
 
   const contextSelectionKey =
     contextSelection?.type === "option"
