@@ -8,6 +8,8 @@
     "build:mobile": "CAPACITOR_EXPORT=1 next build",
     "cap:sync": "npm run build:mobile && npx cap sync ios",
     "cap:open:ios": "npx cap open ios",
+    "tauri:dev": "tauri dev",
+    "tauri:build": "tauri build",
     "start": "next start",
     "test:quote-fixtures": "node scripts/test-quote-fixtures.mjs",
     "lint": "next lint"
@@ -29,6 +31,7 @@
     "react-dom": "^19.2.0"
   },
   "devDependencies": {
+    "@tauri-apps/cli": "^2.11.2",
     "@types/node": "25.7.0",
     "@types/react": "19.2.14",
     "autoprefixer": "^10.4.20",

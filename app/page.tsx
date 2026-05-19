@@ -2077,13 +2077,24 @@ function isCapacitorRuntime() {
   return window.location.protocol === "capacitor:" || Boolean(maybeCapacitor?.isNativePlatform?.());
 }
 
+function isTauriRuntime() {
+  if (typeof window === "undefined") return false;
+  const tauriWindow = window as Window & { __TAURI__?: unknown; __TAURI_INTERNALS__?: unknown };
+  return (
+    window.location.protocol === "tauri:" ||
+    window.location.hostname === "tauri.localhost" ||
+    Boolean(tauriWindow.__TAURI__ || tauriWindow.__TAURI_INTERNALS__)
+  );
+}
+
 function getAppApiUrl(path: string, unavailableMessage = "Service momentanément indisponible.") {
   if (typeof window === "undefined") return path;
   const configuredUrl = process.env.NEXT_PUBLIC_SITE_URL?.trim();
-  if (isCapacitorRuntime() && configuredUrl) {
+  const needsDeployedApiOrigin = isCapacitorRuntime() || isTauriRuntime();
+  if (needsDeployedApiOrigin && configuredUrl) {
     return new URL(path, configuredUrl.endsWith("/") ? configuredUrl : `${configuredUrl}/`).toString();
   }
-  if (isCapacitorRuntime()) {
+  if (needsDeployedApiOrigin) {
     throw new Error(unavailableMessage);
   }
   return path;
