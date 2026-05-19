@@ -7576,97 +7576,104 @@ function AppHeader({
   }, [createMenuOpen, hasCreateMenuActions, setCreateMenuOpen]);
 
   return (
-    <header className="relative mb-5 flex items-center justify-between gap-2 px-1 py-1">
-      <div className="flex min-w-0 items-center gap-2 sm:gap-3">
-        <button className="flex items-center gap-3 text-left" onClick={onLogoClick ?? (() => setScreen("calendar"))} aria-label="Accueil calendrier">
-          <img src="/brand/mon-studio-tv-icon.png" alt="Mon Studio TV" className="h-11 w-auto" />
+    <header className="relative mb-5 flex flex-col gap-2 px-1 py-1">
+      <div className="flex items-center justify-between gap-3">
+        <button className="flex shrink-0 items-center text-left" onClick={onLogoClick ?? (() => setScreen("calendar"))} aria-label="Accueil calendrier">
+          <img src="/brand/mon-studio-tv-icon.png" alt="Mon Studio TV" className="h-11 w-auto shrink-0" />
         </button>
-        {screen === "calendar" && (
-          <button
-            type="button"
-            onClick={onOpenYearOverview}
-            className="rounded-full border border-stone-200 bg-white px-2.5 py-1.5 text-base font-semibold text-stone-700 transition hover:bg-stone-50 sm:px-3"
-          >
-            {yearLabel}
-          </button>
-        )}
-        {screen === "detail" && detailDateLabel && (
-          <button
-            type="button"
-            onClick={onEditDetailDate}
-            className="rounded-full border border-stone-200 bg-white px-2.5 py-1.5 text-base font-semibold text-stone-700 transition hover:bg-stone-50 sm:px-3"
-          >
-            {detailDateLabel}
-          </button>
-        )}
+        <div className="flex shrink-0 items-center gap-1.5 sm:gap-2">
+          <HeaderIcon label="Rechercher" icon={Search} onClick={onSearch} />
+          <NotificationMenu
+            notifications={notifications}
+            unreadCount={unreadNotificationCount}
+            open={notificationsOpen}
+            setOpen={setNotificationsOpen}
+            onOpenNotification={onOpenNotification}
+            onMarkAllRead={onMarkAllNotificationsRead}
+          />
+          {hasCreateMenuActions && (
+            <div ref={menuWrapperRef} className="relative">
+              <button
+                onClick={() => setCreateMenuOpen((current) => !current)}
+                className="flex h-10 w-10 items-center justify-center rounded-full bg-[#bb2720] text-base font-semibold leading-none text-white transition hover:bg-[#a7211b]"
+                aria-label="Créer"
+              >
+                +
+              </button>
+              {createMenuOpen && (
+                <CreateMenu
+                  onImportQuote={onImportQuote}
+                  onImportNativeMstvCalendar={onImportNativeMstvCalendar}
+                  onCreateEvent={onCreateEvent}
+                  onOpenTrash={onOpenTrash}
+                  canImportQuote={canImportQuote}
+                  canImportNativeMstvCalendar={canImportNativeMstvCalendar}
+                  canCreateEvent={canCreateEvent}
+                  canOpenTrash={canOpenTrash}
+                  canDuplicateEvent={canDuplicateEvent}
+                  onDuplicateEvent={onDuplicateEvent}
+                  canDeleteEvent={canDeleteEvent}
+                  onDeleteEvent={onDeleteEvent}
+                />
+              )}
+            </div>
+          )}
+          <AccountMenu
+            profile={profile}
+            email={email}
+            canManageUsers={canManageUsers}
+            onOpenUserManagement={onOpenUserManagement}
+            canManageExternalCalendars={canManageExternalCalendars}
+            onOpenExternalCalendars={onOpenExternalCalendars}
+            onLogout={onLogout}
+          />
+        </div>
       </div>
-      <div className="flex shrink-0 items-center gap-1.5 sm:gap-2">
-        {screen === "calendar" && (
-          <button
-            onClick={goToday}
-            className={cn(
-              "rounded-full border px-2.5 py-2 text-base font-semibold transition sm:px-3",
-              isSelectedDateToday
-                ? "border-[#bb2720]/20 bg-[#bb2720]/[0.08] text-[#bb2720] hover:bg-[#bb2720]/[0.1]"
-                : "border-stone-200 bg-white text-stone-700 hover:bg-stone-50",
-            )}
-            aria-pressed={isSelectedDateToday}
-          >
-            Aujourd'hui
-          </button>
-        )}
-        {canOpenHistory && <HeaderIcon label="Historique" icon={History} onClick={onOpenHistory} />}
-        <HeaderIcon label="Rechercher" icon={Search} onClick={onSearch} />
-        <NotificationMenu
-          notifications={notifications}
-          unreadCount={unreadNotificationCount}
-          open={notificationsOpen}
-          setOpen={setNotificationsOpen}
-          onOpenNotification={onOpenNotification}
-          onMarkAllRead={onMarkAllNotificationsRead}
-        />
-        {hasCreateMenuActions && (
-          <div ref={menuWrapperRef} className="relative">
+
+      <div className="flex min-h-10 items-center justify-between gap-2">
+        <div className="flex min-w-0 items-center gap-2">
+          {screen === "calendar" && (
             <button
-              onClick={() => setCreateMenuOpen((current) => !current)}
-              className="flex h-10 w-10 items-center justify-center rounded-full bg-[#bb2720] text-base font-semibold leading-none text-white transition hover:bg-[#a7211b]"
-              aria-label="Créer"
+              type="button"
+              onClick={onOpenYearOverview}
+              className="rounded-full border border-stone-200 bg-white px-2.5 py-1.5 text-base font-semibold text-stone-700 transition hover:bg-stone-50 sm:px-3"
             >
-              +
+              {yearLabel}
             </button>
-            {createMenuOpen && (
-              <CreateMenu
-                onImportQuote={onImportQuote}
-                onImportNativeMstvCalendar={onImportNativeMstvCalendar}
-                onCreateEvent={onCreateEvent}
-                onOpenTrash={onOpenTrash}
-                canImportQuote={canImportQuote}
-                canImportNativeMstvCalendar={canImportNativeMstvCalendar}
-                canCreateEvent={canCreateEvent}
-                canOpenTrash={canOpenTrash}
-                canDuplicateEvent={canDuplicateEvent}
-                onDuplicateEvent={onDuplicateEvent}
-                canDeleteEvent={canDeleteEvent}
-                onDeleteEvent={onDeleteEvent}
-              />
-            )}
-          </div>
-        )}
-        <SyncStatusIndicator
-          online={online}
-          pendingCount={pendingSyncCount}
-          syncing={syncingPendingActions}
-          error={pendingSyncError}
-        />
-        <AccountMenu
-          profile={profile}
-          email={email}
-          canManageUsers={canManageUsers}
-          onOpenUserManagement={onOpenUserManagement}
-          canManageExternalCalendars={canManageExternalCalendars}
-          onOpenExternalCalendars={onOpenExternalCalendars}
-          onLogout={onLogout}
-        />
+          )}
+          {screen === "detail" && detailDateLabel && (
+            <button
+              type="button"
+              onClick={onEditDetailDate}
+              className="max-w-full truncate rounded-full border border-stone-200 bg-white px-2.5 py-1.5 text-base font-semibold text-stone-700 transition hover:bg-stone-50 sm:px-3"
+            >
+              {detailDateLabel}
+            </button>
+          )}
+        </div>
+        <div className="flex shrink-0 items-center justify-end gap-1.5 sm:gap-2">
+          <SyncStatusIndicator
+            online={online}
+            pendingCount={pendingSyncCount}
+            syncing={syncingPendingActions}
+            error={pendingSyncError}
+          />
+          {screen === "calendar" && (
+            <button
+              onClick={goToday}
+              className={cn(
+                "rounded-full border px-2.5 py-2 text-base font-semibold transition sm:px-3",
+                isSelectedDateToday
+                  ? "border-[#bb2720]/20 bg-[#bb2720]/[0.08] text-[#bb2720] hover:bg-[#bb2720]/[0.1]"
+                  : "border-stone-200 bg-white text-stone-700 hover:bg-stone-50",
+              )}
+              aria-pressed={isSelectedDateToday}
+            >
+              Aujourd'hui
+            </button>
+          )}
+          {canOpenHistory && <HeaderIcon label="Historique" icon={History} onClick={onOpenHistory} />}
+        </div>
       </div>
     </header>
   );
