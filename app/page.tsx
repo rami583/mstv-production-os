@@ -12281,8 +12281,18 @@ function ExternalCalendarEventDetails({
   const descriptionView = getExternalEventDescriptionView(event.description);
 
   return (
-    <div className="fixed inset-0 z-50 flex items-end bg-stone-950/10 p-3 sm:items-center sm:justify-center sm:p-6">
-      <div className="flex max-h-[calc(100dvh-1.5rem)] w-full flex-col overflow-hidden rounded-3xl border border-stone-200 bg-white p-4 sm:max-h-[min(760px,calc(100dvh-3rem))] sm:max-w-lg sm:p-5">
+    <div
+      className="fixed inset-0 z-50 flex items-end bg-stone-950/10 p-3 sm:items-center sm:justify-center sm:p-6"
+      onPointerDown={(pointerEvent) => {
+        if (pointerEvent.target === pointerEvent.currentTarget) {
+          onClose();
+        }
+      }}
+    >
+      <div
+        className="flex max-h-[calc(100dvh-1.5rem)] w-full flex-col overflow-hidden rounded-3xl border border-stone-200 bg-white p-4 sm:max-h-[min(760px,calc(100dvh-3rem))] sm:max-w-lg sm:p-5"
+        onPointerDown={(pointerEvent) => pointerEvent.stopPropagation()}
+      >
         <div className="mb-4 flex shrink-0 items-start justify-between gap-3">
           <div className="min-w-0">
             <p className={cn("mb-1 text-sm font-semibold", tone.meta)}>{event.calendarName}</p>
