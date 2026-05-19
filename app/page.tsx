@@ -8450,15 +8450,18 @@ function YearOverviewMiniMonth({
       data-year={year}
       data-month-index={monthIndex}
       onClick={onSelect}
-      className={cn(
-        "flex min-h-0 min-w-0 flex-col overflow-hidden rounded-[1.1rem] px-1.5 pb-1 pt-1.5 text-left transition hover:bg-white/70 sm:rounded-[1rem] sm:px-1.5 sm:pb-1 sm:pt-1.5 lg:px-2 lg:pb-1.5 lg:pt-2",
-        isVisibleMonth && "-translate-y-0.5 bg-white/90 pb-0.5 pt-1 ring-1 ring-[#bb2720]/20 sm:pb-0.5 sm:pt-1 lg:pb-1 lg:pt-1.5",
-      )}
+      className="flex min-h-0 min-w-0 flex-col overflow-visible text-left"
     >
+      <span
+        className={cn(
+          "flex w-full min-w-0 -translate-y-0.5 flex-col overflow-hidden rounded-[1.1rem] px-1.5 pb-1 pt-1.5 transition hover:bg-white/70 sm:rounded-[1rem] sm:px-1.5 sm:pb-1 sm:pt-1.5 lg:px-2 lg:pb-1.5 lg:pt-2",
+          isVisibleMonth && "-translate-y-1 bg-white/90 pb-0.5 pt-1 ring-1 ring-[#bb2720]/20 sm:pb-0.5 sm:pt-1 lg:pb-1 lg:pt-1.5",
+        )}
+      >
       <span className={cn("mb-1 block truncate text-xs font-semibold leading-none sm:mb-1 sm:text-sm", isVisibleMonth ? "text-[#bb2720]" : "text-stone-950")}>
         {monthName}
       </span>
-      <span className="grid min-h-0 flex-1 grid-cols-7 content-start gap-y-0.5 sm:content-stretch sm:gap-y-0">
+      <span className="grid min-h-0 grid-cols-7 content-start gap-y-0.5 sm:gap-y-0">
         {weekdays.map((weekday, index) => (
           <span key={`${weekday}-${index}`} className="text-center text-[0.48rem] font-semibold leading-none text-stone-300 sm:text-[0.5rem] lg:text-[0.55rem]">
             {weekday}
@@ -8487,6 +8490,7 @@ function YearOverviewMiniMonth({
         {Array.from({ length: monthData.trailingEmptyDays }).map((_, index) => (
           <span key={`empty-end-${index}`} className="aspect-square sm:h-3.5 sm:aspect-auto lg:h-4" />
         ))}
+      </span>
       </span>
     </button>
   );
