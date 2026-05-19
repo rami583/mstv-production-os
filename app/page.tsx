@@ -2100,6 +2100,29 @@ function getAppApiUrl(path: string, unavailableMessage = "Service momentanément
   return path;
 }
 
+function isPdfFile(file: File | null | undefined) {
+  return Boolean(file && (file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf")));
+}
+
+function hasFileDragItem(dataTransfer: DataTransfer) {
+  return Array.from(dataTransfer.items).some((item) => item.kind === "file");
+}
+
+function hasPotentialPdfDragItem(dataTransfer: DataTransfer) {
+  return Array.from(dataTransfer.items).some((item) => {
+    if (item.kind !== "file") return false;
+    return !item.type || item.type === "application/pdf" || item.type === "application/x-pdf";
+  });
+}
+
+function getFirstFileFromTransfer(dataTransfer: DataTransfer) {
+  return Array.from(dataTransfer.files).find(Boolean) ?? null;
+}
+
+function getPdfFileFromTransfer(dataTransfer: DataTransfer) {
+  return Array.from(dataTransfer.files).find(isPdfFile) ?? null;
+}
+
 function getCompletedByNameForDisplay(option: EventOption) {
   const label = option.completedByLabel?.trim();
   if (label) return label;
@@ -3925,21 +3948,6 @@ export default function Home() {
     console.log("Timeline keyboard accessory: OK tapped");
     await timelineTimeSaveRef.current?.();
   }, []);
-
-  function isPdfFile(file: File | null | undefined) {
-    return Boolean(file && (file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf")));
-  }
-
-  function getPdfFileFromTransfer(dataTransfer: DataTransfer) {
-    return Array.from(dataTransfer.files).find(isPdfFile) ?? null;
-  }
-
-  function hasPdfDragItem(dataTransfer: DataTransfer) {
-    return Array.from(dataTransfer.items).some((item) => {
-      if (item.kind !== "file") return false;
-      return item.type === "application/pdf";
-    });
-  }
 
   function openQuoteImport(file: File | null = null) {
     setQuoteImportFile(file);
@@ -6540,16 +6548,17 @@ export default function Home() {
       <div
         onDragEnter={(event) => {
           if (!permissions.canManageEvents) return;
-          if (!hasPdfDragItem(event.dataTransfer)) return;
+          if (!hasFileDragItem(event.dataTransfer)) return;
           event.preventDefault();
-          setGlobalQuoteDragActive(true);
+          setGlobalQuoteDragActive(hasPotentialPdfDragItem(event.dataTransfer));
         }}
         onDragOver={(event) => {
           if (!permissions.canManageEvents) return;
-          if (!hasPdfDragItem(event.dataTransfer)) return;
+          if (!hasFileDragItem(event.dataTransfer)) return;
           event.preventDefault();
-          event.dataTransfer.dropEffect = "copy";
-          setGlobalQuoteDragActive(true);
+          const canDropPdf = hasPotentialPdfDragItem(event.dataTransfer);
+          event.dataTransfer.dropEffect = canDropPdf ? "copy" : "none";
+          setGlobalQuoteDragActive(canDropPdf);
         }}
         onDragLeave={(event) => {
           if (event.currentTarget.contains(event.relatedTarget as Node | null)) return;
@@ -6557,12 +6566,19 @@ export default function Home() {
         }}
         onDrop={(event) => {
           if (!permissions.canManageEvents) return;
+          if (!hasFileDragItem(event.dataTransfer)) return;
+          event.preventDefault();
           const pdfFile = getPdfFileFromTransfer(event.dataTransfer);
           if (!pdfFile) {
             setGlobalQuoteDragActive(false);
+            const firstFile = getFirstFileFromTransfer(event.dataTransfer);
+            if (firstFile) {
+              openQuoteImport(firstFile);
+            } else {
+              setError("Déposez un fichier PDF.");
+            }
             return;
           }
-          event.preventDefault();
           setGlobalQuoteDragActive(false);
           openQuoteImport(pdfFile);
         }}
@@ -11106,6 +11122,7 @@ function QuoteImportModal({
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [datePickerOpen, setDatePickerOpen] = useState(false);
+  const [dropActive, setDropActive] = useState(false);
   const initialFileProcessedRef = useRef<File | null>(null);
 
   function updateField<Key extends keyof CreateEventInput>(key: Key, value: CreateEventInput[Key]) {
@@ -11114,7 +11131,7 @@ function QuoteImportModal({
 
   async function handleFile(file: File | null) {
     if (!file) return;
-    if (file.type !== "application/pdf" && !file.name.toLowerCase().endsWith(".pdf")) {
+    if (!isPdfFile(file)) {
       setError("Importez un fichier PDF.");
       return;
     }
@@ -11255,14 +11272,34 @@ function QuoteImportModal({
 
         {step === "upload" ? (
           <label
-            onDragOver={(event) => event.preventDefault()}
-            onDrop={(event) => {
+            onDragEnter={(event) => {
+              if (!hasFileDragItem(event.dataTransfer)) return;
               event.preventDefault();
-              void handleFile(event.dataTransfer.files.item(0));
+              setDropActive(hasPotentialPdfDragItem(event.dataTransfer));
             }}
-            className="flex min-h-44 cursor-pointer flex-col items-center justify-center rounded-3xl border border-dashed border-stone-300 bg-stone-50 px-4 py-8 text-center transition hover:bg-stone-100/70"
+            onDragOver={(event) => {
+              if (!hasFileDragItem(event.dataTransfer)) return;
+              event.preventDefault();
+              const canDropPdf = hasPotentialPdfDragItem(event.dataTransfer);
+              event.dataTransfer.dropEffect = canDropPdf ? "copy" : "none";
+              setDropActive(canDropPdf);
+            }}
+            onDragLeave={(event) => {
+              if (event.currentTarget.contains(event.relatedTarget as Node | null)) return;
+              setDropActive(false);
+            }}
+            onDrop={(event) => {
+              if (!hasFileDragItem(event.dataTransfer)) return;
+              event.preventDefault();
+              setDropActive(false);
+              void handleFile(getPdfFileFromTransfer(event.dataTransfer) ?? getFirstFileFromTransfer(event.dataTransfer));
+            }}
+            className={cn(
+              "flex min-h-44 cursor-pointer flex-col items-center justify-center rounded-3xl border border-dashed px-4 py-8 text-center transition",
+              dropActive ? "border-[#bb2720]/50 bg-[#bb2720]/[0.06]" : "border-stone-300 bg-stone-50 hover:bg-stone-100/70",
+            )}
           >
-            <FileText className="mb-3 h-7 w-7 text-stone-500" />
+            <FileText className={cn("mb-3 h-7 w-7", dropActive ? "text-[#bb2720]" : "text-stone-500")} />
             <span className="text-base font-semibold text-stone-800">{extracting ? "Lecture du PDF..." : "Déposez un PDF ici"}</span>
             <span className="mt-1 text-base font-medium text-stone-500">ou cliquez pour sélectionner un fichier</span>
             <input
