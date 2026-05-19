@@ -2100,6 +2100,19 @@ function getAppApiUrl(path: string, unavailableMessage = "Service momentanément
   return path;
 }
 
+async function getCurrentSupabaseAccessToken(fallbackToken?: string | null) {
+  if (!supabase) return fallbackToken ?? "";
+
+  try {
+    const { data, error } = await supabase.auth.getSession();
+    if (error) throw error;
+    return data.session?.access_token ?? fallbackToken ?? "";
+  } catch (sessionError) {
+    console.warn("Unable to refresh Supabase session before API call.", getDebugError(sessionError));
+    return fallbackToken ?? "";
+  }
+}
+
 function isPdfFile(file: File | null | undefined) {
   return Boolean(file && (file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf")));
 }
@@ -3346,12 +3359,14 @@ export default function Home() {
 
   async function syncExternalCalendar(calendar: ExternalCalendar): Promise<ExternalCalendarSyncResult> {
     if (!supabase) throw new Error("Configuration Supabase manquante.");
-    if (!authSession?.access_token) throw new Error("Session utilisateur introuvable.");
     if (!canManageExternalCalendar(permissions, profile, calendar)) {
       throw new Error("Vous ne pouvez synchroniser que vos calendriers.");
     }
     if (!calendar.icsUrl.trim()) {
       throw new Error("Ajoutez une URL ICS avant de synchroniser.");
+    }
+    if (!online) {
+      throw new Error("La synchronisation du calendrier nécessite une connexion.");
     }
 
     setSyncingExternalCalendarId(calendar.id);
@@ -3359,11 +3374,16 @@ export default function Home() {
     setExternalCalendarSettingsError(null);
 
     try {
+      const accessToken = await getCurrentSupabaseAccessToken(authSession?.access_token);
+      if (!accessToken) {
+        throw new Error("Votre session a expiré. Reconnectez-vous.");
+      }
+
       const response = await fetch(getAppApiUrl("/api/external-calendars/fetch-ics", "Synchronisation du calendrier momentanément indisponible."), {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          Authorization: `Bearer ${authSession.access_token}`,
+          Authorization: `Bearer ${accessToken}`,
         },
         body: JSON.stringify({ calendarId: calendar.id }),
       });
@@ -6803,6 +6823,7 @@ export default function Home() {
       {quoteImportOpen && (
         <QuoteImportModal
           accessToken={authSession?.access_token ?? null}
+          online={online}
           initialFile={quoteImportFile}
           selectedDateKey={selectedDateKey}
           events={events}
@@ -11088,6 +11109,7 @@ function NativeMstvIcsImportModal({
 
 function QuoteImportModal({
   accessToken,
+  online,
   initialFile,
   selectedDateKey,
   events,
@@ -11096,6 +11118,7 @@ function QuoteImportModal({
   onUpdateEvent,
 }: {
   accessToken: string | null;
+  online: boolean;
   initialFile?: File | null;
   selectedDateKey: string;
   events: ProductionEvent[];
@@ -11135,8 +11158,8 @@ function QuoteImportModal({
       setError("Importez un fichier PDF.");
       return;
     }
-    if (!accessToken) {
-      setError("Session invalide. Reconnectez-vous pour importer un devis.");
+    if (!online || (typeof navigator !== "undefined" && !navigator.onLine)) {
+      setError("L’import PDF nécessite une connexion.");
       return;
     }
 
@@ -11148,11 +11171,15 @@ function QuoteImportModal({
       const formData = new FormData();
       formData.append("file", file);
       formData.append("fallbackDate", selectedDateKey);
+      const currentAccessToken = await getCurrentSupabaseAccessToken(accessToken);
+      if (!currentAccessToken) {
+        throw new Error("Votre session a expiré. Reconnectez-vous.");
+      }
 
       const response = await fetch(getAppApiUrl("/api/quotes/extract-pdf", "Import PDF momentanément indisponible."), {
         method: "POST",
         headers: {
-          Authorization: `Bearer ${accessToken}`,
+          Authorization: `Bearer ${currentAccessToken}`,
         },
         body: formData,
       });

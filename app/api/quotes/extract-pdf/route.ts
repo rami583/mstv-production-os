@@ -628,13 +628,13 @@ export async function POST(request: Request) {
   try {
     const accessToken = getBearerToken(request);
     if (!accessToken) {
-      return jsonResponse({ error: "Non authentifié." }, { status: 401 });
+      return jsonResponse({ error: "Votre session a expiré. Reconnectez-vous." }, { status: 401 });
     }
 
     const supabase = getSupabaseClient(accessToken);
     const { data: userData, error: userError } = await supabase.auth.getUser(accessToken);
     if (userError || !userData.user) {
-      return jsonResponse({ error: "Session invalide." }, { status: 401 });
+      return jsonResponse({ error: "Votre session a expiré. Reconnectez-vous." }, { status: 401 });
     }
 
     const formData = await request.formData();
@@ -661,7 +661,7 @@ export async function POST(request: Request) {
     console.error("Quote PDF extraction API error", getDebugError(error));
     const message = error instanceof Error ? error.message : "";
     const publicMessage =
-      message && /^Le fichier|^Le PDF|^PDF manquant|^Importez un fichier PDF|^Session invalide/i.test(message)
+      message && /^Le fichier|^Le PDF|^PDF manquant|^Importez un fichier PDF|^Votre session/i.test(message)
         ? message
         : "Le fichier PDF n’a pas pu être lu.";
     return jsonResponse(
