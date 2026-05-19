@@ -8801,7 +8801,11 @@ function ProductionDetail({
 
     if (!contextSelectionKey || contextSelectionKey === previousSelectionKey) return;
 
-    window.requestAnimationFrame(() => {
+    let firstFrame = 0;
+    let secondFrame = 0;
+    const settleTimers: number[] = [];
+
+    function scrollDetailIntoView(behavior: ScrollBehavior) {
       const scrollContainer = detailScrollContainerRef.current;
       const detailBlock = detailBlockRef.current;
       if (!scrollContainer || !detailBlock) return;
@@ -8818,11 +8822,27 @@ function ProductionDetail({
         return;
       }
 
+      const maxScrollTop = Math.max(0, scrollContainer.scrollHeight - scrollContainer.clientHeight);
       scrollContainer.scrollTo({
-        top: Math.max(0, detailTop - scrollMargin),
-        behavior: "smooth",
+        top: Math.min(maxScrollTop, Math.max(0, detailTop - scrollMargin)),
+        behavior,
       });
+    }
+
+    firstFrame = window.requestAnimationFrame(() => {
+      secondFrame = window.requestAnimationFrame(() => scrollDetailIntoView("smooth"));
     });
+
+    // Link detail rows hydrate local drafts/inputs after selection, so give the
+    // layout one short settle pass before deciding whether it still needs help.
+    settleTimers.push(window.setTimeout(() => scrollDetailIntoView("smooth"), contextSelection?.type === "link" ? 120 : 60));
+    settleTimers.push(window.setTimeout(() => scrollDetailIntoView("auto"), 260));
+
+    return () => {
+      window.cancelAnimationFrame(firstFrame);
+      window.cancelAnimationFrame(secondFrame);
+      settleTimers.forEach((timer) => window.clearTimeout(timer));
+    };
   }, [contextSelectionKey]);
 
   useLayoutEffect(() => {
