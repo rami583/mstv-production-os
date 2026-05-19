@@ -8393,7 +8393,7 @@ function YearOverviewMiniMonth({
       onClick={onSelect}
       className={cn(
         "flex min-h-0 min-w-0 flex-col overflow-hidden rounded-[1.1rem] px-1.5 pb-1 pt-1.5 text-left transition hover:bg-white/70 sm:rounded-[1rem] sm:px-1.5 sm:pb-1 sm:pt-1.5 lg:px-2 lg:pb-1.5 lg:pt-2",
-        isVisibleMonth && "bg-white/90 ring-1 ring-[#bb2720]/20",
+        isVisibleMonth && "-translate-y-0.5 bg-white/90 pb-0.5 pt-1 ring-1 ring-[#bb2720]/20 sm:pb-0.5 sm:pt-1 lg:pb-1 lg:pt-1.5",
       )}
     >
       <span className={cn("mb-1 block truncate text-xs font-semibold leading-none sm:mb-1 sm:text-sm", isVisibleMonth ? "text-[#bb2720]" : "text-stone-950")}>
