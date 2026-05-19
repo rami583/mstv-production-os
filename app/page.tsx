@@ -7617,7 +7617,7 @@ function YearOverviewOverlay({
   const yearPageStep = getYearPageStep();
 
   return (
-    <div className="fixed inset-0 z-50 overflow-hidden bg-[#f7f9fb]/95 px-4 pb-[calc(1.15rem+env(safe-area-inset-bottom))] pt-[calc(1.25rem+env(safe-area-inset-top))] backdrop-blur-xl sm:px-6 sm:pb-[calc(1.5rem+env(safe-area-inset-bottom))] sm:pt-[calc(1.5rem+env(safe-area-inset-top))] lg:px-8">
+    <div className="fixed inset-0 z-50 overflow-hidden bg-[#f7f9fb]/95 px-4 pb-[calc(1.15rem+env(safe-area-inset-bottom))] pt-[calc(1.25rem+env(safe-area-inset-top))] backdrop-blur-xl sm:px-6 sm:pb-[calc(1rem+env(safe-area-inset-bottom))] sm:pt-[calc(1.25rem+env(safe-area-inset-top))] lg:px-8">
       <div className="mx-auto flex h-full max-w-7xl flex-col">
         <AppHeader
           screen="calendar"
@@ -7733,7 +7733,7 @@ function YearOverviewPage({
 }) {
   return (
     <section className="flex w-full shrink-0 flex-col" style={{ height: pageHeight ? `${pageHeight}px` : "100%" }}>
-      <div className="grid min-h-0 flex-1 grid-cols-3 grid-rows-4 gap-x-2 gap-y-2 pt-2 sm:gap-x-6 sm:gap-y-5 sm:pt-4 lg:gap-x-8 lg:gap-y-6">
+      <div className="grid min-h-0 flex-1 grid-cols-3 grid-rows-4 gap-x-2 gap-y-2 pt-1.5 sm:gap-x-4 sm:gap-y-2 sm:pt-2 lg:gap-x-5 lg:gap-y-2">
         {monthNames.map((monthName, monthIndex) => (
           <YearOverviewMiniMonth
             key={`${year}-${monthName}`}
@@ -7782,30 +7782,30 @@ function YearOverviewMiniMonth({
       data-month-index={monthIndex}
       onClick={onSelect}
       className={cn(
-        "flex min-h-0 min-w-0 flex-col overflow-hidden rounded-[1.1rem] p-1.5 text-left transition hover:bg-white/70 sm:rounded-[1.25rem] sm:p-2.5 lg:p-3",
+        "flex min-h-0 min-w-0 flex-col overflow-hidden rounded-[1.1rem] p-1.5 text-left transition hover:bg-white/70 sm:rounded-[1rem] sm:p-1.5 lg:p-2",
         isVisibleMonth && "bg-white/90 ring-1 ring-[#bb2720]/20",
       )}
     >
-      <span className={cn("mb-1 block truncate text-xs font-semibold leading-none sm:mb-2 sm:text-base", isVisibleMonth ? "text-[#bb2720]" : "text-stone-950")}>
+      <span className={cn("mb-1 block truncate text-xs font-semibold leading-none sm:mb-1 sm:text-sm", isVisibleMonth ? "text-[#bb2720]" : "text-stone-950")}>
         {monthName}
       </span>
-      <span className="grid min-h-0 flex-1 grid-cols-7 content-start gap-y-0.5 sm:content-stretch sm:gap-y-0.5 lg:gap-y-1">
+      <span className="grid min-h-0 flex-1 grid-cols-7 content-start gap-y-0.5 sm:content-stretch sm:gap-y-0">
         {weekdays.map((weekday, index) => (
-          <span key={`${weekday}-${index}`} className="text-center text-[0.48rem] font-semibold leading-none text-stone-300 sm:text-[0.625rem]">
+          <span key={`${weekday}-${index}`} className="text-center text-[0.48rem] font-semibold leading-none text-stone-300 sm:text-[0.5rem] lg:text-[0.55rem]">
             {weekday}
           </span>
         ))}
         {Array.from({ length: monthData.leadingEmptyDays }).map((_, index) => (
-          <span key={`empty-start-${index}`} className="aspect-square sm:h-4 sm:aspect-auto lg:h-5" />
+          <span key={`empty-start-${index}`} className="aspect-square sm:h-3.5 sm:aspect-auto lg:h-4" />
         ))}
         {monthData.calendarDays.map((day) => {
           const isToday = day.dateKey === todayKey;
           const hasEvents = day.events.length > 0;
           return (
-            <span key={day.dateKey} className="relative flex aspect-square min-w-0 items-center justify-center sm:h-4 sm:aspect-auto lg:h-5">
+            <span key={day.dateKey} className="relative flex aspect-square min-w-0 items-center justify-center sm:h-3.5 sm:aspect-auto lg:h-4">
               <span
                 className={cn(
-                  "flex h-4 w-4 items-center justify-center rounded-full text-[0.56rem] font-semibold leading-none sm:h-4 sm:w-4 sm:text-[0.62rem] lg:h-5 lg:w-5 lg:text-xs",
+                  "flex h-4 w-4 items-center justify-center rounded-full text-[0.56rem] font-semibold leading-none sm:h-3.5 sm:w-3.5 sm:text-[0.54rem] lg:h-4 lg:w-4 lg:text-[0.62rem]",
                   isToday ? "bg-[#bb2720] text-white" : "text-stone-700",
                 )}
               >
@@ -7816,7 +7816,7 @@ function YearOverviewMiniMonth({
           );
         })}
         {Array.from({ length: monthData.trailingEmptyDays }).map((_, index) => (
-          <span key={`empty-end-${index}`} className="aspect-square sm:h-4 sm:aspect-auto lg:h-5" />
+          <span key={`empty-end-${index}`} className="aspect-square sm:h-3.5 sm:aspect-auto lg:h-4" />
         ))}
       </span>
     </button>
