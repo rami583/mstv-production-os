@@ -2149,22 +2149,39 @@ function isPdfFile(file: File | null | undefined) {
 }
 
 function hasFileDragItem(dataTransfer: DataTransfer) {
-  return Array.from(dataTransfer.items).some((item) => item.kind === "file");
+  return (
+    Array.from(dataTransfer.types ?? []).includes("Files") ||
+    dataTransfer.files.length > 0 ||
+    Array.from(dataTransfer.items).some((item) => item.kind === "file")
+  );
 }
 
 function hasPotentialPdfDragItem(dataTransfer: DataTransfer) {
+  const files = getFilesFromTransfer(dataTransfer);
+  if (files.length > 0) return files.some(isPdfFile);
+
   return Array.from(dataTransfer.items).some((item) => {
     if (item.kind !== "file") return false;
     return !item.type || item.type === "application/pdf" || item.type === "application/x-pdf";
   });
 }
 
+function getFilesFromTransfer(dataTransfer: DataTransfer) {
+  const files = Array.from(dataTransfer.files).filter(Boolean);
+  if (files.length > 0) return files;
+
+  return Array.from(dataTransfer.items)
+    .filter((item) => item.kind === "file")
+    .map((item) => item.getAsFile())
+    .filter((file): file is File => Boolean(file));
+}
+
 function getFirstFileFromTransfer(dataTransfer: DataTransfer) {
-  return Array.from(dataTransfer.files).find(Boolean) ?? null;
+  return getFilesFromTransfer(dataTransfer)[0] ?? null;
 }
 
 function getPdfFileFromTransfer(dataTransfer: DataTransfer) {
-  return Array.from(dataTransfer.files).find(isPdfFile) ?? null;
+  return getFilesFromTransfer(dataTransfer).find(isPdfFile) ?? null;
 }
 
 function getCompletedByNameForDisplay(option: EventOption) {
@@ -3089,6 +3106,23 @@ export default function Home() {
     if (/type=(?:recovery|password_recovery)\b/i.test(recoveryPayload)) {
       setPasswordRecoveryOpen(true);
     }
+  }, []);
+
+  useEffect(() => {
+    function preventNativeFileDrop(dragEvent: DragEvent) {
+      if (!dragEvent.dataTransfer || !hasFileDragItem(dragEvent.dataTransfer)) return;
+      dragEvent.preventDefault();
+      if (dragEvent.type === "dragover") {
+        dragEvent.dataTransfer.dropEffect = hasPotentialPdfDragItem(dragEvent.dataTransfer) ? "copy" : "none";
+      }
+    }
+
+    window.addEventListener("dragover", preventNativeFileDrop, { capture: true });
+    window.addEventListener("drop", preventNativeFileDrop, { capture: true });
+    return () => {
+      window.removeEventListener("dragover", preventNativeFileDrop, { capture: true });
+      window.removeEventListener("drop", preventNativeFileDrop, { capture: true });
+    };
   }, []);
 
   useEffect(() => {
@@ -4301,9 +4335,41 @@ export default function Home() {
   }, []);
 
   function openQuoteImport(file: File | null = null) {
+    if (file) {
+      console.info("Quote PDF import handler called", {
+        source: "openQuoteImport",
+        fileName: file.name,
+        fileType: file.type || "(empty)",
+        fileSize: file.size,
+      });
+    }
     setQuoteImportFile(file);
     setQuoteImportOpen(true);
     setCreateMenuOpen(false);
+  }
+
+  function openQuoteImportFromDrop(dataTransfer: DataTransfer, source: string) {
+    const files = getFilesFromTransfer(dataTransfer);
+    const pdfFile = files.find(isPdfFile) ?? null;
+    console.info("Quote PDF drop event", {
+      source,
+      fileCount: files.length,
+      firstFileName: files[0]?.name ?? null,
+      firstFileType: files[0]?.type || null,
+      firstFileSize: files[0]?.size ?? null,
+      pdfFileName: pdfFile?.name ?? null,
+      importHandlerCalled: Boolean(pdfFile),
+    });
+
+    if (!pdfFile) {
+      setGlobalQuoteDragActive(false);
+      setError("Déposez un fichier PDF.");
+      return;
+    }
+
+    setGlobalQuoteDragActive(false);
+    setError(null);
+    openQuoteImport(pdfFile);
   }
 
   function openNativeMstvIcsImport() {
@@ -7050,22 +7116,15 @@ export default function Home() {
           setGlobalQuoteDragActive(false);
         }}
         onDrop={(event) => {
-          if (!permissions.canManageEvents) return;
           if (!hasFileDragItem(event.dataTransfer)) return;
           event.preventDefault();
-          const pdfFile = getPdfFileFromTransfer(event.dataTransfer);
-          if (!pdfFile) {
+          event.stopPropagation();
+          if (!permissions.canManageEvents) {
             setGlobalQuoteDragActive(false);
-            const firstFile = getFirstFileFromTransfer(event.dataTransfer);
-            if (firstFile) {
-              openQuoteImport(firstFile);
-            } else {
-              setError("Déposez un fichier PDF.");
-            }
+            setError("Import de devis réservé aux admins.");
             return;
           }
-          setGlobalQuoteDragActive(false);
-          openQuoteImport(pdfFile);
+          openQuoteImportFromDrop(event.dataTransfer, "app-shell");
         }}
         className="relative mx-auto flex h-full min-h-0 w-full max-w-7xl flex-col px-4 pb-[calc(1.25rem+env(safe-area-inset-bottom))] pt-[calc(1.25rem+env(safe-area-inset-top))] sm:px-6 sm:pb-[calc(1.5rem+env(safe-area-inset-bottom))] sm:pt-[calc(1.5rem+env(safe-area-inset-top))] lg:px-8"
       >
@@ -11217,11 +11276,13 @@ function ContextDetailBlock({
               data-no-event-swipe
               onDragOver={(dragEvent) => {
                 dragEvent.preventDefault();
+                dragEvent.stopPropagation();
                 setDraggingDocumentFiles(true);
               }}
               onDragLeave={() => setDraggingDocumentFiles(false)}
               onDrop={(dropEvent) => {
                 dropEvent.preventDefault();
+                dropEvent.stopPropagation();
                 setDraggingDocumentFiles(false);
                 void uploadFilesToSelectedGroup(dropEvent.dataTransfer.files);
               }}
@@ -11832,6 +11893,12 @@ function QuoteImportModal({
 
   async function handleFile(file: File | null) {
     if (!file) return;
+    console.info("Quote PDF file selected for extraction", {
+      fileName: file.name,
+      fileType: file.type || "(empty)",
+      fileSize: file.size,
+      isPdf: isPdfFile(file),
+    });
     if (!isPdfFile(file)) {
       setError("Importez un fichier PDF.");
       return;
@@ -11980,11 +12047,13 @@ function QuoteImportModal({
             onDragEnter={(event) => {
               if (!hasFileDragItem(event.dataTransfer)) return;
               event.preventDefault();
+              event.stopPropagation();
               setDropActive(hasPotentialPdfDragItem(event.dataTransfer));
             }}
             onDragOver={(event) => {
               if (!hasFileDragItem(event.dataTransfer)) return;
               event.preventDefault();
+              event.stopPropagation();
               const canDropPdf = hasPotentialPdfDragItem(event.dataTransfer);
               event.dataTransfer.dropEffect = canDropPdf ? "copy" : "none";
               setDropActive(canDropPdf);
@@ -11996,8 +12065,23 @@ function QuoteImportModal({
             onDrop={(event) => {
               if (!hasFileDragItem(event.dataTransfer)) return;
               event.preventDefault();
+              event.stopPropagation();
               setDropActive(false);
-              void handleFile(getPdfFileFromTransfer(event.dataTransfer) ?? getFirstFileFromTransfer(event.dataTransfer));
+              const files = getFilesFromTransfer(event.dataTransfer);
+              const pdfFile = files.find(isPdfFile) ?? null;
+              console.info("Quote PDF modal drop event", {
+                fileCount: files.length,
+                firstFileName: files[0]?.name ?? null,
+                firstFileType: files[0]?.type || null,
+                firstFileSize: files[0]?.size ?? null,
+                pdfFileName: pdfFile?.name ?? null,
+                importHandlerCalled: Boolean(pdfFile),
+              });
+              if (!pdfFile) {
+                setError("Importez un fichier PDF.");
+                return;
+              }
+              void handleFile(pdfFile);
             }}
             className={cn(
               "flex min-h-44 cursor-pointer flex-col items-center justify-center rounded-3xl border border-dashed px-4 py-8 text-center transition",
