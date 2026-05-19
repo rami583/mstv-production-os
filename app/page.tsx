@@ -24,6 +24,7 @@ import {
   Link,
   MonitorPlay,
   Palette,
+  Pencil,
   Presentation,
   Radio,
   Scissors,
@@ -3675,6 +3676,14 @@ export default function Home() {
       return;
     }
 
+    if (action.actionType === "option_item_update") {
+      const values = action.payload.values as Database["public"]["Tables"]["event_option_items"]["Update"];
+      const { error: updateError } = await supabase.from("event_option_items").update(values).eq("id", action.entityId);
+      if (updateError) throw updateError;
+      await writeQueuedActivity(activity);
+      return;
+    }
+
     if (action.actionType === "option_item_delete") {
       const { error: deleteError } = await supabase.from("event_option_items").delete().eq("id", action.entityId);
       if (deleteError) throw deleteError;
@@ -5660,6 +5669,106 @@ export default function Home() {
 
   }
 
+  async function updateEventOptionItem(option: EventOption, optionItem: EventOptionItem, label: string) {
+    assertCanManageOperational();
+    if (!canManageCreatedEntity(permissions, profile, optionItem)) {
+      throw new Error("Vous ne pouvez modifier que vos propres notes.");
+    }
+    if (!supabase) {
+      throw new Error("Configuration Supabase manquante.");
+    }
+
+    const nextLabel = label.trim();
+    if (!nextLabel) {
+      throw new Error("La note ne peut pas être vide.");
+    }
+    if (nextLabel === optionItem.label) return optionItem;
+
+    const updatePayload: Database["public"]["Tables"]["event_option_items"]["Update"] = {
+      label: nextLabel,
+    };
+    const updatedItem: EventOptionItem = {
+      ...optionItem,
+      label: nextLabel,
+    };
+    const activity: PendingActivityPayload = {
+      eventId: option.eventId,
+      actionType: "option_item_updated",
+      entityType: "option_item",
+      entityId: optionItem.id,
+      description: "Note modifiée",
+      previousValue: { label: optionItem.label },
+      newValue: { label: nextLabel },
+    };
+
+    function applyOptimisticUpdate() {
+      setEvents((current) =>
+        current.map((event) =>
+          event.id === option.eventId
+            ? {
+                ...event,
+                options: event.options.map((item) =>
+                  item.id === option.id
+                    ? {
+                        ...item,
+                        items: item.items.map((detailItem) => (detailItem.id === optionItem.id ? updatedItem : detailItem)),
+                      }
+                    : item,
+                ),
+              }
+            : event,
+        ),
+      );
+    }
+
+    if (!online) {
+      applyOptimisticUpdate();
+      await enqueuePendingSyncAction({
+        actionType: "option_item_update",
+        entityType: "option_item",
+        entityId: optionItem.id,
+        payload: { values: updatePayload, activity },
+      });
+      return updatedItem;
+    }
+
+    const { data, error: updateError } = await supabase
+      .from("event_option_items")
+      .update(updatePayload)
+      .eq("id", optionItem.id)
+      .select()
+      .single();
+
+    if (updateError) {
+      if (isNetworkOrUnavailableError(updateError)) {
+        applyOptimisticUpdate();
+        await enqueuePendingSyncAction({
+          actionType: "option_item_update",
+          entityType: "option_item",
+          entityId: optionItem.id,
+          payload: { values: updatePayload, activity },
+        });
+        return updatedItem;
+      }
+      console.error("Failed to update event_option_items row", {
+        optionId: option.id,
+        itemId: optionItem.id,
+        error: updateError,
+      });
+      if (updateError.code === "PGRST205" || updateError.code === "42P01") {
+        throw new Error("Table Supabase event_option_items manquante. Applique la migration 002_event_option_items.sql.");
+      }
+      throw updateError;
+    }
+
+    const savedItem = mapEventOptionItem(data);
+    applyOptimisticUpdate();
+
+    await logEventActivity(activity);
+
+    return savedItem;
+  }
+
   async function createEventLink(eventId: string, input: { label: string; url: string }) {
     assertCanManageOperational();
     if (!supabase) {
@@ -6715,6 +6824,7 @@ export default function Home() {
               onDeleteOption={deleteEventOption}
               onRenameOption={renameEventOption}
               onCreateOptionItem={createEventOptionItem}
+              onUpdateOptionItem={updateEventOptionItem}
               onDeleteOptionItem={deleteEventOptionItem}
               onCreateLink={createEventLink}
               onDeleteLink={deleteEventLink}
@@ -8726,6 +8836,7 @@ function ProductionDetail({
   onDeleteOption,
   onRenameOption,
   onCreateOptionItem,
+  onUpdateOptionItem,
   onDeleteOptionItem,
   onCreateLink,
   onDeleteLink,
@@ -8757,6 +8868,7 @@ function ProductionDetail({
   onDeleteOption: (option: EventOption) => Promise<void>;
   onRenameOption: (option: EventOption, label: string) => Promise<EventOption>;
   onCreateOptionItem: (option: EventOption, label: string) => Promise<EventOptionItem>;
+  onUpdateOptionItem: (option: EventOption, item: EventOptionItem, label: string) => Promise<EventOptionItem>;
   onDeleteOptionItem: (option: EventOption, item: EventOptionItem) => Promise<void>;
   onCreateLink: (eventId: string, input: { label: string; url: string }) => Promise<EventLink>;
   onDeleteLink: (link: EventLink) => Promise<void>;
@@ -9473,6 +9585,7 @@ function ProductionDetail({
             onChangeOptionCompletedBy={onChangeOptionCompletedBy}
             onRenameOption={onRenameOption}
             onCreateOptionItem={onCreateOptionItem}
+            onUpdateOptionItem={onUpdateOptionItem}
             onDeleteOptionItem={onDeleteOptionItem}
             onRenameLink={onRenameLink}
             onSaveLinkEntries={onSaveLinkEntries}
@@ -10153,6 +10266,7 @@ function ContextDetailBlock({
   onChangeOptionCompletedBy,
   onRenameOption,
   onCreateOptionItem,
+  onUpdateOptionItem,
   onDeleteOptionItem,
   onRenameLink,
   onSaveLinkEntries,
@@ -10170,6 +10284,7 @@ function ContextDetailBlock({
   onChangeOptionCompletedBy: (option: EventOption, choice: CompletedByOverrideChoice, customLabel?: string) => Promise<void>;
   onRenameOption: (option: EventOption, label: string) => Promise<EventOption>;
   onCreateOptionItem: (option: EventOption, label: string) => Promise<EventOptionItem>;
+  onUpdateOptionItem: (option: EventOption, item: EventOptionItem, label: string) => Promise<EventOptionItem>;
   onDeleteOptionItem: (option: EventOption, item: EventOptionItem) => Promise<void>;
   onRenameLink: (link: EventLink, label: string) => Promise<EventLink>;
   onSaveLinkEntries: (link: EventLink, drafts: LinkEntryDraft[]) => Promise<EventLink>;
@@ -10200,6 +10315,9 @@ function ContextDetailBlock({
   const [optionItemInput, setOptionItemInput] = useState("");
   const [savingOptionItem, setSavingOptionItem] = useState(false);
   const [optionItemError, setOptionItemError] = useState<string | null>(null);
+  const [editingOptionItemId, setEditingOptionItemId] = useState<string | null>(null);
+  const [editingOptionItemInput, setEditingOptionItemInput] = useState("");
+  const [savingEditedOptionItemId, setSavingEditedOptionItemId] = useState<string | null>(null);
   const [savingCompletedByOverride, setSavingCompletedByOverride] = useState(false);
   const [completedByOverrideError, setCompletedByOverrideError] = useState<string | null>(null);
   const [completedByOverrideChoiceValue, setCompletedByOverrideChoiceValue] = useState("");
@@ -10237,6 +10355,9 @@ function ContextDetailBlock({
     setOptionItemInput("");
     setSavingOptionItem(false);
     setOptionItemError(null);
+    setEditingOptionItemId(null);
+    setEditingOptionItemInput("");
+    setSavingEditedOptionItemId(null);
     setSavingCompletedByOverride(false);
     setCompletedByOverrideError(null);
     setCompletedByOverrideChoiceValue("");
@@ -10418,6 +10539,40 @@ function ContextDetailBlock({
     } catch (deleteError) {
       console.error("Unable to delete option detail item", deleteError);
       setOptionItemError(getUserFacingErrorMessage(deleteError, "Impossible de supprimer cette note."));
+    }
+  }
+
+  function startEditingOptionItem(optionItem: EventOptionItem) {
+    setEditingOptionItemId(optionItem.id);
+    setEditingOptionItemInput(optionItem.label);
+    setOptionItemError(null);
+  }
+
+  function cancelEditingOptionItem() {
+    setEditingOptionItemId(null);
+    setEditingOptionItemInput("");
+    setSavingEditedOptionItemId(null);
+  }
+
+  async function saveEditedOptionItem(optionItem: EventOptionItem) {
+    if (!selectedOption) return;
+
+    const nextLabel = editingOptionItemInput.trim();
+    if (!nextLabel) {
+      setOptionItemError("La note ne peut pas être vide.");
+      return;
+    }
+
+    setSavingEditedOptionItemId(optionItem.id);
+    setOptionItemError(null);
+
+    try {
+      await onUpdateOptionItem(selectedOption, optionItem, nextLabel);
+      cancelEditingOptionItem();
+    } catch (updateError) {
+      console.error("Unable to update option detail item", updateError);
+      setOptionItemError(getUserFacingErrorMessage(updateError, "Impossible de modifier cette note."));
+      setSavingEditedOptionItemId(null);
     }
   }
 
@@ -10792,18 +10947,61 @@ function ContextDetailBlock({
             </form>
           ) : null}
         {selectedOption.items.map((item) => {
-          const canDeleteNote = canManageCreatedEntity(permissions, profile, item);
+          const canManageNote = canManageCreatedEntity(permissions, profile, item);
+          const isEditingNote = editingOptionItemId === item.id;
+          const isSavingEditedNote = savingEditedOptionItemId === item.id;
           return (
             <div key={item.id} className={cn("group flex min-h-12 w-full items-start gap-3 rounded-xl border px-3 py-2.5", optionTone.surface, optionTone.border)}>
-              <p className={cn("min-w-0 flex-1 whitespace-pre-wrap text-base font-medium leading-relaxed", optionTone.text)}>{item.label}</p>
-              {canDeleteNote && (
-                <button
-                  onClick={() => void removeOptionItem(item)}
-                  className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-emerald-500 opacity-100 transition hover:bg-white/70 hover:text-emerald-800 focus:opacity-100 [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover:opacity-100"
-                  aria-label="Supprimer cette note"
-                >
-                  <X className="h-3.5 w-3.5" />
-                </button>
+              {isEditingNote ? (
+                <div className="flex min-w-0 flex-1 flex-col gap-2">
+                  <textarea
+                    rows={3}
+                    value={editingOptionItemInput}
+                    onChange={(event) => setEditingOptionItemInput(event.target.value)}
+                    className="min-h-20 w-full resize-none rounded-xl border border-emerald-200 bg-white px-3 py-2 text-base font-medium text-stone-950 outline-none transition placeholder:text-stone-300 focus:border-emerald-400"
+                    autoFocus
+                  />
+                  <div className="flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      onClick={() => void saveEditedOptionItem(item)}
+                      disabled={isSavingEditedNote}
+                      className="h-8 rounded-full bg-emerald-600 px-3 text-base font-semibold text-white transition hover:bg-emerald-700 disabled:bg-stone-300"
+                    >
+                      Valider
+                    </button>
+                    <button
+                      type="button"
+                      onClick={cancelEditingOptionItem}
+                      disabled={isSavingEditedNote}
+                      className="h-8 rounded-full border border-emerald-200 bg-white px-3 text-base font-semibold text-emerald-700 transition hover:bg-emerald-50 disabled:text-stone-300"
+                    >
+                      Annuler
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <>
+                  <p className={cn("min-w-0 flex-1 whitespace-pre-wrap text-base font-medium leading-relaxed", optionTone.text)}>{item.label}</p>
+                  {canManageNote && (
+                    <div className="flex shrink-0 items-center gap-1 opacity-100 transition [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover:opacity-100">
+                      <button
+                        onClick={() => startEditingOptionItem(item)}
+                        className="flex h-6 w-6 items-center justify-center rounded-full text-emerald-500 transition hover:bg-white/70 hover:text-emerald-800 focus:opacity-100"
+                        aria-label="Modifier cette note"
+                      >
+                        <Pencil className="h-3.5 w-3.5" />
+                      </button>
+                      <button
+                        onClick={() => void removeOptionItem(item)}
+                        className="flex h-6 w-6 items-center justify-center rounded-full text-emerald-500 transition hover:bg-white/70 hover:text-emerald-800 focus:opacity-100"
+                        aria-label="Supprimer cette note"
+                      >
+                        <X className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
+                  )}
+                </>
               )}
             </div>
           );
