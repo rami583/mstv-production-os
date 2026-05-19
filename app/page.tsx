@@ -7583,6 +7583,7 @@ function AppHeader({
         </button>
         <div className="flex shrink-0 items-center gap-1.5 sm:gap-2">
           <HeaderIcon label="Rechercher" icon={Search} onClick={onSearch} />
+          {canOpenHistory && <HeaderIcon label="Historique" icon={History} onClick={onOpenHistory} />}
           <NotificationMenu
             notifications={notifications}
             unreadCount={unreadNotificationCount}
@@ -7672,7 +7673,6 @@ function AppHeader({
               Aujourd'hui
             </button>
           )}
-          {canOpenHistory && <HeaderIcon label="Historique" icon={History} onClick={onOpenHistory} />}
         </div>
       </div>
     </header>
@@ -8321,7 +8321,7 @@ function YearOverviewMiniMonth({
       data-month-index={monthIndex}
       onClick={onSelect}
       className={cn(
-        "flex min-h-0 min-w-0 flex-col overflow-hidden rounded-[1.1rem] p-1.5 text-left transition hover:bg-white/70 sm:rounded-[1rem] sm:p-1.5 lg:p-2",
+        "flex min-h-0 min-w-0 flex-col overflow-hidden rounded-[1.1rem] px-1.5 pb-1 pt-1.5 text-left transition hover:bg-white/70 sm:rounded-[1rem] sm:px-1.5 sm:pb-1 sm:pt-1.5 lg:px-2 lg:pb-1.5 lg:pt-2",
         isVisibleMonth && "bg-white/90 ring-1 ring-[#bb2720]/20",
       )}
     >
