@@ -2603,16 +2603,15 @@ async function fetchExternalCalendarEvents() {
 
 export default function Home() {
   const today = useMemo(() => new Date(), []);
-  const initialCachedAuth = useMemo(() => readCachedAuthState(), []);
-  const [authSession, setAuthSession] = useState<Session | null>(() => initialCachedAuth?.session ?? null);
-  const [profile, setProfile] = useState<UserProfile | null>(() => initialCachedAuth?.profile ?? null);
-  const [authLoading, setAuthLoading] = useState(() => !initialCachedAuth);
-  const [isBootHydrated, setIsBootHydrated] = useState(false);
+  const [hasMounted, setHasMounted] = useState(false);
+  const [authSession, setAuthSession] = useState<Session | null>(null);
+  const [profile, setProfile] = useState<UserProfile | null>(null);
+  const [authLoading, setAuthLoading] = useState(true);
   const [authError, setAuthError] = useState<string | null>(null);
   const [passwordRecoveryOpen, setPasswordRecoveryOpen] = useState(false);
   const [screen, setScreen] = useState<Screen>("calendar");
-  const [events, setEvents] = useState<ProductionEvent[]>(() => initialCachedAuth?.appData?.events ?? []);
-  const [selectedId, setSelectedId] = useState<string | null>(() => initialCachedAuth?.appData?.events[0]?.id ?? null);
+  const [events, setEvents] = useState<ProductionEvent[]>([]);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
   const [visibleMonth, setVisibleMonth] = useState(() => new Date(today.getFullYear(), today.getMonth(), 1));
   const [selectedDateKey, setSelectedDateKey] = useState(formatDateKey(today));
   const [createMenuOpen, setCreateMenuOpen] = useState(false);
@@ -2640,8 +2639,8 @@ export default function Home() {
   const [managedProfilesLoading, setManagedProfilesLoading] = useState(false);
   const [managedProfilesError, setManagedProfilesError] = useState<string | null>(null);
   const [updatingProfileId, setUpdatingProfileId] = useState<string | null>(null);
-  const [externalCalendars, setExternalCalendars] = useState<ExternalCalendar[]>(() => initialCachedAuth?.appData?.externalCalendars ?? []);
-  const [externalCalendarEvents, setExternalCalendarEvents] = useState<ExternalCalendarEvent[]>(() => initialCachedAuth?.appData?.externalCalendarEvents ?? []);
+  const [externalCalendars, setExternalCalendars] = useState<ExternalCalendar[]>([]);
+  const [externalCalendarEvents, setExternalCalendarEvents] = useState<ExternalCalendarEvent[]>([]);
   const [externalCalendarSettingsLoading, setExternalCalendarSettingsLoading] = useState(false);
   const [externalCalendarSettingsError, setExternalCalendarSettingsError] = useState<string | null>(null);
   const [syncingExternalCalendarId, setSyncingExternalCalendarId] = useState<string | null>(null);
@@ -2658,7 +2657,7 @@ export default function Home() {
   const [activityLoading, setActivityLoading] = useState(false);
   const [activityError, setActivityError] = useState<string | null>(null);
   const [restoringActivityId, setRestoringActivityId] = useState<string | null>(null);
-  const [loading, setLoading] = useState(() => !initialCachedAuth);
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [isTimelineTimeEditing, setIsTimelineTimeEditing] = useState(false);
   const [keyboardVisible, setKeyboardVisible] = useState(false);
@@ -2711,8 +2710,8 @@ export default function Home() {
   const isSelectedDateToday = selectedDateKey === todayKey;
   const yearLabel = String(visibleMonth.getFullYear());
   const permissions = useMemo(() => getPermissionsForRole(profile?.role ?? "team"), [profile?.role]);
-  const headerProfile = isBootHydrated ? profile : initialCachedAuth?.profile ?? profile;
-  const headerSession = isBootHydrated ? authSession : initialCachedAuth?.session ?? authSession;
+  const headerProfile = profile;
+  const headerSession = authSession;
   const headerPermissions = useMemo(() => getPermissionsForRole(headerProfile?.role ?? "team"), [headerProfile?.role]);
   const headerCanOpenTrash = headerPermissions.canRestoreEvents || headerPermissions.canPermanentDeleteEvents;
   const actorName = getProfileDisplayName(profile);
@@ -2751,6 +2750,10 @@ export default function Home() {
       currentUserRole: profile?.role ?? null,
     });
   }, [externalCalendars.length, externalCalendarEvents.length, profile?.role, selectedDateKey, visibleExternalCalendarEvents, visibleMonth]);
+
+  useEffect(() => {
+    setHasMounted(true);
+  }, []);
 
   useEffect(() => {
     onlineRef.current = online;
@@ -2980,11 +2983,7 @@ export default function Home() {
       void loadAuthenticatedProfile(session);
     }) ?? { data: { subscription: null } };
 
-    void initializeAuth().finally(() => {
-      if (!cancelled) {
-        setIsBootHydrated(true);
-      }
-    });
+    void initializeAuth();
 
     return () => {
       cancelled = true;
@@ -6510,7 +6509,7 @@ export default function Home() {
     setCreateMenuOpen(false);
   }
 
-  if (authLoading) {
+  if (!hasMounted || authLoading) {
     return <FullScreenStatus>Chargement...</FullScreenStatus>;
   }
 
