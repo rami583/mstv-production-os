@@ -245,6 +245,30 @@ export type Database = {
         Update: Partial<Database["public"]["Tables"]["event_activity_log"]["Insert"]>;
         Relationships: [];
       };
+      notifications: {
+        Row: {
+          id: string;
+          user_id: string;
+          type: string;
+          title: string;
+          body: string;
+          related_event_id: string | null;
+          read_at: string | null;
+          created_at: string;
+        };
+        Insert: {
+          id?: string;
+          user_id: string;
+          type: string;
+          title: string;
+          body: string;
+          related_event_id?: string | null;
+          read_at?: string | null;
+          created_at?: string;
+        };
+        Update: Partial<Database["public"]["Tables"]["notifications"]["Insert"]>;
+        Relationships: [];
+      };
       profiles: {
         Row: {
           id: string;

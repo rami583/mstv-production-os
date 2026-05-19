@@ -2,6 +2,7 @@
 
 import {
   AlertCircle,
+  Bell,
   Brush,
   Camera,
   Captions,
@@ -79,6 +80,7 @@ type EventLinkEntryRow = Database["public"]["Tables"]["event_link_entries"]["Row
 type EventDocumentRow = Database["public"]["Tables"]["event_documents"]["Row"];
 type EventDocumentGroupRow = Database["public"]["Tables"]["event_document_groups"]["Row"];
 type EventActivityLogRow = Database["public"]["Tables"]["event_activity_log"]["Row"];
+type NotificationRow = Database["public"]["Tables"]["notifications"]["Row"];
 type ProfileRow = Database["public"]["Tables"]["profiles"]["Row"];
 type ExternalCalendarRow = Database["public"]["Tables"]["external_calendars"]["Row"];
 type ExternalCalendarEventRow = Database["public"]["Tables"]["external_calendar_events"]["Row"];
@@ -219,6 +221,17 @@ type EventActivityLog = {
   previousValue: ActivityValue;
   newValue: ActivityValue;
   createdBy: string | null;
+  createdAt: string;
+};
+
+type AppNotification = {
+  id: string;
+  userId: string;
+  type: string;
+  title: string;
+  body: string;
+  relatedEventId: string | null;
+  readAt: string | null;
   createdAt: string;
 };
 
@@ -427,6 +440,7 @@ const realtimeTableNames = [
   "event_documents",
   "event_activity_log",
   "profiles",
+  "notifications",
   "team_members",
   "external_calendars",
   "external_calendar_events",
@@ -700,6 +714,14 @@ function getCachedAppData(userId: string) {
   return getLocalStorageJson<CachedAppData>(`${cachedAppDataKeyPrefix}${userId}`);
 }
 
+function cacheNotifications(userId: string, notifications: AppNotification[]) {
+  setLocalStorageJson(`${cachedNotificationsKeyPrefix}${userId}`, notifications.slice(0, 80));
+}
+
+function getCachedNotifications(userId: string) {
+  return getLocalStorageJson<AppNotification[]>(`${cachedNotificationsKeyPrefix}${userId}`) ?? [];
+}
+
 const statusStyles: Record<EventStatus, string> = {
   Brouillon: "bg-stone-100 text-stone-600 ring-stone-200",
   "En préparation": "bg-amber-100 text-amber-800 ring-amber-200",
@@ -747,6 +769,7 @@ const cachedAuthSessionKey = "mstv.cachedAuthSession";
 const cachedProfileKeyPrefix = "mstv.cachedProfile.";
 const cachedProfileMetaKeyPrefix = "mstv.cachedProfileMeta.";
 const cachedAppDataKeyPrefix = "mstv.cachedAppData.";
+const cachedNotificationsKeyPrefix = "mstv.cachedNotifications.";
 const calendarArrowClassName =
   "flex h-9 w-9 items-center justify-center rounded-full text-base text-[#bb2720] transition hover:bg-[#bb2720]/[0.08] disabled:cursor-not-allowed disabled:text-stone-300 disabled:hover:bg-transparent";
 
@@ -2249,6 +2272,19 @@ function mapEventActivityLog(row: EventActivityLogRow): EventActivityLog {
   };
 }
 
+function mapNotification(row: NotificationRow): AppNotification {
+  return {
+    id: row.id,
+    userId: row.user_id,
+    type: row.type,
+    title: row.title,
+    body: row.body,
+    relatedEventId: row.related_event_id,
+    readAt: row.read_at,
+    createdAt: row.created_at,
+  };
+}
+
 function mapEventOptionItem(row: EventOptionItemRow): EventOptionItem {
   return {
     id: row.id,
@@ -2682,6 +2718,9 @@ export default function Home() {
   const [externalCalendarSettingsError, setExternalCalendarSettingsError] = useState<string | null>(null);
   const [syncingExternalCalendarId, setSyncingExternalCalendarId] = useState<string | null>(null);
   const [externalCalendarSyncProgress, setExternalCalendarSyncProgress] = useState<ExternalCalendarSyncProgress | null>(null);
+  const [notifications, setNotifications] = useState<AppNotification[]>([]);
+  const [notificationsOpen, setNotificationsOpen] = useState(false);
+  const [notificationsHydrated, setNotificationsHydrated] = useState(false);
   const [online, setOnline] = useState(() => typeof navigator === "undefined" ? true : navigator.onLine);
   const [pendingSyncCount, setPendingSyncCount] = useState(0);
   const [syncingPendingActions, setSyncingPendingActions] = useState(false);
@@ -2702,6 +2741,7 @@ export default function Home() {
   const timelineTimeSaveRef = useRef<(() => Promise<void>) | null>(null);
   const processingPendingActionsRef = useRef(false);
   const pendingNetworkSyncTimeoutRef = useRef<number | null>(null);
+  const reminderNotificationKeysRef = useRef<Set<string>>(new Set());
   const onlineRef = useRef(online);
   const processPendingSyncQueueRef = useRef<((options?: { forceOnline?: boolean }) => Promise<void>) | null>(null);
   const todayKey = formatDateKey(today);
@@ -2890,6 +2930,8 @@ export default function Home() {
         setEvents([]);
         setExternalCalendars([]);
         setExternalCalendarEvents([]);
+        setNotifications([]);
+        setNotificationsHydrated(false);
         setSelectedId(null);
         setLoading(false);
         return;
@@ -3038,6 +3080,44 @@ export default function Home() {
 
   useEffect(() => {
     if (!authSession || !profile) return;
+    const cachedNotifications = getCachedNotifications(profile.id);
+    setNotifications(cachedNotifications);
+    setNotificationsHydrated(!online || cachedNotifications.length > 0);
+  }, [authSession?.user.id, online, profile?.id]);
+
+  useEffect(() => {
+    if (!authSession || !profile || !online) return;
+    void refreshNotifications({ silent: true });
+  }, [authSession?.user.id, profile?.id, online]);
+
+  useEffect(() => {
+    if (!authSession || !profile || loading || !notificationsHydrated) return;
+    const tomorrow = new Date();
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    const tomorrowKey = formatDateKey(tomorrow);
+    const todayNotificationKey = formatDateKey(new Date());
+
+    events
+      .filter((event) => !event.deletedAt && event.date === tomorrowKey)
+      .forEach((event) => {
+        const reminderKey = `${profile.id}:${event.id}:${todayNotificationKey}:tomorrow`;
+        if (reminderNotificationKeysRef.current.has(reminderKey)) return;
+        reminderNotificationKeysRef.current.add(reminderKey);
+
+        void createNotification(
+          {
+            type: "event_tomorrow",
+            title: "Événement demain",
+            body: `${event.clientName} - ${event.eventName}`,
+            relatedEventId: event.id,
+          },
+          { dedupe: true },
+        );
+      });
+  }, [authSession?.user.id, events, loading, notificationsHydrated, profile?.id]);
+
+  useEffect(() => {
+    if (!authSession || !profile) return;
     if (!online) {
       const cachedData = getCachedAppData(authSession.user.id);
       if (cachedData) {
@@ -3101,6 +3181,7 @@ export default function Home() {
             }
 
             await reloadData(undefined, { silent: true });
+            await refreshNotifications({ silent: true });
 
             if (trashOpen) {
               await refreshTrash();
@@ -3493,6 +3574,13 @@ export default function Home() {
       }
 
       await refreshExternalCalendarSettings();
+      if (rows.length >= 100) {
+        await createNotification({
+          type: "external_calendar_sync_completed",
+          title: "Calendrier synchronisé",
+          body: `${calendar.name}: ${rows.length} événements synchronisés.`,
+        });
+      }
       return { synced: rows.length, total: parsedEvents.length };
     } finally {
       setSyncingExternalCalendarId(null);
@@ -3609,9 +3697,186 @@ export default function Home() {
     }
   }
 
+  async function fetchNotifications(userId: string) {
+    if (!supabase) return [];
+
+    const { data, error: notificationsError } = await supabase
+      .from("notifications")
+      .select("*")
+      .eq("user_id", userId)
+      .order("created_at", { ascending: false })
+      .limit(80);
+
+    if (notificationsError) throw notificationsError;
+    return (data ?? []).map(mapNotification);
+  }
+
+  async function refreshNotifications(options: { silent?: boolean } = {}) {
+    if (!profile?.id || !supabase || !online) return;
+
+    try {
+      const nextNotifications = await fetchNotifications(profile.id);
+      setNotifications(nextNotifications);
+      cacheNotifications(profile.id, nextNotifications);
+    } catch (notificationsError) {
+      if (!options.silent) {
+        console.warn("Failed to load notifications.", notificationsError);
+      }
+    } finally {
+      setNotificationsHydrated(true);
+    }
+  }
+
+  function setCachedNotifications(updater: (current: AppNotification[]) => AppNotification[]) {
+    setNotifications((current) => {
+      const next = updater(current).slice(0, 80);
+      if (profile?.id) {
+        cacheNotifications(profile.id, next);
+      }
+      return next;
+    });
+  }
+
+  async function createNotification(
+    input: {
+      type: string;
+      title: string;
+      body: string;
+      relatedEventId?: string | null;
+    },
+    options: { persist?: boolean; dedupe?: boolean } = {},
+  ) {
+    if (!profile?.id) return;
+    const persist = options.persist ?? true;
+    const dedupe = options.dedupe ?? false;
+    const now = new Date().toISOString();
+    const notification: AppNotification = {
+      id: createLocalId(),
+      userId: profile.id,
+      type: input.type,
+      title: input.title,
+      body: input.body,
+      relatedEventId: input.relatedEventId ?? null,
+      readAt: null,
+      createdAt: now,
+    };
+
+    if (dedupe) {
+      const alreadyExists = notifications.some(
+        (item) =>
+          item.type === notification.type &&
+          item.relatedEventId === notification.relatedEventId &&
+          item.title === notification.title &&
+          item.body === notification.body &&
+          item.createdAt.slice(0, 10) === notification.createdAt.slice(0, 10),
+      );
+      if (alreadyExists) return;
+    }
+
+    setCachedNotifications((current) => [notification, ...current]);
+
+    if (!persist) return;
+
+    const row: Database["public"]["Tables"]["notifications"]["Insert"] = {
+      id: notification.id,
+      user_id: notification.userId,
+      type: notification.type,
+      title: notification.title,
+      body: notification.body,
+      related_event_id: notification.relatedEventId,
+      read_at: notification.readAt,
+      created_at: notification.createdAt,
+    };
+
+    if (!online) {
+      await enqueuePendingSyncAction({
+        actionType: "notification_insert",
+        entityType: "notification",
+        entityId: notification.id,
+        payload: { values: row },
+      });
+      return;
+    }
+
+    if (!supabase) return;
+    const { error: insertError } = await supabase.from("notifications").insert(row);
+    if (insertError) {
+      if (isNetworkOrUnavailableError(insertError)) {
+        await enqueuePendingSyncAction({
+          actionType: "notification_insert",
+          entityType: "notification",
+          entityId: notification.id,
+          payload: { values: row },
+        });
+        return;
+      }
+      console.warn("Failed to create notification.", insertError);
+    }
+  }
+
+  async function markNotificationRead(notification: AppNotification) {
+    if (notification.readAt) return;
+    const readAt = new Date().toISOString();
+    setCachedNotifications((current) => current.map((item) => (item.id === notification.id ? { ...item, readAt } : item)));
+
+    const values: Database["public"]["Tables"]["notifications"]["Update"] = { read_at: readAt };
+    if (!online) {
+      await enqueuePendingSyncAction({
+        actionType: "notification_update",
+        entityType: "notification",
+        entityId: notification.id,
+        payload: { values },
+      });
+      return;
+    }
+
+    if (!supabase) return;
+    const { error: updateError } = await supabase.from("notifications").update(values).eq("id", notification.id);
+    if (updateError) {
+      if (isNetworkOrUnavailableError(updateError)) {
+        await enqueuePendingSyncAction({
+          actionType: "notification_update",
+          entityType: "notification",
+          entityId: notification.id,
+          payload: { values },
+        });
+        return;
+      }
+      console.warn("Failed to mark notification as read.", updateError);
+    }
+  }
+
+  async function markAllNotificationsRead() {
+    const unreadNotifications = notifications.filter((item) => !item.readAt);
+    if (unreadNotifications.length === 0) return;
+    await Promise.all(unreadNotifications.map((notification) => markNotificationRead(notification)));
+  }
+
+  function handleNotificationOpen(notification: AppNotification) {
+    void markNotificationRead(notification);
+    setNotificationsOpen(false);
+    if (notification.relatedEventId) {
+      openEvent(notification.relatedEventId);
+    }
+  }
+
   async function executePendingSyncAction(action: PendingSyncAction) {
     if (!supabase) throw new Error("Configuration Supabase manquante.");
     const activity = action.payload.activity as PendingActivityPayload | null | undefined;
+
+    if (action.actionType === "notification_insert") {
+      const values = action.payload.values as Database["public"]["Tables"]["notifications"]["Insert"];
+      const { error: insertError } = await supabase.from("notifications").insert(values);
+      if (insertError) throw insertError;
+      return;
+    }
+
+    if (action.actionType === "notification_update") {
+      const values = action.payload.values as Database["public"]["Tables"]["notifications"]["Update"];
+      const { error: updateError } = await supabase.from("notifications").update(values).eq("id", action.entityId);
+      if (updateError) throw updateError;
+      return;
+    }
 
     if (action.actionType === "event_insert") {
       const values = action.payload.values as Database["public"]["Tables"]["events"]["Insert"];
@@ -3793,6 +4058,16 @@ export default function Home() {
     await putPendingSyncAction(action);
     setPendingSyncError(null);
     await refreshPendingSyncState();
+    if (!input.actionType.startsWith("notification_")) {
+      void createNotification(
+        {
+          type: "sync_pending",
+          title: "Modifications en attente",
+          body: "Elles seront synchronisées au retour du réseau.",
+        },
+        { persist: false, dedupe: true },
+      );
+    }
     if (online) {
       schedulePendingSyncReplay("enqueue");
     }
@@ -3807,6 +4082,7 @@ export default function Home() {
     try {
       const actions = (await getPendingSyncActions()).filter((action) => action.status === "pending" || action.status === "failed");
       let syncedSomething = false;
+      let syncedOperationalAction = false;
 
       for (const action of actions) {
         const syncingAction: PendingSyncAction = {
@@ -3821,6 +4097,9 @@ export default function Home() {
           await executePendingSyncAction(syncingAction);
           await deletePendingSyncAction(syncingAction.id);
           syncedSomething = true;
+          if (!syncingAction.actionType.startsWith("notification_")) {
+            syncedOperationalAction = true;
+          }
         } catch (syncError) {
           const message = getUserFacingErrorMessage(syncError, "Synchronisation impossible.");
           await putPendingSyncAction({
@@ -3831,6 +4110,16 @@ export default function Home() {
             updatedAt: new Date().toISOString(),
           });
           setPendingSyncError(message);
+          if (!syncingAction.actionType.startsWith("notification_")) {
+            void createNotification(
+              {
+                type: "sync_failed",
+                title: "Synchronisation impossible",
+                body: message,
+              },
+              { persist: false, dedupe: true },
+            );
+          }
           if (isNetworkOrUnavailableError(syncError)) break;
         } finally {
           await refreshPendingSyncState();
@@ -3839,6 +4128,16 @@ export default function Home() {
 
       if (syncedSomething) {
         await reloadData(selectedId, { silent: true });
+      }
+      if (syncedOperationalAction) {
+        await createNotification(
+          {
+            type: "sync_completed",
+            title: "Synchronisation terminée",
+            body: "Les modifications en attente ont été envoyées.",
+          },
+          { dedupe: true },
+        );
       }
     } finally {
       processingPendingActionsRef.current = false;
@@ -4891,9 +5190,20 @@ export default function Home() {
         completedAt: updatePayload.completed_at ?? null,
       },
     };
+    const parentEvent = events.find((event) => event.id === option.eventId);
+    function notifyOptionCompleted() {
+      if (nextStatus !== "completed") return;
+      void createNotification({
+        type: "option_completed",
+        title: "Option marquée Fait",
+        body: `${option.label}${parentEvent ? ` - ${parentEvent.clientName}` : ""}`,
+        relatedEventId: option.eventId,
+      });
+    }
 
     if (!online) {
       applyOptimisticOption();
+      notifyOptionCompleted();
       await enqueuePendingSyncAction({
         actionType: "option_update",
         entityType: "option",
@@ -4908,6 +5218,7 @@ export default function Home() {
     if (updateError) {
       if (isNetworkOrUnavailableError(updateError)) {
         applyOptimisticOption();
+        notifyOptionCompleted();
         await enqueuePendingSyncAction({
           actionType: "option_update",
           entityType: "option",
@@ -4921,6 +5232,7 @@ export default function Home() {
     }
 
     applyOptimisticOption();
+    notifyOptionCompleted();
 
     await logEventActivity({
       ...activity,
@@ -5532,6 +5844,14 @@ export default function Home() {
         ),
       );
     }
+    function notifyOptionNoteAdded() {
+      void createNotification({
+        type: "option_note_added",
+        title: "Note ajoutée",
+        body: `${option.label}: ${nextLabel.length > 64 ? `${nextLabel.slice(0, 61)}...` : nextLabel}`,
+        relatedEventId: option.eventId,
+      });
+    }
 
     if (!online) {
       const optionItem: EventOptionItem = {
@@ -5546,6 +5866,7 @@ export default function Home() {
         }),
       };
       applyOptimisticItem(optionItem);
+      notifyOptionNoteAdded();
       await enqueuePendingSyncAction({
         actionType: "option_item_insert",
         entityType: "option_item",
@@ -5575,6 +5896,7 @@ export default function Home() {
           }),
         };
         applyOptimisticItem(optionItem);
+        notifyOptionNoteAdded();
         await enqueuePendingSyncAction({
           actionType: "option_item_insert",
           entityType: "option_item",
@@ -5597,6 +5919,7 @@ export default function Home() {
     const optionItem = mapEventOptionItem(data);
 
     applyOptimisticItem(optionItem);
+    notifyOptionNoteAdded();
 
     return optionItem;
   }
@@ -6220,6 +6543,13 @@ export default function Home() {
       newValue: { fileName: document.fileName, groupId: group.id, groupLabel: group.label },
     });
 
+    await createNotification({
+      type: "document_uploaded",
+      title: "Document ajouté",
+      body: `${group.label}: ${document.fileName}`,
+      relatedEventId: group.eventId,
+    });
+
     return document;
   }
 
@@ -6636,11 +6966,14 @@ export default function Home() {
     if (userId) {
       removeLocalStorageKey(`${cachedProfileKeyPrefix}${userId}`);
       removeLocalStorageKey(`${cachedAppDataKeyPrefix}${userId}`);
+      removeLocalStorageKey(`${cachedNotificationsKeyPrefix}${userId}`);
     }
     removeLocalStorageKey(cachedAuthSessionKey);
     setAuthSession(null);
     setProfile(null);
     setEvents([]);
+    setNotifications([]);
+    setNotificationsHydrated(false);
     setSelectedId(null);
     setScreen("calendar");
     setCreateMenuOpen(false);
@@ -6734,6 +7067,11 @@ export default function Home() {
           pendingSyncCount={pendingSyncCount}
           syncingPendingActions={syncingPendingActions}
           pendingSyncError={pendingSyncError}
+          notifications={notifications}
+          notificationsOpen={notificationsOpen && !yearOverviewOpen}
+          setNotificationsOpen={setNotificationsOpen}
+          onOpenNotification={handleNotificationOpen}
+          onMarkAllNotificationsRead={markAllNotificationsRead}
           onImportQuote={() => {
             if (!headerPermissions.canManageEvents) return;
             openQuoteImport();
@@ -6879,6 +7217,11 @@ export default function Home() {
           pendingSyncCount={pendingSyncCount}
           syncingPendingActions={syncingPendingActions}
           pendingSyncError={pendingSyncError}
+          notifications={notifications}
+          notificationsOpen={notificationsOpen}
+          setNotificationsOpen={setNotificationsOpen}
+          onOpenNotification={handleNotificationOpen}
+          onMarkAllNotificationsRead={markAllNotificationsRead}
           onGoToday={() => {
             goToday();
             setYearOverviewOpen(false);
@@ -7067,6 +7410,14 @@ export default function Home() {
             } catch (syncError) {
               console.error("External calendar sync failed", syncError);
               setExternalCalendarSettingsError(getUserFacingErrorMessage(syncError, "Impossible de synchroniser ce calendrier."));
+              void createNotification(
+                {
+                  type: "external_calendar_sync_failed",
+                  title: "Synchronisation calendrier échouée",
+                  body: calendar.name,
+                },
+                { persist: false, dedupe: true },
+              );
               throw syncError;
             }
           }}
@@ -7134,6 +7485,11 @@ function AppHeader({
   pendingSyncCount,
   syncingPendingActions,
   pendingSyncError,
+  notifications,
+  notificationsOpen,
+  setNotificationsOpen,
+  onOpenNotification,
+  onMarkAllNotificationsRead,
   onImportQuote,
   onImportNativeMstvCalendar,
   onSearch,
@@ -7172,6 +7528,11 @@ function AppHeader({
   pendingSyncCount: number;
   syncingPendingActions: boolean;
   pendingSyncError: string | null;
+  notifications: AppNotification[];
+  notificationsOpen: boolean;
+  setNotificationsOpen: (open: boolean | ((current: boolean) => boolean)) => void;
+  onOpenNotification: (notification: AppNotification) => void;
+  onMarkAllNotificationsRead: () => void;
   onImportQuote: () => void;
   onImportNativeMstvCalendar: () => void;
   onSearch: () => void;
@@ -7192,6 +7553,7 @@ function AppHeader({
 }) {
   const menuWrapperRef = useRef<HTMLDivElement | null>(null);
   const hasCreateMenuActions = canImportQuote || canImportNativeMstvCalendar || canCreateEvent || canDuplicateEvent || canDeleteEvent || canOpenTrash;
+  const unreadNotificationCount = notifications.filter((notification) => !notification.readAt).length;
 
   useEffect(() => {
     if (!createMenuOpen) return;
@@ -7255,6 +7617,14 @@ function AppHeader({
         )}
         {canOpenHistory && <HeaderIcon label="Historique" icon={History} onClick={onOpenHistory} />}
         <HeaderIcon label="Rechercher" icon={Search} onClick={onSearch} />
+        <NotificationMenu
+          notifications={notifications}
+          unreadCount={unreadNotificationCount}
+          open={notificationsOpen}
+          setOpen={setNotificationsOpen}
+          onOpenNotification={onOpenNotification}
+          onMarkAllRead={onMarkAllNotificationsRead}
+        />
         {hasCreateMenuActions && (
           <div ref={menuWrapperRef} className="relative">
             <button
@@ -7522,6 +7892,11 @@ function YearOverviewOverlay({
   pendingSyncCount,
   syncingPendingActions,
   pendingSyncError,
+  notifications,
+  notificationsOpen,
+  setNotificationsOpen,
+  onOpenNotification,
+  onMarkAllNotificationsRead,
   onGoToday,
   onImportQuote,
   onImportNativeMstvCalendar,
@@ -7552,6 +7927,11 @@ function YearOverviewOverlay({
   pendingSyncCount: number;
   syncingPendingActions: boolean;
   pendingSyncError: string | null;
+  notifications: AppNotification[];
+  notificationsOpen: boolean;
+  setNotificationsOpen: (open: boolean | ((current: boolean) => boolean)) => void;
+  onOpenNotification: (notification: AppNotification) => void;
+  onMarkAllNotificationsRead: () => void;
   onGoToday: () => void;
   onImportQuote: () => void;
   onImportNativeMstvCalendar: () => void;
@@ -7787,6 +8167,11 @@ function YearOverviewOverlay({
           pendingSyncCount={pendingSyncCount}
           syncingPendingActions={syncingPendingActions}
           pendingSyncError={pendingSyncError}
+          notifications={notifications}
+          notificationsOpen={notificationsOpen}
+          setNotificationsOpen={setNotificationsOpen}
+          onOpenNotification={onOpenNotification}
+          onMarkAllNotificationsRead={onMarkAllNotificationsRead}
           onImportQuote={onImportQuote}
           onImportNativeMstvCalendar={onImportNativeMstvCalendar}
           onSearch={onSearch}
@@ -13335,6 +13720,124 @@ function TimelineKeyboardAccessoryBar({
           OK
         </button>
       </div>
+    </div>
+  );
+}
+
+function formatNotificationRelativeTime(dateValue: string) {
+  const timestamp = new Date(dateValue).getTime();
+  if (Number.isNaN(timestamp)) return "";
+  const diffMs = Math.max(0, Date.now() - timestamp);
+  const diffMinutes = Math.floor(diffMs / 60000);
+  if (diffMinutes < 1) return "À l'instant";
+  if (diffMinutes < 60) return `${diffMinutes} min`;
+  const diffHours = Math.floor(diffMinutes / 60);
+  if (diffHours < 24) return `${diffHours} h`;
+  const diffDays = Math.floor(diffHours / 24);
+  if (diffDays < 7) return `${diffDays} j`;
+  return formatHistoryTimestamp(dateValue);
+}
+
+function NotificationMenu({
+  notifications,
+  unreadCount,
+  open,
+  setOpen,
+  onOpenNotification,
+  onMarkAllRead,
+}: {
+  notifications: AppNotification[];
+  unreadCount: number;
+  open: boolean;
+  setOpen: (open: boolean | ((current: boolean) => boolean)) => void;
+  onOpenNotification: (notification: AppNotification) => void;
+  onMarkAllRead: () => void;
+}) {
+  const wrapperRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (!open) return;
+
+    function handlePointerDown(event: PointerEvent) {
+      const target = event.target;
+      if (!(target instanceof Node)) return;
+      if (wrapperRef.current?.contains(target)) return;
+      setOpen(false);
+    }
+
+    document.addEventListener("pointerdown", handlePointerDown);
+    return () => document.removeEventListener("pointerdown", handlePointerDown);
+  }, [open, setOpen]);
+
+  return (
+    <div ref={wrapperRef} className="relative">
+      <button
+        type="button"
+        onClick={() => setOpen((current) => !current)}
+        className="relative flex h-10 w-10 items-center justify-center rounded-full border border-stone-200 bg-white text-stone-600 transition hover:bg-stone-50"
+        title="Notifications"
+        aria-label="Notifications"
+      >
+        <Bell className="h-4 w-4" />
+        {unreadCount > 0 && (
+          <span className="absolute right-2 top-2 h-2.5 w-2.5 rounded-full border border-white bg-[#bb2720]" aria-hidden="true" />
+        )}
+      </button>
+      {open && (
+        <div className="absolute right-0 top-12 z-40 w-[min(22rem,calc(100vw-2rem))] overflow-hidden rounded-2xl border border-stone-200 bg-white/95 text-left backdrop-blur-xl">
+          <div className="flex items-center justify-between gap-3 border-b border-stone-100 px-3 py-2.5">
+            <div>
+              <p className="text-sm font-semibold text-stone-950">Notifications</p>
+              <p className="text-xs font-medium text-stone-500">
+                {unreadCount > 0 ? `${unreadCount} non lue${unreadCount > 1 ? "s" : ""}` : "Tout est à jour"}
+              </p>
+            </div>
+            {unreadCount > 0 && (
+              <button
+                type="button"
+                onClick={onMarkAllRead}
+                className="rounded-full px-2.5 py-1 text-xs font-semibold text-[#bb2720] transition hover:bg-[#bb2720]/[0.06]"
+              >
+                Tout lire
+              </button>
+            )}
+          </div>
+          <div className="max-h-[min(28rem,70vh)] overflow-y-auto p-1.5">
+            {notifications.length === 0 ? (
+              <div className="px-3 py-6 text-center text-sm font-medium text-stone-400">Aucune notification</div>
+            ) : (
+              notifications.map((notification) => (
+                <button
+                  key={notification.id}
+                  type="button"
+                  onClick={() => onOpenNotification(notification)}
+                  className={cn(
+                    "block w-full rounded-xl px-3 py-2.5 text-left transition hover:bg-stone-50",
+                    !notification.readAt && "bg-[#bb2720]/[0.04]",
+                  )}
+                >
+                  <div className="flex items-start gap-2">
+                    <span
+                      className={cn(
+                        "mt-1.5 h-2 w-2 shrink-0 rounded-full",
+                        notification.readAt ? "bg-stone-200" : "bg-[#bb2720]",
+                      )}
+                      aria-hidden="true"
+                    />
+                    <span className="min-w-0 flex-1">
+                      <span className="flex items-start justify-between gap-3">
+                        <span className="truncate text-sm font-semibold text-stone-900">{notification.title}</span>
+                        <span className="shrink-0 text-xs font-medium text-stone-400">{formatNotificationRelativeTime(notification.createdAt)}</span>
+                      </span>
+                      <span className="mt-0.5 line-clamp-2 text-xs font-medium leading-snug text-stone-500">{notification.body}</span>
+                    </span>
+                  </div>
+                </button>
+              ))
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
