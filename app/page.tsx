@@ -3804,7 +3804,6 @@ export default function Home() {
     if (!importantNotificationTypes.has(input.type)) return;
     if (!profile?.id) return;
     const persist = options.persist ?? true;
-    const dedupe = options.dedupe ?? false;
     const now = new Date().toISOString();
     const notification: AppNotification = {
       id: createLocalId(),
@@ -3816,18 +3815,6 @@ export default function Home() {
       readAt: null,
       createdAt: now,
     };
-
-    if (dedupe) {
-      const alreadyExists = notifications.some(
-        (item) =>
-          item.type === notification.type &&
-          item.relatedEventId === notification.relatedEventId &&
-          item.title === notification.title &&
-          item.body === notification.body &&
-          item.createdAt.slice(0, 10) === notification.createdAt.slice(0, 10),
-      );
-      if (alreadyExists) return;
-    }
 
     setCachedNotifications((current) => [notification, ...current]);
 
