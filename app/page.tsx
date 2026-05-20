@@ -3369,6 +3369,30 @@ export default function Home() {
       ),
     [externalCalendars],
   );
+  const connectedGoogleAccountCount = useMemo(
+    () => googleCalendarAccounts.filter((account) => account.connectionStatus === "connected").length,
+    [googleCalendarAccounts],
+  );
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const providerCalendars = Object.values(googleCalendarsByAccountId).flat();
+    const writableProviderCalendars = providerCalendars.filter((calendar) => calendar.writable);
+    console.info("Google calendar write destination debug", {
+      connectedGoogleAccountCount,
+      writableGoogleProviderCalendarCount: writableProviderCalendars.length,
+      syncEnabledGoogleProviderCalendarCount: writableProviderCalendars.filter((calendar) => calendar.enabled).length,
+      writableGoogleCalendarCount: writableGoogleCalendars.length,
+      selectedSyncEnabledCalendars: writableGoogleCalendars.map((calendar) => ({
+        id: calendar.id,
+        name: calendar.name,
+        providerAccountIdPresent: Boolean(calendar.providerAccountId),
+        providerCalendarIdPresent: Boolean(calendar.providerCalendarId),
+        syncCapability: calendar.syncCapability,
+        syncEnabled: calendar.syncEnabled,
+      })),
+    });
+  }, [googleCalendarAccounts, googleCalendarsByAccountId, writableGoogleCalendars]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -4073,6 +4097,7 @@ export default function Home() {
       const nextCalendarsByAccountId = payload?.calendarsByAccountId ?? {};
       setGoogleCalendarAccounts(nextAccounts);
       setGoogleCalendarsByAccountId(nextCalendarsByAccountId);
+      void refreshExternalCalendarSettings();
 
       if (nextAccounts.length === 0) {
         setExternalCalendarSettingsError("Compte Google non connecté.");
@@ -8422,6 +8447,7 @@ export default function Home() {
           selectedDateKey={selectedDateKey}
           event={editingEvent}
           syncCalendars={writableGoogleCalendars}
+          connectedGoogleAccountCount={connectedGoogleAccountCount}
           onClose={() => {
             setCreateModalOpen(false);
             setEditingEvent(null);
@@ -12763,12 +12789,14 @@ function CreateEventModal({
   selectedDateKey,
   event,
   syncCalendars,
+  connectedGoogleAccountCount,
   onClose,
   onSubmit,
 }: {
   selectedDateKey: string;
   event: ProductionEvent | null;
   syncCalendars: ExternalCalendar[];
+  connectedGoogleAccountCount: number;
   onClose: () => void;
   onSubmit: (input: CreateEventInput) => Promise<void>;
 }) {
@@ -12849,20 +12877,31 @@ function CreateEventModal({
           <Field label="Fin journée">
             <TimeTextInput value={form.endOfDayTime} onChange={(value) => updateField("endOfDayTime", value)} className={formInputClassName} />
           </Field>
-          {!isEditing && syncCalendars.length > 0 && (
-            <Field label="Calendrier">
-              <select
-                value={form.syncExternalCalendarId ?? ""}
-                onChange={(event) => updateField("syncExternalCalendarId", event.target.value || null)}
-                className={formInputClassName}
-              >
-                <option value="">MSTV uniquement</option>
-                {syncCalendars.map((calendar) => (
-                  <option key={calendar.id} value={calendar.id}>
-                    {calendar.name} · Google
-                  </option>
-                ))}
-              </select>
+          {!isEditing && (
+            <Field label="Destination">
+              <div className="space-y-1.5">
+                <select
+                  value={form.syncExternalCalendarId ?? ""}
+                  onChange={(event) => updateField("syncExternalCalendarId", event.target.value || null)}
+                  disabled={syncCalendars.length === 0}
+                  className={cn(formInputClassName, syncCalendars.length === 0 && "bg-stone-50 text-stone-400")}
+                >
+                  <option value="">MSTV uniquement</option>
+                  {syncCalendars.map((calendar) => (
+                    <option key={calendar.id} value={calendar.id}>
+                      {calendar.name} · Google
+                    </option>
+                  ))}
+                </select>
+                {syncCalendars.length === 0 ? (
+                  <p className="text-sm font-semibold text-stone-400">Aucun calendrier externe bidirectionnel disponible.</p>
+                ) : (
+                  <p className="text-sm font-semibold text-stone-400">MSTV uniquement ou synchronisation vers Google Calendar.</p>
+                )}
+                <p className="text-xs font-semibold text-stone-300">
+                  Debug temporaire: comptes Google connectés {connectedGoogleAccountCount} · calendriers écriture {syncCalendars.length}
+                </p>
+              </div>
             </Field>
           )}
         </div>

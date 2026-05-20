@@ -35,6 +35,72 @@ function isGoogleCalendarWritable(accessRole?: string) {
   return accessRole === "owner" || accessRole === "writer";
 }
 
+async function findStoredGoogleCalendar(
+  supabase: ReturnType<typeof getServiceSupabaseClient>,
+  input: { accountId: string; providerCalendarId: string; userId: string },
+) {
+  const { data, error } = await supabase
+    .from("external_calendars")
+    .select("id, provider_account_id, provider_calendar_id, sync_enabled, visibility, color")
+    .eq("provider_account_id", input.accountId)
+    .eq("provider_calendar_id", input.providerCalendarId)
+    .eq("created_by_profile_id", input.userId)
+    .limit(1)
+    .maybeSingle();
+
+  if (error) throw error;
+  return data;
+}
+
+async function materializeWritableGoogleCalendar(
+  supabase: ReturnType<typeof getServiceSupabaseClient>,
+  input: {
+    account: StoredGoogleAccount;
+    userId: string;
+    providerCalendarId: string;
+    name: string;
+    color: string | null;
+  },
+) {
+  const existingCalendar = await findStoredGoogleCalendar(supabase, {
+    accountId: input.account.id,
+    providerCalendarId: input.providerCalendarId,
+    userId: input.userId,
+  });
+
+  if (existingCalendar) return existingCalendar;
+
+  const now = new Date().toISOString();
+  const { data, error } = await supabase
+    .from("external_calendars")
+    .insert({
+      name: input.name || "Google Calendar",
+      ics_url: "",
+      color: input.color ?? "blue",
+      visibility: "private",
+      provider_type: "google",
+      provider_account_id: input.account.id,
+      provider_calendar_id: input.providerCalendarId,
+      sync_capability: "bidirectional",
+      sync_enabled: true,
+      last_sync_status: "idle",
+      last_sync_error: null,
+      created_by_profile_id: input.userId,
+      created_by_name: input.account.display_name ?? input.account.provider_account_email ?? input.account.provider_email,
+      created_at: now,
+    })
+    .select("id, provider_account_id, provider_calendar_id, sync_enabled, visibility, color")
+    .single();
+
+  if (error) throw error;
+  console.info("Google writable calendar materialized for event write UI", {
+    accountId: input.account.id,
+    providerCalendarId: input.providerCalendarId,
+    externalCalendarId: data.id,
+  });
+  return data;
+}
+
 async function listGoogleCalendars(request: Request) {
   try {
     console.info("Google calendars list route reached");
@@ -99,20 +165,33 @@ async function listGoogleCalendars(request: Request) {
           accountId: account.id,
           calendarCount: googleCalendars.length,
         });
-        calendarsByAccountId[account.id] = googleCalendars.map((calendar) => {
-          const enabledCalendar = enabledByProviderId.get(`${account.id}:${calendar.id}`);
-          return {
+        const safeCalendars = [];
+        for (const calendar of googleCalendars) {
+          const writable = isGoogleCalendarWritable(calendar.accessRole);
+          let enabledCalendar = enabledByProviderId.get(`${account.id}:${calendar.id}`);
+          if (writable && !enabledCalendar) {
+            enabledCalendar = await materializeWritableGoogleCalendar(supabase, {
+              account,
+              userId: authResult.user.id,
+              providerCalendarId: calendar.id,
+              name: calendar.summary,
+              color: calendar.backgroundColor ?? null,
+            });
+            enabledByProviderId.set(`${account.id}:${calendar.id}`, enabledCalendar);
+          }
+          safeCalendars.push({
             providerCalendarId: calendar.id,
             summary: calendar.summary,
             primary: Boolean(calendar.primary),
             accessRole: calendar.accessRole ?? null,
-            writable: isGoogleCalendarWritable(calendar.accessRole),
+            writable,
             enabled: Boolean(enabledCalendar?.sync_enabled),
             externalCalendarId: enabledCalendar?.id ?? null,
             color: enabledCalendar?.color ?? calendar.backgroundColor ?? null,
             visibility: enabledCalendar?.visibility ?? "private",
-          };
-        });
+          });
+        }
+        calendarsByAccountId[account.id] = safeCalendars;
       } catch (calendarError) {
         const message = calendarError instanceof Error ? calendarError.message : "Impossible de charger les calendriers Google.";
         console.error("Google calendars fetch failed for account", {
@@ -186,12 +265,35 @@ export async function POST(request: Request) {
       return googleJsonResponse({ ok: true, enabled: false });
     }
 
-    const now = new Date().toISOString();
     const visibility = body.visibility === "admin_only" || body.visibility === "team" ? body.visibility : "private";
-    const { data, error } = await supabase
-      .from("external_calendars")
-      .upsert(
-        {
+    const existingCalendar = await findStoredGoogleCalendar(supabase, {
+      accountId: account.id,
+      providerCalendarId,
+      userId: authResult.user.id,
+    });
+
+    let calendarId: string;
+    if (existingCalendar?.id) {
+      const { error } = await supabase
+        .from("external_calendars")
+        .update({
+          name: body.name?.trim() || "Google Calendar",
+          color: body.color ?? "blue",
+          visibility,
+          sync_enabled: true,
+          sync_capability: "bidirectional",
+          last_sync_status: "idle",
+          last_sync_error: null,
+        })
+        .eq("id", existingCalendar.id);
+
+      if (error) throw error;
+      calendarId = existingCalendar.id;
+    } else {
+      const now = new Date().toISOString();
+      const { data, error } = await supabase
+        .from("external_calendars")
+        .insert({
           name: body.name?.trim() || "Google Calendar",
           ics_url: "",
           color: body.color ?? "blue",
@@ -206,14 +308,15 @@ export async function POST(request: Request) {
           created_by_profile_id: authResult.user.id,
           created_by_name: account.display_name ?? account.provider_account_email ?? account.provider_email,
           created_at: now,
-        },
-        { onConflict: "provider_account_id,provider_calendar_id" },
-      )
-      .select()
-      .single();
+        })
+        .select("id")
+        .single();
 
-    if (error) throw error;
-    return googleJsonResponse({ ok: true, enabled: true, calendarId: data.id });
+      if (error) throw error;
+      calendarId = data.id;
+    }
+
+    return googleJsonResponse({ ok: true, enabled: true, calendarId });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Impossible de modifier ce calendrier Google.";
     console.error("Google calendars POST failed", { message });
