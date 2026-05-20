@@ -777,6 +777,7 @@ const cachedProfileKeyPrefix = "mstv.cachedProfile.";
 const cachedProfileMetaKeyPrefix = "mstv.cachedProfileMeta.";
 const cachedAppDataKeyPrefix = "mstv.cachedAppData.";
 const cachedNotificationsKeyPrefix = "mstv.cachedNotifications.";
+const importantNotificationTypes = new Set(["event_created", "event_date_changed", "event_time_changed", "event_deleted"]);
 const calendarArrowClassName =
   "flex h-9 w-9 items-center justify-center rounded-full text-base text-[#bb2720] transition hover:bg-[#bb2720]/[0.08] disabled:cursor-not-allowed disabled:text-stone-300 disabled:hover:bg-transparent";
 
@@ -2771,7 +2772,6 @@ export default function Home() {
   const timelineTimeSaveRef = useRef<(() => Promise<void>) | null>(null);
   const processingPendingActionsRef = useRef(false);
   const pendingNetworkSyncTimeoutRef = useRef<number | null>(null);
-  const reminderNotificationKeysRef = useRef<Set<string>>(new Set());
   const onlineRef = useRef(online);
   const processPendingSyncQueueRef = useRef<((options?: { forceOnline?: boolean }) => Promise<void>) | null>(null);
   const todayKey = formatDateKey(today);
@@ -3146,32 +3146,6 @@ export default function Home() {
       dragging: false,
     });
   }, [screen]);
-
-  useEffect(() => {
-    if (!authSession || !profile || loading || !notificationsHydrated) return;
-    const tomorrow = new Date();
-    tomorrow.setDate(tomorrow.getDate() + 1);
-    const tomorrowKey = formatDateKey(tomorrow);
-    const todayNotificationKey = formatDateKey(new Date());
-
-    events
-      .filter((event) => !event.deletedAt && event.date === tomorrowKey)
-      .forEach((event) => {
-        const reminderKey = `${profile.id}:${event.id}:${todayNotificationKey}:tomorrow`;
-        if (reminderNotificationKeysRef.current.has(reminderKey)) return;
-        reminderNotificationKeysRef.current.add(reminderKey);
-
-        void createNotification(
-          {
-            type: "event_tomorrow",
-            title: "Événement demain",
-            body: `${event.clientName} - ${event.eventName}`,
-            relatedEventId: event.id,
-          },
-          { dedupe: true },
-        );
-      });
-  }, [authSession?.user.id, events, loading, notificationsHydrated, profile?.id]);
 
   useEffect(() => {
     if (!authSession || !profile) return;
@@ -3803,6 +3777,7 @@ export default function Home() {
     },
     options: { persist?: boolean; dedupe?: boolean } = {},
   ) {
+    if (!importantNotificationTypes.has(input.type)) return;
     if (!profile?.id) return;
     const persist = options.persist ?? true;
     const dedupe = options.dedupe ?? false;
@@ -3874,7 +3849,7 @@ export default function Home() {
   async function markNotificationRead(notification: AppNotification) {
     if (notification.readAt) return;
     const readAt = new Date().toISOString();
-    setCachedNotifications((current) => current.map((item) => (item.id === notification.id ? { ...item, readAt } : item)));
+    setCachedNotifications((current) => current.filter((item) => item.id !== notification.id));
 
     const values: Database["public"]["Tables"]["notifications"]["Update"] = { read_at: readAt };
     if (!online) {
@@ -3901,12 +3876,6 @@ export default function Home() {
       }
       console.warn("Failed to mark notification as read.", updateError);
     }
-  }
-
-  async function markAllNotificationsRead() {
-    const unreadNotifications = notifications.filter((item) => !item.readAt);
-    if (unreadNotifications.length === 0) return;
-    await Promise.all(unreadNotifications.map((notification) => markNotificationRead(notification)));
   }
 
   function handleNotificationOpen(notification: AppNotification) {
@@ -4477,6 +4446,15 @@ export default function Home() {
         entityId: eventId,
         payload: { values: eventInsertPayload, activity },
       });
+      await createNotification(
+        {
+          type: "event_created",
+          title: "Événement créé",
+          body: `${normalizedInput.clientName} - ${normalizedInput.eventName}`,
+          relatedEventId: eventId,
+        },
+        { dedupe: true },
+      );
       for (const option of offlineOptions) {
         await enqueuePendingSyncAction({
           actionType: "option_insert",
@@ -4563,6 +4541,15 @@ export default function Home() {
         date: normalizedInput.date,
       },
     });
+    await createNotification(
+      {
+        type: "event_created",
+        title: "Événement créé",
+        body: `${normalizedInput.clientName} - ${normalizedInput.eventName}`,
+        relatedEventId: event.id,
+      },
+      { dedupe: true },
+    );
 
     if (normalizedInput.sourceQuoteText || normalizedInput.quoteReference) {
       await logEventActivity({
@@ -4717,6 +4704,15 @@ export default function Home() {
         previousValue: { date: event.date },
         newValue: { date: updatedEvent.date },
       });
+      await createNotification(
+        {
+          type: "event_date_changed",
+          title: "Date modifiée",
+          body: `${updatedEvent.clientName} - ${formatFullDate(updatedEvent.date)}`,
+          relatedEventId: event.id,
+        },
+        { dedupe: true },
+      );
     }
 
     for (const field of ["clientArrivalTime", "startTime", "endTime", "endOfDayTime"] as EventTimeField[]) {
@@ -4733,6 +4729,15 @@ export default function Home() {
         previousValue: { field, value: previousValue },
         newValue: { field, value: nextValue },
       });
+      await createNotification(
+        {
+          type: "event_time_changed",
+          title: "Horaire modifié",
+          body: `${updatedEvent.clientName} - ${getEventTimeFieldLabel(field)}: ${formatTime(nextValue) || "Non défini"}`,
+          relatedEventId: event.id,
+        },
+        { dedupe: true },
+      );
     }
   }
 
@@ -4851,6 +4856,34 @@ export default function Home() {
         quoteVersion: updatePayload.quote_version ?? null,
       },
     });
+
+    if (event.date !== normalizedInput.date) {
+      await createNotification(
+        {
+          type: "event_date_changed",
+          title: "Date modifiée",
+          body: `${normalizedInput.clientName} - ${formatFullDate(normalizedInput.date)}`,
+          relatedEventId: event.id,
+        },
+        { dedupe: true },
+      );
+    }
+
+    for (const field of ["clientArrivalTime", "startTime", "endTime", "endOfDayTime"] as EventTimeField[]) {
+      const previousValue = toTimeInputValue(event[field]) || null;
+      const nextValue = toTimeInputValue(normalizedInput[field]) || null;
+      if (previousValue === nextValue) continue;
+
+      await createNotification(
+        {
+          type: "event_time_changed",
+          title: "Horaire modifié",
+          body: `${normalizedInput.clientName} - ${getEventTimeFieldLabel(field)}: ${formatTime(nextValue) || "Non défini"}`,
+          relatedEventId: event.id,
+        },
+        { dedupe: true },
+      );
+    }
 
     await reloadData(event.id);
     setSelectedDateKey(normalizedInput.date);
@@ -4996,6 +5029,15 @@ export default function Home() {
         date: normalizedDate,
       },
     });
+    await createNotification(
+      {
+        type: "event_created",
+        title: "Événement créé",
+        body: `${sourceEvent.clientName} - ${sourceEvent.eventName}`,
+        relatedEventId: duplicatedEvent.id,
+      },
+      { dedupe: true },
+    );
 
     await reloadData(duplicatedEvent.id);
     setSelectedDateKey(normalizedDate);
@@ -5058,6 +5100,17 @@ export default function Home() {
         entityId: event.id,
         payload: { values: updatePayload, activity },
       });
+      if (previousValue !== nextValue) {
+        await createNotification(
+          {
+            type: "event_time_changed",
+            title: "Horaire modifié",
+            body: `${event.clientName} - ${getEventTimeFieldLabel(field)}: ${formatTime(nextValue) || "Non défini"}`,
+            relatedEventId: event.id,
+          },
+          { dedupe: true },
+        );
+      }
       return;
     }
 
@@ -5072,6 +5125,17 @@ export default function Home() {
           entityId: event.id,
           payload: { values: updatePayload, activity },
         });
+        if (previousValue !== nextValue) {
+          await createNotification(
+            {
+              type: "event_time_changed",
+              title: "Horaire modifié",
+              body: `${event.clientName} - ${getEventTimeFieldLabel(field)}: ${formatTime(nextValue) || "Non défini"}`,
+              relatedEventId: event.id,
+            },
+            { dedupe: true },
+          );
+        }
         return;
       }
       throw updateError;
@@ -5104,6 +5168,15 @@ export default function Home() {
         previousValue: { field, value: previousValue },
         newValue: { field, value: updatedValue },
       });
+      await createNotification(
+        {
+          type: "event_time_changed",
+          title: "Horaire modifié",
+          body: `${event.clientName} - ${getEventTimeFieldLabel(field)}: ${formatTime(updatedValue) || "Non défini"}`,
+          relatedEventId: event.id,
+        },
+        { dedupe: true },
+      );
     }
   }
 
@@ -5159,6 +5232,17 @@ export default function Home() {
         entityId: event.id,
         payload: { values: updatePayload, activity },
       });
+      if (event.date !== normalizedDate) {
+        await createNotification(
+          {
+            type: "event_date_changed",
+            title: "Date modifiée",
+            body: `${event.clientName} - ${formatFullDate(normalizedDate)}`,
+            relatedEventId: event.id,
+          },
+          { dedupe: true },
+        );
+      }
       return;
     }
 
@@ -5173,6 +5257,17 @@ export default function Home() {
           entityId: event.id,
           payload: { values: updatePayload, activity },
         });
+        if (event.date !== normalizedDate) {
+          await createNotification(
+            {
+              type: "event_date_changed",
+              title: "Date modifiée",
+              body: `${event.clientName} - ${formatFullDate(normalizedDate)}`,
+              relatedEventId: event.id,
+            },
+            { dedupe: true },
+          );
+        }
         return;
       }
       throw updateError;
@@ -5204,6 +5299,15 @@ export default function Home() {
         previousValue: { date: event.date },
         newValue: { date: data.date },
       });
+      await createNotification(
+        {
+          type: "event_date_changed",
+          title: "Date modifiée",
+          body: `${event.clientName} - ${formatFullDate(data.date)}`,
+          relatedEventId: event.id,
+        },
+        { dedupe: true },
+      );
     }
   }
 
@@ -6826,6 +6930,15 @@ export default function Home() {
         entityId: eventId,
         payload: { values: deletePayload, activity },
       });
+      await createNotification(
+        {
+          type: "event_deleted",
+          title: "Événement placé dans la corbeille",
+          body: `${eventToDelete.clientName} - ${eventToDelete.eventName}`,
+          relatedEventId: eventId,
+        },
+        { dedupe: true },
+      );
       return;
     }
 
@@ -6867,6 +6980,15 @@ export default function Home() {
     await logEventActivity({
       ...activity,
     });
+    await createNotification(
+      {
+        type: "event_deleted",
+        title: "Événement placé dans la corbeille",
+        body: `${eventToDelete.clientName} - ${eventToDelete.eventName}`,
+        relatedEventId: eventId,
+      },
+      { dedupe: true },
+    );
 
     applyOptimisticSoftDelete(deletedEvent.updated_at);
     await reloadData(null);
@@ -7154,7 +7276,7 @@ export default function Home() {
           notificationsOpen={notificationsOpen && !yearOverviewOpen}
           setNotificationsOpen={setNotificationsOpen}
           onOpenNotification={handleNotificationOpen}
-          onMarkAllNotificationsRead={markAllNotificationsRead}
+          onDismissNotification={markNotificationRead}
           onImportQuote={() => {
             if (!headerPermissions.canManageEvents) return;
             openQuoteImport();
@@ -7305,7 +7427,7 @@ export default function Home() {
           notificationsOpen={notificationsOpen}
           setNotificationsOpen={setNotificationsOpen}
           onOpenNotification={handleNotificationOpen}
-          onMarkAllNotificationsRead={markAllNotificationsRead}
+          onDismissNotification={markNotificationRead}
           onGoToday={() => {
             goToday();
             setYearOverviewOpen(false);
@@ -7574,7 +7696,7 @@ function AppHeader({
   notificationsOpen,
   setNotificationsOpen,
   onOpenNotification,
-  onMarkAllNotificationsRead,
+  onDismissNotification,
   onImportQuote,
   onImportNativeMstvCalendar,
   onSearch,
@@ -7618,7 +7740,7 @@ function AppHeader({
   notificationsOpen: boolean;
   setNotificationsOpen: (open: boolean | ((current: boolean) => boolean)) => void;
   onOpenNotification: (notification: AppNotification) => void;
-  onMarkAllNotificationsRead: () => void;
+  onDismissNotification: (notification: AppNotification) => void;
   onImportQuote: () => void;
   onImportNativeMstvCalendar: () => void;
   onSearch: () => void;
@@ -7639,7 +7761,7 @@ function AppHeader({
 }) {
   const menuWrapperRef = useRef<HTMLDivElement | null>(null);
   const hasCreateMenuActions = canImportQuote || canImportNativeMstvCalendar || canCreateEvent || canDuplicateEvent || canDeleteEvent || canOpenTrash;
-  const unreadNotificationCount = notifications.filter((notification) => !notification.readAt).length;
+  const unreadNotificationCount = notifications.filter((notification) => !notification.readAt && importantNotificationTypes.has(notification.type)).length;
 
   useEffect(() => {
     if (!createMenuOpen) return;
@@ -7676,7 +7798,7 @@ function AppHeader({
             open={notificationsOpen}
             setOpen={setNotificationsOpen}
             onOpenNotification={onOpenNotification}
-            onMarkAllRead={onMarkAllNotificationsRead}
+            onDismissNotification={onDismissNotification}
           />
           {hasCreateMenuActions && (
             <div ref={menuWrapperRef} className="relative">
@@ -8039,7 +8161,7 @@ function YearOverviewOverlay({
   notificationsOpen,
   setNotificationsOpen,
   onOpenNotification,
-  onMarkAllNotificationsRead,
+  onDismissNotification,
   onGoToday,
   onImportQuote,
   onImportNativeMstvCalendar,
@@ -8074,7 +8196,7 @@ function YearOverviewOverlay({
   notificationsOpen: boolean;
   setNotificationsOpen: (open: boolean | ((current: boolean) => boolean)) => void;
   onOpenNotification: (notification: AppNotification) => void;
-  onMarkAllNotificationsRead: () => void;
+  onDismissNotification: (notification: AppNotification) => void;
   onGoToday: () => void;
   onImportQuote: () => void;
   onImportNativeMstvCalendar: () => void;
@@ -8315,7 +8437,7 @@ function YearOverviewOverlay({
           notificationsOpen={notificationsOpen}
           setNotificationsOpen={setNotificationsOpen}
           onOpenNotification={onOpenNotification}
-          onMarkAllNotificationsRead={onMarkAllNotificationsRead}
+          onDismissNotification={onDismissNotification}
           onImportQuote={onImportQuote}
           onImportNativeMstvCalendar={onImportNativeMstvCalendar}
           onSearch={onSearch}
@@ -14002,16 +14124,17 @@ function NotificationMenu({
   open,
   setOpen,
   onOpenNotification,
-  onMarkAllRead,
+  onDismissNotification,
 }: {
   notifications: AppNotification[];
   unreadCount: number;
   open: boolean;
   setOpen: (open: boolean | ((current: boolean) => boolean)) => void;
   onOpenNotification: (notification: AppNotification) => void;
-  onMarkAllRead: () => void;
+  onDismissNotification: (notification: AppNotification) => void;
 }) {
   const wrapperRef = useRef<HTMLDivElement | null>(null);
+  const visibleNotifications = notifications.filter((notification) => !notification.readAt && importantNotificationTypes.has(notification.type));
 
   useEffect(() => {
     if (!open) return;
@@ -14042,55 +14165,42 @@ function NotificationMenu({
         )}
       </button>
       {open && (
-        <div className="fixed bottom-[calc(env(safe-area-inset-bottom)+0.75rem)] left-[calc(env(safe-area-inset-left)+0.75rem)] right-[calc(env(safe-area-inset-right)+0.75rem)] z-50 flex max-h-[60vh] flex-col overflow-hidden rounded-2xl border border-stone-200 bg-white/95 text-left backdrop-blur-xl sm:absolute sm:bottom-auto sm:left-auto sm:right-0 sm:top-12 sm:z-40 sm:max-h-none sm:w-[min(22rem,calc(100vw-2rem))]">
-          <div className="flex items-center justify-between gap-3 border-b border-stone-100 px-3 py-2.5">
-            <div>
-              <p className="text-sm font-semibold text-stone-950">Notifications</p>
-              <p className="text-xs font-medium text-stone-500">
-                {unreadCount > 0 ? `${unreadCount} non lue${unreadCount > 1 ? "s" : ""}` : "Tout est à jour"}
-              </p>
-            </div>
-            {unreadCount > 0 && (
-              <button
-                type="button"
-                onClick={onMarkAllRead}
-                className="rounded-full px-2.5 py-1 text-xs font-semibold text-[#bb2720] transition hover:bg-[#bb2720]/[0.06]"
-              >
-                Tout lire
-              </button>
-            )}
+        <div className="fixed bottom-[calc(env(safe-area-inset-bottom)+0.75rem)] left-[calc(env(safe-area-inset-left)+0.75rem)] right-[calc(env(safe-area-inset-right)+0.75rem)] z-50 flex max-h-[60vh] flex-col overflow-hidden rounded-3xl border border-stone-200 bg-white text-left sm:absolute sm:bottom-auto sm:left-auto sm:right-0 sm:top-12 sm:z-40 sm:max-h-none sm:w-[min(22rem,calc(100vw-2rem))]">
+          <div className="border-b border-stone-100 px-4 py-3">
+            <p className="text-base font-semibold text-stone-950">Notifications</p>
+            <p className="mt-1 text-sm font-medium text-stone-500">
+              {unreadCount > 0 ? `${unreadCount} notification${unreadCount > 1 ? "s" : ""}` : "Tout est à jour"}
+            </p>
           </div>
-          <div className="min-h-0 flex-1 overflow-y-auto p-1.5 sm:max-h-[min(28rem,70vh)]">
-            {notifications.length === 0 ? (
+          <div className="min-h-0 flex-1 overflow-y-auto p-2 sm:max-h-[min(28rem,70vh)]">
+            {visibleNotifications.length === 0 ? (
               <div className="px-3 py-6 text-center text-sm font-medium text-stone-400">Aucune notification</div>
             ) : (
-              notifications.map((notification) => (
-                <button
+              visibleNotifications.map((notification) => (
+                <div
                   key={notification.id}
-                  type="button"
-                  onClick={() => onOpenNotification(notification)}
-                  className={cn(
-                    "block w-full rounded-xl px-3 py-2.5 text-left transition hover:bg-stone-50",
-                    !notification.readAt && "bg-[#bb2720]/[0.04]",
-                  )}
+                  className="flex items-start gap-3 rounded-2xl px-3 py-2.5 transition hover:bg-stone-50"
                 >
-                  <div className="flex items-start gap-2">
-                    <span
-                      className={cn(
-                        "mt-1.5 h-2 w-2 shrink-0 rounded-full",
-                        notification.readAt ? "bg-stone-200" : "bg-[#bb2720]",
-                      )}
-                      aria-hidden="true"
-                    />
-                    <span className="min-w-0 flex-1">
-                      <span className="flex items-start justify-between gap-3">
-                        <span className="truncate text-sm font-semibold text-stone-900">{notification.title}</span>
-                        <span className="shrink-0 text-xs font-medium text-stone-400">{formatNotificationRelativeTime(notification.createdAt)}</span>
-                      </span>
-                      <span className="mt-0.5 line-clamp-2 text-xs font-medium leading-snug text-stone-500">{notification.body}</span>
+                  <span className="mt-2 h-2 w-2 shrink-0 rounded-full bg-[#bb2720]" aria-hidden="true" />
+                  <button
+                    type="button"
+                    onClick={() => onOpenNotification(notification)}
+                    className="min-w-0 flex-1 text-left"
+                  >
+                    <span className="flex items-start justify-between gap-3">
+                      <span className="truncate text-sm font-semibold text-stone-900">{notification.title}</span>
+                      <span className="shrink-0 text-xs font-medium text-stone-400">{formatNotificationRelativeTime(notification.createdAt)}</span>
                     </span>
-                  </div>
-                </button>
+                    <span className="mt-0.5 line-clamp-2 text-xs font-medium leading-snug text-stone-500">{notification.body}</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => onDismissNotification(notification)}
+                    className="shrink-0 rounded-full border border-stone-200 bg-white px-2.5 py-1 text-xs font-semibold text-stone-600 transition hover:bg-stone-50"
+                  >
+                    OK
+                  </button>
+                </div>
               ))
             )}
           </div>
