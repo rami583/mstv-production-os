@@ -3258,6 +3258,7 @@ export default function Home() {
   const pendingNetworkSyncTimeoutRef = useRef<number | null>(null);
   const onlineRef = useRef(online);
   const processPendingSyncQueueRef = useRef<((options?: { forceOnline?: boolean }) => Promise<void>) | null>(null);
+  const googleCalendarBootstrapKeyRef = useRef<string | null>(null);
   const todayKey = formatDateKey(today);
 
   function schedulePendingSyncReplay(source: "browser" | "capacitor" | "state" | "enqueue") {
@@ -3373,6 +3374,14 @@ export default function Home() {
     () => googleCalendarAccounts.filter((account) => account.connectionStatus === "connected").length,
     [googleCalendarAccounts],
   );
+  const googleProviderCalendarCount = useMemo(
+    () => Object.values(googleCalendarsByAccountId).reduce((count, calendars) => count + calendars.length, 0),
+    [googleCalendarsByAccountId],
+  );
+  const writableGoogleProviderCalendarCount = useMemo(
+    () => Object.values(googleCalendarsByAccountId).reduce((count, calendars) => count + calendars.filter((calendar) => calendar.writable).length, 0),
+    [googleCalendarsByAccountId],
+  );
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -3380,7 +3389,8 @@ export default function Home() {
     const writableProviderCalendars = providerCalendars.filter((calendar) => calendar.writable);
     console.info("Google calendar write destination debug", {
       connectedGoogleAccountCount,
-      writableGoogleProviderCalendarCount: writableProviderCalendars.length,
+      googleProviderCalendarCount,
+      writableGoogleProviderCalendarCount,
       syncEnabledGoogleProviderCalendarCount: writableProviderCalendars.filter((calendar) => calendar.enabled).length,
       writableGoogleCalendarCount: writableGoogleCalendars.length,
       selectedSyncEnabledCalendars: writableGoogleCalendars.map((calendar) => ({
@@ -3392,7 +3402,7 @@ export default function Home() {
         syncEnabled: calendar.syncEnabled,
       })),
     });
-  }, [googleCalendarAccounts, googleCalendarsByAccountId, writableGoogleCalendars]);
+  }, [connectedGoogleAccountCount, googleCalendarsByAccountId, googleProviderCalendarCount, writableGoogleCalendars, writableGoogleProviderCalendarCount]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -3824,6 +3834,14 @@ export default function Home() {
     void refreshExternalCalendarSettings();
     void refreshGoogleCalendarAccounts();
   }, [externalCalendarSettingsOpen]);
+
+  useEffect(() => {
+    if (!authSession?.user.id || !profile || !online) return;
+    if (googleCalendarBootstrapKeyRef.current === authSession.user.id) return;
+
+    googleCalendarBootstrapKeyRef.current = authSession.user.id;
+    void refreshGoogleCalendarAccounts();
+  }, [authSession?.user.id, online, profile?.id]);
 
   useEffect(() => {
     if (!authSession || !profile || !supabase || !online) return;
@@ -8448,6 +8466,8 @@ export default function Home() {
           event={editingEvent}
           syncCalendars={writableGoogleCalendars}
           connectedGoogleAccountCount={connectedGoogleAccountCount}
+          googleProviderCalendarCount={googleProviderCalendarCount}
+          writableGoogleProviderCalendarCount={writableGoogleProviderCalendarCount}
           onClose={() => {
             setCreateModalOpen(false);
             setEditingEvent(null);
@@ -12790,6 +12810,8 @@ function CreateEventModal({
   event,
   syncCalendars,
   connectedGoogleAccountCount,
+  googleProviderCalendarCount,
+  writableGoogleProviderCalendarCount,
   onClose,
   onSubmit,
 }: {
@@ -12797,6 +12819,8 @@ function CreateEventModal({
   event: ProductionEvent | null;
   syncCalendars: ExternalCalendar[];
   connectedGoogleAccountCount: number;
+  googleProviderCalendarCount: number;
+  writableGoogleProviderCalendarCount: number;
   onClose: () => void;
   onSubmit: (input: CreateEventInput) => Promise<void>;
 }) {
@@ -12899,7 +12923,7 @@ function CreateEventModal({
                   <p className="text-sm font-semibold text-stone-400">MSTV uniquement ou synchronisation vers Google Calendar.</p>
                 )}
                 <p className="text-xs font-semibold text-stone-300">
-                  Debug temporaire: comptes Google connectés {connectedGoogleAccountCount} · calendriers écriture {syncCalendars.length}
+                  Debug temporaire: comptes Google connectés {connectedGoogleAccountCount} · calendriers Google API {googleProviderCalendarCount} · calendriers Google écriture {writableGoogleProviderCalendarCount} · destinations disponibles {syncCalendars.length}
                 </p>
               </div>
             </Field>
