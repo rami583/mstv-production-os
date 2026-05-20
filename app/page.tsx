@@ -540,11 +540,38 @@ function getRawErrorMessage(error: unknown) {
   return String(error ?? "");
 }
 
+const sessionExpiredMessage = "Votre session a expiré. Veuillez vous reconnecter.";
+
+function isInvalidRefreshTokenError(error: unknown) {
+  const normalizedMessage = getRawErrorMessage(error).toLocaleLowerCase("fr-FR");
+  return /invalid refresh token|refresh token not found|refresh token.*not found|refresh token.*revoked|invalid grant.*refresh/.test(normalizedMessage);
+}
+
+function isSessionExpiredError(error: unknown) {
+  const normalizedMessage = getRawErrorMessage(error).toLocaleLowerCase("fr-FR");
+  return isInvalidRefreshTokenError(error) || /votre session a expiré|session expirée|session expiree/.test(normalizedMessage);
+}
+
+function getProfileLoadUserMessage(error: unknown) {
+  const normalizedMessage = getRawErrorMessage(error).toLocaleLowerCase("fr-FR");
+
+  if (isSessionExpiredError(error)) return sessionExpiredMessage;
+  if (isNetworkOrUnavailableError(error)) return "Hors ligne. Connectez-vous une première fois avec du réseau pour préparer l'accès hors ligne.";
+  if (/profil utilisateur introuvable|profile not found|no profile/.test(normalizedMessage)) {
+    return "Profil utilisateur introuvable. Contactez un administrateur.";
+  }
+  if (/row-level security|rls|permission denied|not authorized|unauthorized|forbidden|policy/.test(normalizedMessage)) {
+    return "Impossible de charger votre profil. Contactez un administrateur.";
+  }
+  return "Impossible de charger le profil utilisateur.";
+}
+
 function getUserFacingErrorMessage(error: unknown, fallback = "Une erreur est survenue.") {
   const rawMessage = getRawErrorMessage(error).trim();
   const normalizedMessage = rawMessage.toLocaleLowerCase("fr-FR");
 
   if (!rawMessage) return fallback;
+  if (isInvalidRefreshTokenError(error)) return sessionExpiredMessage;
   if (isNetworkOrUnavailableError(error)) return "Connexion réseau indisponible.";
   if (/invalid login credentials|invalid credentials|email not confirmed|invalid grant/.test(normalizedMessage)) {
     return "Email ou mot de passe incorrect.";
@@ -556,7 +583,7 @@ function getUserFacingErrorMessage(error: unknown, fallback = "Une erreur est su
     return "Trop de tentatives. Réessayez dans quelques instants.";
   }
   if (/jwt|session|refresh token|invalid token|token.*expired/.test(normalizedMessage)) {
-    return "Session expirée. Reconnectez-vous.";
+    return sessionExpiredMessage;
   }
   if (/row-level security|rls|permission denied|not authorized|unauthorized|forbidden|policy/.test(normalizedMessage)) {
     return "Action non autorisée.";
@@ -674,6 +701,36 @@ function removeLocalStorageKey(key: string) {
   } catch (error) {
     console.warn("Failed to clear local cache.", { key, error });
   }
+}
+
+function clearSupabaseAuthStorage() {
+  if (typeof window === "undefined") return;
+  try {
+    const keysToRemove: string[] = [];
+    for (let index = 0; index < window.localStorage.length; index += 1) {
+      const key = window.localStorage.key(index);
+      if (key && /^sb-.*-auth-token$/.test(key)) {
+        keysToRemove.push(key);
+      }
+    }
+    for (const key of keysToRemove) {
+      window.localStorage.removeItem(key);
+    }
+  } catch (error) {
+    console.warn("Failed to clear Supabase auth cache.", getDebugError(error));
+  }
+}
+
+function clearCachedAuthState(userId?: string | null) {
+  const cachedUserId = userId ?? getCachedAuthSession()?.user.id ?? null;
+  if (cachedUserId) {
+    removeLocalStorageKey(`${cachedProfileKeyPrefix}${cachedUserId}`);
+    removeLocalStorageKey(`${cachedProfileMetaKeyPrefix}${cachedUserId}`);
+    removeLocalStorageKey(`${cachedAppDataKeyPrefix}${cachedUserId}`);
+    removeLocalStorageKey(`${cachedNotificationsKeyPrefix}${cachedUserId}`);
+  }
+  removeLocalStorageKey(cachedAuthSessionKey);
+  clearSupabaseAuthStorage();
 }
 
 function cacheUserProfile(profile: UserProfile) {
@@ -2164,6 +2221,10 @@ async function getCurrentSupabaseAccessToken(fallbackToken?: string | null) {
     if (error) throw error;
     return data.session?.access_token ?? fallbackToken ?? "";
   } catch (sessionError) {
+    if (isInvalidRefreshTokenError(sessionError)) {
+      console.info("Supabase session refresh token is no longer valid; reconnect required.");
+      throw new Error(sessionExpiredMessage);
+    }
     console.warn("Unable to refresh Supabase session before API call.", getDebugError(sessionError));
     return fallbackToken ?? "";
   }
@@ -2639,7 +2700,10 @@ async function fetchOrCreateProfile(session: Session) {
         .select()
         .single();
 
-      if (updateError) throw updateError;
+      if (updateError) {
+        console.info("Profile email refresh skipped.", getDebugError(updateError));
+        return mapUserProfile(data);
+      }
       return mapUserProfile(updatedProfile);
     }
     return mapUserProfile(data);
@@ -2659,7 +2723,13 @@ async function fetchOrCreateProfile(session: Session) {
     .select()
     .single();
 
-  if (insertError) throw insertError;
+  if (insertError) {
+    console.warn("Authenticated profile repair failed.", {
+      userId: session.user.id,
+      error: getDebugError(insertError),
+    });
+    throw new Error("Profil utilisateur introuvable. Contactez un administrateur.");
+  }
   return mapUserProfile(insertedProfile);
 }
 
@@ -2833,6 +2903,47 @@ export default function Home() {
     setAuthLoading(false);
   }
 
+  async function handleInvalidAuthSession() {
+    const userId = authSession?.user.id ?? profile?.id ?? getCachedAuthSession()?.user.id ?? null;
+    clearCachedAuthState(userId);
+    try {
+      await supabase?.auth.signOut({ scope: "local" });
+    } catch (signOutError) {
+      console.info("Local sign-out after expired session could not complete.", getDebugError(signOutError));
+    }
+    setAuthSession(null);
+    setProfile(null);
+    setEvents([]);
+    setExternalCalendars([]);
+    setExternalCalendarEvents([]);
+    setNotifications([]);
+    setNotificationsHydrated(false);
+    setSelectedId(null);
+    setScreen("calendar");
+    setCreateMenuOpen(false);
+    setQuoteImportOpen(false);
+    setExternalCalendarSettingsOpen(false);
+    setLoading(false);
+    setAuthLoading(false);
+    setAuthError(sessionExpiredMessage);
+  }
+
+  async function getServerApiAccessToken(fallbackToken?: string | null) {
+    try {
+      const accessToken = await getCurrentSupabaseAccessToken(fallbackToken);
+      if (!accessToken) {
+        throw new Error(sessionExpiredMessage);
+      }
+      return accessToken;
+    } catch (accessTokenError) {
+      if (isSessionExpiredError(accessTokenError)) {
+        await handleInvalidAuthSession();
+        throw new Error(sessionExpiredMessage);
+      }
+      throw accessTokenError;
+    }
+  }
+
   const chronologicalEvents = useMemo(() => [...events].sort((a, b) => eventSortValue(a) - eventSortValue(b)), [events]);
   const selectedEvent = useMemo(() => chronologicalEvents.find((item) => item.id === selectedId) ?? chronologicalEvents[0] ?? null, [chronologicalEvents, selectedId]);
   const selectedEventIndex = selectedEvent ? chronologicalEvents.findIndex((item) => item.id === selectedEvent.id) : -1;
@@ -3000,14 +3111,23 @@ export default function Home() {
           setProfile(nextProfile);
         }
       } catch (profileError) {
-        console.error("Failed to load authenticated profile. Apply supabase/migrations/013_auth_profiles.sql if needed.", profileError);
+        if (isInvalidRefreshTokenError(profileError)) {
+          console.info("[MSTV offline boot] invalid refresh token while loading profile; reconnect required.");
+          await handleInvalidAuthSession();
+          return;
+        }
         const cachedProfile = getCachedUserProfile(session.user.id);
+        const canUseCachedProfile =
+          Boolean(cachedProfile) &&
+          (isNetworkOrUnavailableError(profileError) || (typeof navigator !== "undefined" && !navigator.onLine));
         console.info("[MSTV offline boot] live profile failed", {
           userId: session.user.id,
           networkLike: isNetworkOrUnavailableError(profileError),
           cachedProfileFound: Boolean(cachedProfile),
+          fallbackAllowed: canUseCachedProfile,
+          error: getDebugError(profileError),
         });
-        if (cachedProfile) {
+        if (cachedProfile && canUseCachedProfile) {
           if (!cancelled) {
             console.info("[MSTV offline boot] cached profile fallback used", { userId: session.user.id });
             cacheAuthSession(session);
@@ -3022,11 +3142,7 @@ export default function Home() {
         if (!cancelled) {
           console.info("[MSTV offline boot] fatal profile error, no cached profile", { userId: session.user.id });
           setProfile(null);
-          setAuthError(
-            isNetworkOrUnavailableError(profileError)
-              ? "Hors ligne. Connectez-vous une première fois avec du réseau pour préparer l'accès hors ligne."
-              : "Impossible de charger le profil utilisateur.",
-          );
+          setAuthError(getProfileLoadUserMessage(profileError));
         }
       }
     }
@@ -3062,6 +3178,13 @@ export default function Home() {
           hasError: Boolean(error),
         });
 
+        if (isInvalidRefreshTokenError(error)) {
+          console.info("[MSTV offline boot] invalid refresh token from getSession; reconnect required.");
+          await handleInvalidAuthSession();
+          if (!cancelled) setAuthLoading(false);
+          return;
+        }
+
         if (data.session) {
           cacheAuthSession(data.session);
           await loadAuthenticatedProfile(data.session);
@@ -3090,6 +3213,12 @@ export default function Home() {
         }
         await loadAuthenticatedProfile(null);
       } catch (sessionError) {
+        if (isInvalidRefreshTokenError(sessionError)) {
+          console.info("[MSTV offline boot] invalid refresh token thrown by getSession; reconnect required.");
+          await handleInvalidAuthSession();
+          if (!cancelled) setAuthLoading(false);
+          return;
+        }
         console.error("[MSTV offline boot] getSession threw", sessionError);
         const cachedSession = getCachedAuthSession();
         if (cachedSession) {
@@ -3254,6 +3383,10 @@ export default function Home() {
               await refreshExternalCalendarSettings();
             }
           } catch (realtimeError) {
+            if (isSessionExpiredError(realtimeError)) {
+              await handleInvalidAuthSession();
+              return;
+            }
             console.warn("Realtime refresh failed", realtimeError);
           }
         })();
@@ -3425,8 +3558,8 @@ export default function Home() {
     try {
       setManagedProfiles(await fetchProfiles());
     } catch (profilesError) {
-      console.error("Failed to load profiles. Apply supabase/migrations/014_profiles_admin_management.sql if needed.", profilesError);
-      setManagedProfilesError("Impossible de charger les utilisateurs.");
+      console.error("Failed to load user profiles.", getDebugError(profilesError));
+      setManagedProfilesError(getUserFacingErrorMessage(profilesError, "Impossible de charger les utilisateurs."));
     } finally {
       setManagedProfilesLoading(false);
     }
@@ -3511,10 +3644,7 @@ export default function Home() {
     setExternalCalendarSettingsError(null);
 
     try {
-      const accessToken = await getCurrentSupabaseAccessToken(authSession?.access_token);
-      if (!accessToken) {
-        throw new Error("Votre session a expiré. Reconnectez-vous.");
-      }
+      const accessToken = await getServerApiAccessToken(authSession?.access_token);
 
       const response = await fetch(getAppApiUrl("/api/external-calendars/fetch-ics", "Synchronisation du calendrier momentanément indisponible."), {
         method: "POST",
@@ -3526,12 +3656,17 @@ export default function Home() {
       });
       if (!response.ok) {
         const errorPayload = await response.json().catch(() => null) as { error?: string } | null;
+        const apiErrorMessage = errorPayload?.error ?? response.statusText;
+        if (response.status === 401 || isSessionExpiredError(apiErrorMessage)) {
+          await handleInvalidAuthSession();
+          throw new Error(sessionExpiredMessage);
+        }
         console.error("External calendar ICS fetch API failed", {
           calendarId: calendar.id,
           status: response.status,
-          error: errorPayload?.error ?? response.statusText,
+          error: apiErrorMessage,
         });
-        throw new Error(errorPayload?.error || "Impossible de récupérer le flux ICS.");
+        throw new Error(apiErrorMessage || "Impossible de récupérer le flux ICS.");
       }
 
       const payload = await response.json().catch(() => null) as { icsText?: string; error?: string } | null;
@@ -7185,12 +7320,7 @@ export default function Home() {
     if (!supabase) return;
     const userId = authSession?.user.id ?? profile?.id ?? null;
     await supabase.auth.signOut();
-    if (userId) {
-      removeLocalStorageKey(`${cachedProfileKeyPrefix}${userId}`);
-      removeLocalStorageKey(`${cachedAppDataKeyPrefix}${userId}`);
-      removeLocalStorageKey(`${cachedNotificationsKeyPrefix}${userId}`);
-    }
-    removeLocalStorageKey(cachedAuthSessionKey);
+    clearCachedAuthState(userId);
     setAuthSession(null);
     setProfile(null);
     setEvents([]);
@@ -7511,6 +7641,7 @@ export default function Home() {
             setQuoteImportOpen(false);
             setQuoteImportFile(null);
           }}
+          onAuthExpired={handleInvalidAuthSession}
         />
       )}
 
@@ -7625,6 +7756,10 @@ export default function Home() {
             try {
               return await syncExternalCalendar(calendar);
             } catch (syncError) {
+              if (isSessionExpiredError(syncError)) {
+                setExternalCalendarSettingsError(null);
+                throw syncError;
+              }
               console.error("External calendar sync failed", syncError);
               setExternalCalendarSettingsError(getUserFacingErrorMessage(syncError, "Impossible de synchroniser ce calendrier."));
               void createNotification(
@@ -12065,6 +12200,7 @@ function QuoteImportModal({
   onClose,
   onCreateEvent,
   onUpdateEvent,
+  onAuthExpired,
 }: {
   accessToken: string | null;
   online: boolean;
@@ -12074,6 +12210,7 @@ function QuoteImportModal({
   onClose: () => void;
   onCreateEvent: (input: CreateEventInput) => Promise<void>;
   onUpdateEvent: (event: ProductionEvent, input: CreateEventInput) => Promise<void>;
+  onAuthExpired?: () => Promise<void>;
 }) {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [fileName, setFileName] = useState("");
@@ -12128,7 +12265,7 @@ function QuoteImportModal({
       formData.append("fallbackDate", selectedDateKey);
       const currentAccessToken = await getCurrentSupabaseAccessToken(accessToken);
       if (!currentAccessToken) {
-        throw new Error("Votre session a expiré. Reconnectez-vous.");
+        throw new Error(sessionExpiredMessage);
       }
 
       const response = await fetch(getAppApiUrl("/api/quotes/extract-pdf", "Import PDF momentanément indisponible."), {
@@ -12162,6 +12299,11 @@ function QuoteImportModal({
       setResolution(null);
       setStep("review");
     } catch (extractError) {
+      if (isSessionExpiredError(extractError)) {
+        await onAuthExpired?.();
+        setError(sessionExpiredMessage);
+        return;
+      }
       console.error("Failed to extract quote PDF on server", {
         fileName: file.name,
         fileType: file.type || "(empty)",

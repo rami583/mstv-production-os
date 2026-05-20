@@ -82,7 +82,7 @@ export async function POST(request: Request) {
   try {
     const accessToken = getBearerToken(request);
     if (!accessToken) {
-      return jsonResponse({ error: "Votre session a expiré. Reconnectez-vous." }, { status: 401 });
+      return jsonResponse({ error: "Votre session a expiré. Veuillez vous reconnecter." }, { status: 401 });
     }
 
     const body = (await request.json().catch(() => null)) as { calendarId?: string } | null;
@@ -94,7 +94,7 @@ export async function POST(request: Request) {
     const supabase = getSupabaseClient(accessToken);
     const { data: userData, error: userError } = await supabase.auth.getUser(accessToken);
     if (userError || !userData.user) {
-      return jsonResponse({ error: "Votre session a expiré. Reconnectez-vous." }, { status: 401 });
+      return jsonResponse({ error: "Votre session a expiré. Veuillez vous reconnecter." }, { status: 401 });
     }
 
     const { data: profile, error: profileError } = await supabase
