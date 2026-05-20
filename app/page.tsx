@@ -537,6 +537,18 @@ function isNetworkOrUnavailableError(error: unknown) {
 function getRawErrorMessage(error: unknown) {
   if (error instanceof Error) return error.message;
   if (typeof error === "string") return error;
+  if (error && typeof error === "object") {
+    const record = error as {
+      message?: unknown;
+      code?: unknown;
+      details?: unknown;
+      hint?: unknown;
+      name?: unknown;
+    };
+    return [record.message, record.code, record.details, record.hint, record.name]
+      .filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+      .join(" · ") || String(error);
+  }
   return String(error ?? "");
 }
 
@@ -2678,7 +2690,7 @@ async function fetchEvents(filter: "active" | "deleted" = "active") {
   return withOptionItems(events, (itemData ?? []).map(mapEventOptionItem));
 }
 
-async function fetchOrCreateProfile(session: Session) {
+async function fetchAuthenticatedProfile(session: Session) {
   if (!supabase) {
     throw new Error("Configuration Supabase manquante.");
   }
@@ -2689,48 +2701,37 @@ async function fetchOrCreateProfile(session: Session) {
     .eq("id", session.user.id)
     .maybeSingle();
 
+  console.info("[MSTV auth] authenticated profile query result", {
+    sessionUserId: session.user.id,
+    sessionEmail: session.user.email ?? null,
+    profileFound: Boolean(data),
+    profileEmail: data?.email ?? null,
+    profileRole: data?.role ?? null,
+    error: error ? getDebugError(error) : null,
+  });
+
   if (error) throw error;
-  if (data) {
-    const nextEmail = session.user.email ?? null;
-    if (nextEmail && data.email !== nextEmail) {
-      const { data: updatedProfile, error: updateError } = await supabase
-        .from("profiles")
-        .update({ email: nextEmail })
-        .eq("id", session.user.id)
-        .select()
-        .single();
-
-      if (updateError) {
-        console.info("Profile email refresh skipped.", getDebugError(updateError));
-        return mapUserProfile(data);
-      }
-      return mapUserProfile(updatedProfile);
-    }
-    return mapUserProfile(data);
-  }
-
-  const emailName = session.user.email?.split("@")[0]?.replace(/[._-]+/g, " ") ?? "Utilisateur";
-  const firstName = formatTitleCase(emailName).split(" ")[0] || "Utilisateur";
-  const { data: insertedProfile, error: insertError } = await supabase
-    .from("profiles")
-    .insert({
-      id: session.user.id,
-      email: session.user.email ?? null,
-      first_name: firstName,
-      last_name: null,
-      role: "team",
-    })
-    .select()
-    .single();
-
-  if (insertError) {
-    console.warn("Authenticated profile repair failed.", {
-      userId: session.user.id,
-      error: getDebugError(insertError),
-    });
+  if (!data) {
     throw new Error("Profil utilisateur introuvable. Contactez un administrateur.");
   }
-  return mapUserProfile(insertedProfile);
+
+  const nextEmail = session.user.email ?? null;
+  if (nextEmail && data.email !== nextEmail) {
+    const { data: updatedProfile, error: updateError } = await supabase
+      .from("profiles")
+      .update({ email: nextEmail })
+      .eq("id", session.user.id)
+      .select()
+      .single();
+
+    if (updateError) {
+      console.info("Profile email refresh skipped.", getDebugError(updateError));
+      return mapUserProfile(data);
+    }
+    return mapUserProfile(updatedProfile);
+  }
+
+  return mapUserProfile(data);
 }
 
 async function fetchProfiles() {
@@ -2903,7 +2904,7 @@ export default function Home() {
     setAuthLoading(false);
   }
 
-  async function handleInvalidAuthSession() {
+  async function handleInvalidAuthSession(message = sessionExpiredMessage) {
     const userId = authSession?.user.id ?? profile?.id ?? getCachedAuthSession()?.user.id ?? null;
     clearCachedAuthState(userId);
     try {
@@ -2925,7 +2926,7 @@ export default function Home() {
     setExternalCalendarSettingsOpen(false);
     setLoading(false);
     setAuthLoading(false);
-    setAuthError(sessionExpiredMessage);
+    setAuthError(message);
   }
 
   async function getServerApiAccessToken(fallbackToken?: string | null) {
@@ -3084,6 +3085,7 @@ export default function Home() {
       console.info("[MSTV offline boot] profile load start", {
         hasSession: Boolean(session),
         userId: session?.user.id ?? null,
+        email: session?.user.email ?? null,
         online: typeof navigator === "undefined" ? true : navigator.onLine,
       });
       setAuthSession(session);
@@ -3103,8 +3105,13 @@ export default function Home() {
       }
 
       try {
-        const nextProfile = await fetchOrCreateProfile(session);
-        console.info("[MSTV offline boot] live profile loaded", { userId: session.user.id });
+        const nextProfile = await fetchAuthenticatedProfile(session);
+        console.info("[MSTV offline boot] live profile loaded", {
+          userId: session.user.id,
+          email: session.user.email ?? null,
+          profileEmail: nextProfile.email,
+          profileRole: nextProfile.role,
+        });
         cacheAuthSession(session);
         cacheUserProfile(nextProfile);
         if (!cancelled) {
@@ -3122,8 +3129,11 @@ export default function Home() {
           (isNetworkOrUnavailableError(profileError) || (typeof navigator !== "undefined" && !navigator.onLine));
         console.info("[MSTV offline boot] live profile failed", {
           userId: session.user.id,
+          email: session.user.email ?? null,
           networkLike: isNetworkOrUnavailableError(profileError),
           cachedProfileFound: Boolean(cachedProfile),
+          cachedProfileEmail: cachedProfile?.email ?? null,
+          cachedProfileRole: cachedProfile?.role ?? null,
           fallbackAllowed: canUseCachedProfile,
           error: getDebugError(profileError),
         });
@@ -3158,6 +3168,9 @@ export default function Home() {
       if (cachedState) {
         console.info("[MSTV offline boot] cache-first auth state used", {
           userId: cachedState.session.user.id,
+          email: cachedState.session.user.email ?? null,
+          cachedProfileEmail: cachedState.profile.email,
+          cachedProfileRole: cachedState.profile.role,
           online: typeof navigator === "undefined" ? true : navigator.onLine,
         });
         hydrateFromCachedAuthState(cachedState);
@@ -3175,7 +3188,10 @@ export default function Home() {
         const { data, error } = await supabase.auth.getSession();
         console.info("[MSTV offline boot] getSession result", {
           sessionFound: Boolean(data.session),
+          sessionUserId: data.session?.user.id ?? null,
+          sessionEmail: data.session?.user.email ?? null,
           hasError: Boolean(error),
+          error: error ? getDebugError(error) : null,
         });
 
         if (isInvalidRefreshTokenError(error)) {
@@ -3186,6 +3202,19 @@ export default function Home() {
         }
 
         if (data.session) {
+          if (
+            cachedState &&
+            (cachedState.session.user.id !== data.session.user.id ||
+              (data.session.user.email && cachedState.profile.email && cachedState.profile.email !== data.session.user.email))
+          ) {
+            console.info("[MSTV offline boot] clearing stale cached auth/profile mismatch", {
+              cachedUserId: cachedState.session.user.id,
+              cachedEmail: cachedState.profile.email,
+              liveUserId: data.session.user.id,
+              liveEmail: data.session.user.email ?? null,
+            });
+            clearCachedAuthState(cachedState.session.user.id);
+          }
           cacheAuthSession(data.session);
           await loadAuthenticatedProfile(data.session);
           if (!cancelled) setAuthLoading(false);
@@ -3194,13 +3223,19 @@ export default function Home() {
 
         const cachedSession = getCachedAuthSession();
         if (cachedSession) {
-          console.info("[MSTV offline boot] cached session fallback used", { userId: cachedSession.user.id });
-          if (error || isNetworkOrUnavailableError(error) || (typeof navigator !== "undefined" && !navigator.onLine)) {
+          const canUseCachedSession = Boolean(error) || isNetworkOrUnavailableError(error) || (typeof navigator !== "undefined" && !navigator.onLine);
+          console.info("[MSTV offline boot] cached session fallback evaluated", {
+            userId: cachedSession.user.id,
+            email: cachedSession.user.email ?? null,
+            fallbackAllowed: canUseCachedSession,
+          });
+          if (canUseCachedSession) {
             setOnline(false);
+            await loadAuthenticatedProfile(cachedSession);
+            if (!cancelled) setAuthLoading(false);
+            return;
           }
-          await loadAuthenticatedProfile(cachedSession);
-          if (!cancelled) setAuthLoading(false);
-          return;
+          clearCachedAuthState(cachedSession.user.id);
         }
 
         if (error) {
@@ -3221,8 +3256,11 @@ export default function Home() {
         }
         console.error("[MSTV offline boot] getSession threw", sessionError);
         const cachedSession = getCachedAuthSession();
-        if (cachedSession) {
-          console.info("[MSTV offline boot] cached session fallback used after getSession throw", { userId: cachedSession.user.id });
+        if (cachedSession && (isNetworkOrUnavailableError(sessionError) || (typeof navigator !== "undefined" && !navigator.onLine))) {
+          console.info("[MSTV offline boot] cached session fallback used after getSession throw", {
+            userId: cachedSession.user.id,
+            email: cachedSession.user.email ?? null,
+          });
           setOnline(false);
           await loadAuthenticatedProfile(cachedSession);
           if (!cancelled) setAuthLoading(false);
@@ -3358,7 +3396,7 @@ export default function Home() {
 
         void (async () => {
           try {
-            const nextProfile = await fetchOrCreateProfile(currentSession);
+            const nextProfile = await fetchAuthenticatedProfile(currentSession);
             cacheUserProfile(nextProfile);
             if (!disposed) {
               setProfile(nextProfile);
@@ -7354,7 +7392,7 @@ export default function Home() {
   }
 
   if (authError && !profile) {
-    return <FullScreenStatus tone="error">{authError}</FullScreenStatus>;
+    return <AuthRecoveryScreen message={authError} onReset={() => void handleInvalidAuthSession(authError)} />;
   }
 
   return (
@@ -14735,6 +14773,25 @@ function FullScreenStatus({ children, tone = "neutral" }: { children: React.Reac
         )}
       >
         {children}
+      </div>
+    </main>
+  );
+}
+
+function AuthRecoveryScreen({ message, onReset }: { message: string; onReset: () => void }) {
+  return (
+    <main className="flex h-screen h-[100svh] items-center justify-center bg-[#f7f9fb] p-4 text-stone-950">
+      <div className="w-full max-w-sm rounded-3xl border border-rose-200 bg-white px-5 py-5 text-center shadow-xl shadow-black/5">
+        <AlertCircle className="mx-auto h-5 w-5 text-rose-600" />
+        <p className="mt-3 text-base font-semibold text-rose-700">{message}</p>
+        <p className="mt-2 text-sm font-medium leading-snug text-stone-500">Réinitialisez la session locale, puis reconnectez-vous.</p>
+        <button
+          type="button"
+          onClick={onReset}
+          className="mt-4 inline-flex h-10 items-center justify-center rounded-full bg-[#bb2720] px-4 text-sm font-semibold text-white transition hover:bg-[#a8221c]"
+        >
+          Se reconnecter
+        </button>
       </div>
     </main>
   );
