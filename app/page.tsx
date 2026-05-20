@@ -1208,7 +1208,7 @@ function parseIcsDate(value: string, params: Record<string, string>) {
   if (isAllDay && dateMatch) {
     const [, year, month, day] = dateMatch;
     return {
-      iso: `${year}-${month}-${day}T00:00:00.000Z`,
+      iso: `${year}-${month}-${day}T12:00:00.000Z`,
       allDay: true,
     };
   }
@@ -2779,26 +2779,44 @@ async function fetchEvents(filter: "active" | "deleted" = "active") {
     throw new Error("Configuration Supabase manquante.");
   }
 
-  let query = supabase
-    .from("events")
-    .select(
-      `
-        *,
-        event_options (*),
-        event_links (*)
-      `,
-    );
+  const rows: EventQueryRow[] = [];
+  let from = 0;
 
-  if (filter === "deleted") {
-    query = query.not("deleted_at", "is", null).order("deleted_at", { ascending: false });
-  } else {
-    query = query.is("deleted_at", null).order("date", { ascending: true }).order("start_time", { ascending: true });
+  while (true) {
+    let query = supabase
+      .from("events")
+      .select(
+        `
+          *,
+          event_options (*),
+          event_links (*)
+        `,
+      );
+
+    if (filter === "deleted") {
+      query = query.not("deleted_at", "is", null).order("deleted_at", { ascending: false });
+    } else {
+      query = query.is("deleted_at", null).order("date", { ascending: true }).order("start_time", { ascending: true });
+    }
+
+    const { data, error } = await query.range(from, from + supabaseFetchPageSize - 1);
+    if (error) throw error;
+
+    const pageRows = (data ?? []) as EventQueryRow[];
+    rows.push(...pageRows);
+
+    if (pageRows.length < supabaseFetchPageSize) break;
+    from += supabaseFetchPageSize;
   }
 
-  const { data, error } = await query;
+  console.info("MSTV events loaded", {
+    filter,
+    count: rows.length,
+    firstDate: rows[0]?.date ?? null,
+    lastDate: rows.at(-1)?.date ?? null,
+  });
 
-  if (error) throw error;
-  let events = ((data ?? []) as EventQueryRow[]).map(mapEvent);
+  let events = rows.map(mapEvent);
   const eventIds = events.map((event) => event.id);
   const optionIds = events.flatMap((event) => event.options.map((option) => option.id));
   const linkIds = events.flatMap((event) => event.links.map((link) => link.id));
