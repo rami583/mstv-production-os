@@ -7772,19 +7772,26 @@ function DetailDateControl({
   transition?: EventDateSwipeTransition;
   onEdit?: () => void;
 }) {
-  const buttonClassName =
-    "max-w-full truncate rounded-full border border-stone-200 bg-white px-2.5 py-1.5 text-base font-semibold text-stone-700 transition-colors hover:bg-stone-50 sm:px-3";
+  const datePillClassName =
+    "whitespace-nowrap rounded-full border border-stone-200 bg-white px-2.5 py-1.5 text-base font-semibold text-stone-700 transition-colors sm:px-3";
   const transformTransition = transition?.dragging ? undefined : `transform ${PAGE_TRANSITION_MS}ms ${PAGE_TRANSITION_EASING}`;
   const currentOffset = transition?.currentOffset ?? 0;
   const incomingOffset = transition?.incomingOffset ?? 0;
   const incomingDateLabel = transition?.incomingDateLabel ?? null;
+  const widthLabel = incomingDateLabel && incomingDateLabel.length > label.length ? incomingDateLabel : label;
 
   return (
-    <span className="relative inline-flex max-w-full overflow-visible">
+    <span className="relative inline-grid max-w-full overflow-visible align-middle">
+      <span
+        aria-hidden="true"
+        className={cn(datePillClassName, "invisible col-start-1 row-start-1 pointer-events-none select-none")}
+      >
+        {widthLabel}
+      </span>
       <button
         type="button"
         onClick={onEdit}
-        className={buttonClassName}
+        className={cn(datePillClassName, "col-start-1 row-start-1 hover:bg-stone-50")}
         style={{
           transform: `translate3d(${currentOffset}px, 0, 0)`,
           transition: transformTransition,
@@ -7795,7 +7802,7 @@ function DetailDateControl({
       {incomingDateLabel && (
         <span
           aria-hidden="true"
-          className={cn(buttonClassName, "pointer-events-none absolute left-0 top-0")}
+          className={cn(datePillClassName, "pointer-events-none absolute left-0 top-0")}
           style={{
             transform: `translate3d(${incomingOffset}px, 0, 0)`,
             transition: transformTransition,
@@ -9437,6 +9444,25 @@ function ProductionDetail({
   const [isEventSwipeDragging, setIsEventSwipeDragging] = useState(false);
   const [eventSwipeAnimating, setEventSwipeAnimating] = useState(false);
 
+  function publishEventDateSwipeTransition({
+    currentOffset,
+    incomingOffset,
+    incomingEvent,
+    dragging,
+  }: {
+    currentOffset: number;
+    incomingOffset: number;
+    incomingEvent: ProductionEvent | null;
+    dragging: boolean;
+  }) {
+    onEventDateSwipeTransitionChange({
+      currentOffset,
+      incomingOffset,
+      incomingDateLabel: incomingEvent ? formatFullDate(incomingEvent.date) : null,
+      dragging,
+    });
+  }
+
   useEffect(() => {
     onEventDateSwipeTransitionChange({
       currentOffset: eventSwipeOffset,
@@ -9554,12 +9580,24 @@ function ProductionDetail({
       scrollContainer.scrollTop = 0;
       scrollContainer.scrollLeft = 0;
     }
+    publishEventDateSwipeTransition({
+      currentOffset: 0,
+      incomingOffset: 0,
+      incomingEvent: null,
+      dragging: true,
+    });
     setIsEventSwipeDragging(true);
     setEventSwipeOffset(0);
     setEventSwipeIncomingOffset(0);
     setEventSwipeIncomingEvent(null);
 
     window.requestAnimationFrame(() => {
+      publishEventDateSwipeTransition({
+        currentOffset: 0,
+        incomingOffset: 0,
+        incomingEvent: null,
+        dragging: false,
+      });
       setIsEventSwipeDragging(false);
       setEventSwipeAnimating(false);
     });
@@ -9682,6 +9720,12 @@ function ProductionDetail({
 
   function resetEventSwipe() {
     eventSwipeStartRef.current = null;
+    publishEventDateSwipeTransition({
+      currentOffset: 0,
+      incomingOffset: 0,
+      incomingEvent: null,
+      dragging: false,
+    });
     setIsEventSwipeDragging(false);
     setEventSwipeOffset(0);
     setEventSwipeIncomingOffset(0);
@@ -9700,6 +9744,12 @@ function ProductionDetail({
     const pageStep = getSwipePageStep(viewportWidth);
     const exitOffset = direction === 1 ? -pageStep : pageStep;
     eventSwipeResetAfterEventChangeRef.current = true;
+    publishEventDateSwipeTransition({
+      currentOffset: exitOffset,
+      incomingOffset: 0,
+      incomingEvent,
+      dragging: false,
+    });
     setEventSwipeIncomingEvent(incomingEvent);
     setIsEventSwipeDragging(false);
     setEventSwipeAnimating(true);
@@ -9729,6 +9779,12 @@ function ProductionDetail({
       axis: null,
     };
     suppressEventSwipeClickRef.current = false;
+    publishEventDateSwipeTransition({
+      currentOffset: 0,
+      incomingOffset: 0,
+      incomingEvent: null,
+      dragging: true,
+    });
     setIsEventSwipeDragging(true);
   }
 
@@ -9764,9 +9820,22 @@ function ProductionDetail({
     const incomingEvent = direction === 1 ? nextEvent : previousEvent;
     if (canNavigate && incomingEvent) {
       const incomingStartOffset = direction === 1 ? pageStep : -pageStep;
+      const nextIncomingOffset = Math.max(-pageStep, Math.min(pageStep, incomingStartOffset + deltaX));
+      publishEventDateSwipeTransition({
+        currentOffset: boundedOffset,
+        incomingOffset: nextIncomingOffset,
+        incomingEvent,
+        dragging: true,
+      });
       setEventSwipeIncomingEvent(incomingEvent);
-      setEventSwipeIncomingOffset(Math.max(-pageStep, Math.min(pageStep, incomingStartOffset + deltaX)));
+      setEventSwipeIncomingOffset(nextIncomingOffset);
     } else {
+      publishEventDateSwipeTransition({
+        currentOffset: boundedOffset,
+        incomingOffset: 0,
+        incomingEvent: null,
+        dragging: true,
+      });
       setEventSwipeIncomingEvent(null);
       setEventSwipeIncomingOffset(0);
     }
@@ -9790,6 +9859,12 @@ function ProductionDetail({
     setEventSwipeOffset(0);
     setEventSwipeIncomingOffset(0);
     setEventSwipeIncomingEvent(null);
+    publishEventDateSwipeTransition({
+      currentOffset: 0,
+      incomingOffset: 0,
+      incomingEvent: null,
+      dragging: false,
+    });
   }
 
   function handleEventSwipePointerDown(pointerEvent: ReactPointerEvent<HTMLDivElement>) {
