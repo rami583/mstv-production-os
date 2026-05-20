@@ -363,8 +363,10 @@ export type Database = {
           user_id: string;
           provider_type: string;
           provider_account_id: string | null;
+          provider_account_email: string | null;
           provider_email: string | null;
           display_name: string | null;
+          sync_capability: string;
           scopes: string[];
           access_token_encrypted: string | null;
           refresh_token_encrypted: string | null;
@@ -381,8 +383,10 @@ export type Database = {
           user_id: string;
           provider_type: string;
           provider_account_id?: string | null;
+          provider_account_email?: string | null;
           provider_email?: string | null;
           display_name?: string | null;
+          sync_capability?: string;
           scopes?: string[];
           access_token_encrypted?: string | null;
           refresh_token_encrypted?: string | null;
