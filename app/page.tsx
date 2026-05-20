@@ -12852,6 +12852,11 @@ function ExternalCalendarsSheet({
         "fixed inset-0 z-50 flex bg-stone-950/10",
         isMobileFormView ? "items-stretch p-0 sm:items-center sm:justify-center sm:p-6" : "items-end p-3 sm:items-center sm:justify-center sm:p-6",
       )}
+      onPointerDown={(pointerEvent) => {
+        if (pointerEvent.target === pointerEvent.currentTarget) {
+          onClose();
+        }
+      }}
     >
       <div
         className={cn(
@@ -12860,6 +12865,7 @@ function ExternalCalendarsSheet({
             ? "h-[100dvh] max-h-[100dvh] rounded-none border-0 px-4 pb-[calc(env(safe-area-inset-bottom)+1rem)] pt-[calc(env(safe-area-inset-top)+1rem)] sm:h-auto sm:max-h-[86vh] sm:max-w-2xl sm:rounded-3xl sm:border sm:border-stone-200 sm:p-5"
             : "max-h-[86vh] rounded-3xl border border-stone-200 p-4 sm:max-w-2xl sm:p-5",
         )}
+        onPointerDown={(pointerEvent) => pointerEvent.stopPropagation()}
       >
         {isMobileFormView && (
           <div className="mb-5 flex items-center justify-between sm:hidden">
@@ -14133,25 +14139,10 @@ function NotificationMenu({
   onOpenNotification: (notification: AppNotification) => void;
   onDismissNotification: (notification: AppNotification) => void;
 }) {
-  const wrapperRef = useRef<HTMLDivElement | null>(null);
   const visibleNotifications = notifications.filter((notification) => !notification.readAt && importantNotificationTypes.has(notification.type));
 
-  useEffect(() => {
-    if (!open) return;
-
-    function handlePointerDown(event: PointerEvent) {
-      const target = event.target;
-      if (!(target instanceof Node)) return;
-      if (wrapperRef.current?.contains(target)) return;
-      setOpen(false);
-    }
-
-    document.addEventListener("pointerdown", handlePointerDown);
-    return () => document.removeEventListener("pointerdown", handlePointerDown);
-  }, [open, setOpen]);
-
   return (
-    <div ref={wrapperRef} className="relative">
+    <div className="relative">
       <button
         type="button"
         onClick={() => setOpen((current) => !current)}
@@ -14165,44 +14156,68 @@ function NotificationMenu({
         )}
       </button>
       {open && (
-        <div className="fixed bottom-[calc(env(safe-area-inset-bottom)+0.75rem)] left-[calc(env(safe-area-inset-left)+0.75rem)] right-[calc(env(safe-area-inset-right)+0.75rem)] z-50 flex max-h-[60vh] flex-col overflow-hidden rounded-3xl border border-stone-200 bg-white text-left sm:absolute sm:bottom-auto sm:left-auto sm:right-0 sm:top-12 sm:z-40 sm:max-h-none sm:w-[min(22rem,calc(100vw-2rem))]">
-          <div className="border-b border-stone-100 px-4 py-3">
-            <p className="text-base font-semibold text-stone-950">Notifications</p>
-            <p className="mt-1 text-sm font-medium text-stone-500">
-              {unreadCount > 0 ? `${unreadCount} notification${unreadCount > 1 ? "s" : ""}` : "Tout est à jour"}
-            </p>
-          </div>
-          <div className="min-h-0 flex-1 overflow-y-auto p-2 sm:max-h-[min(28rem,70vh)]">
-            {visibleNotifications.length === 0 ? (
-              <div className="px-3 py-6 text-center text-sm font-medium text-stone-400">Aucune notification</div>
-            ) : (
-              visibleNotifications.map((notification) => (
-                <div
-                  key={notification.id}
-                  className="flex items-start gap-3 rounded-2xl px-3 py-2.5 transition hover:bg-stone-50"
-                >
-                  <span className="mt-2 h-2 w-2 shrink-0 rounded-full bg-[#bb2720]" aria-hidden="true" />
-                  <button
-                    type="button"
-                    onClick={() => onOpenNotification(notification)}
-                    className="min-w-0 flex-1 text-left"
-                  >
-                    <span className="flex items-start justify-between gap-3">
-                      <span className="truncate text-sm font-semibold text-stone-900">{notification.title}</span>
-                      <span className="shrink-0 text-xs font-medium text-stone-400">{formatNotificationRelativeTime(notification.createdAt)}</span>
-                    </span>
-                    <span className="mt-0.5 line-clamp-2 text-xs font-medium leading-snug text-stone-500">{notification.body}</span>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => onDismissNotification(notification)}
-                    className="shrink-0 rounded-full border border-stone-200 bg-white px-2.5 py-1 text-xs font-semibold text-stone-600 transition hover:bg-stone-50"
-                  >
-                    OK
-                  </button>
+        <div
+          className="fixed inset-0 z-50 flex items-end bg-stone-950/10 p-3 sm:items-center sm:justify-center sm:p-6"
+          onPointerDown={(pointerEvent) => {
+            if (pointerEvent.target === pointerEvent.currentTarget) {
+              setOpen(false);
+            }
+          }}
+        >
+          <div
+            className="flex max-h-[86vh] w-full flex-col overflow-hidden rounded-3xl border border-stone-200 bg-white p-4 text-left sm:max-w-2xl sm:p-5"
+            onPointerDown={(pointerEvent) => pointerEvent.stopPropagation()}
+          >
+            <div className="mb-4 flex items-start justify-between gap-3">
+              <div>
+                <p className="text-base font-semibold text-stone-950">Notifications</p>
+                <p className="mt-1 text-base font-medium text-stone-500">
+                  {unreadCount > 0 ? `${unreadCount} notification${unreadCount > 1 ? "s" : ""}` : "Tout est à jour"}
+                </p>
+              </div>
+              <button type="button" onClick={() => setOpen(false)} className="rounded-full border border-stone-200 bg-white px-3 py-1.5 text-base font-semibold text-stone-600 transition hover:bg-stone-50">
+                Fermer
+              </button>
+            </div>
+            <div className="no-scrollbar min-h-0 flex-1 overflow-y-auto overscroll-contain">
+              {visibleNotifications.length === 0 ? (
+                <div className="px-3 py-6 text-center text-sm font-medium text-stone-400">Aucune notification</div>
+              ) : (
+                <div className="grid gap-1">
+                  {visibleNotifications.map((notification) => (
+                    <div
+                      key={notification.id}
+                      className="flex items-start gap-3 rounded-2xl px-3 py-2.5 transition hover:bg-stone-50"
+                    >
+                      <span className="mt-2 h-2 w-2 shrink-0 rounded-full bg-[#bb2720]" aria-hidden="true" />
+                      <button
+                        type="button"
+                        onClick={() => onOpenNotification(notification)}
+                        className="min-w-0 flex-1 text-left"
+                      >
+                        <span className="flex items-start justify-between gap-3">
+                          <span className="truncate text-sm font-semibold text-stone-900">{notification.title}</span>
+                          <span className="shrink-0 text-xs font-medium text-stone-400">{formatNotificationRelativeTime(notification.createdAt)}</span>
+                        </span>
+                        <span className="mt-0.5 line-clamp-2 text-xs font-medium leading-snug text-stone-500">{notification.body}</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          onDismissNotification(notification);
+                          if (visibleNotifications.length <= 1) {
+                            setOpen(false);
+                          }
+                        }}
+                        className="shrink-0 rounded-full border border-stone-200 bg-white px-2.5 py-1 text-xs font-semibold text-stone-600 transition hover:bg-stone-50"
+                      >
+                        OK
+                      </button>
+                    </div>
+                  ))}
                 </div>
-              ))
-            )}
+              )}
+            </div>
           </div>
         </div>
       )}
