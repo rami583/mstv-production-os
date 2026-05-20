@@ -778,6 +778,11 @@ const cachedProfileMetaKeyPrefix = "mstv.cachedProfileMeta.";
 const cachedAppDataKeyPrefix = "mstv.cachedAppData.";
 const cachedNotificationsKeyPrefix = "mstv.cachedNotifications.";
 const importantNotificationTypes = new Set(["event_created", "event_date_changed", "event_time_changed", "event_deleted"]);
+const modalBackdropClassName = "fixed inset-0 z-40 flex bg-black/35";
+const elevatedModalBackdropClassName = "fixed inset-0 z-[60] flex bg-black/35";
+const notificationLayerClassName = "fixed inset-0 z-[80] flex bg-black/35";
+const modalSheetPositionClassName = "items-end p-3 sm:items-center sm:justify-center sm:p-6";
+const modalPanelClassName = "rounded-3xl border border-stone-200 bg-white shadow-xl shadow-black/10";
 const calendarArrowClassName =
   "flex h-9 w-9 items-center justify-center rounded-full text-base text-[#bb2720] transition hover:bg-[#bb2720]/[0.08] disabled:cursor-not-allowed disabled:text-stone-300 disabled:hover:bg-transparent";
 
@@ -795,6 +800,25 @@ const monthNames = [
   "Novembre",
   "Décembre",
 ];
+
+function useEscapeToClose(onClose: () => void, enabled = true) {
+  useEffect(() => {
+    if (!enabled) return;
+
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") onClose();
+    }
+
+    document.addEventListener("keydown", handleKeyDown);
+    return () => document.removeEventListener("keydown", handleKeyDown);
+  }, [enabled, onClose]);
+}
+
+function handleModalBackdropPointerDown(pointerEvent: ReactPointerEvent<HTMLDivElement>, onClose: () => void) {
+  if (pointerEvent.target === pointerEvent.currentTarget) {
+    onClose();
+  }
+}
 
 function formatDateKey(date: Date) {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
@@ -8066,19 +8090,15 @@ function EventSearchOverlay({
     return () => window.cancelAnimationFrame(focusFrame);
   }, []);
 
-  useEffect(() => {
-    function handleKeyDown(event: KeyboardEvent) {
-      if (event.key === "Escape") onClose();
-    }
-
-    document.addEventListener("keydown", handleKeyDown);
-    return () => document.removeEventListener("keydown", handleKeyDown);
-  }, [onClose]);
+  useEscapeToClose(onClose);
 
   return (
-    <div className="fixed inset-0 z-50 bg-stone-950/10 px-4 py-[calc(1rem+env(safe-area-inset-top))] backdrop-blur-sm sm:px-6">
-      <div className="mx-auto flex h-full max-w-2xl flex-col">
-        <div className="rounded-[1.75rem] border border-stone-200 bg-white/95 p-3">
+    <div
+      className={cn(modalBackdropClassName, "p-3 sm:p-6")}
+      onPointerDown={(pointerEvent) => handleModalBackdropPointerDown(pointerEvent, onClose)}
+    >
+      <div className="mx-auto flex h-full w-full max-w-2xl flex-col" onPointerDown={(pointerEvent) => pointerEvent.stopPropagation()}>
+        <div className={cn(modalPanelClassName, "p-3")}>
           <div className="flex items-center gap-2">
             <div className="flex h-12 min-w-0 flex-1 items-center gap-3 rounded-2xl border border-stone-200 bg-[#f7f9fb] px-4">
               <Search className="h-4 w-4 shrink-0 text-stone-400" />
@@ -8100,7 +8120,7 @@ function EventSearchOverlay({
           </div>
         </div>
 
-        <div className="no-scrollbar mt-3 min-h-0 flex-1 overflow-y-auto overscroll-contain rounded-[1.75rem] border border-stone-200 bg-white/95 p-2">
+        <div className={cn(modalPanelClassName, "no-scrollbar mt-3 min-h-0 flex-1 overflow-y-auto overscroll-contain p-2")}>
           {!normalizedQuery && (
             <div className="px-4 py-8 text-center text-base font-medium text-stone-400">Rechercher un client, un événement ou une date.</div>
           )}
@@ -11806,10 +11826,11 @@ function CreateEventModal({
   function updateField<Key extends keyof CreateEventInput>(key: Key, value: CreateEventInput[Key]) {
     setForm((current) => ({ ...current, [key]: value }));
   }
+  useEscapeToClose(onClose);
 
   return (
-    <div className="fixed inset-0 z-50 flex items-end bg-stone-950/10 p-3 sm:items-center sm:justify-center sm:p-6">
-      <form onSubmit={handleSubmit} className="w-full rounded-3xl border border-stone-200 bg-white p-5 sm:max-w-xl sm:p-6">
+    <div className={cn(modalBackdropClassName, modalSheetPositionClassName)} onPointerDown={(pointerEvent) => handleModalBackdropPointerDown(pointerEvent, onClose)}>
+      <form onSubmit={handleSubmit} className={cn(modalPanelClassName, "w-full p-5 sm:max-w-xl sm:p-6")} onPointerDown={(pointerEvent) => pointerEvent.stopPropagation()}>
         <div className="mb-5 flex items-center justify-between gap-4">
           <h2 className="text-base font-semibold text-stone-950">{isEditing ? "Modifier l'événement" : "Créer un événement"}</h2>
           <button type="button" onClick={onClose} className="rounded-full border border-stone-200 px-3 py-1.5 text-base font-semibold text-stone-600">
@@ -11949,10 +11970,11 @@ function NativeMstvIcsImportModal({
       setImporting(false);
     }
   }
+  useEscapeToClose(onClose);
 
   return (
-    <div className="fixed inset-0 z-50 flex items-end bg-stone-950/10 p-3 sm:items-center sm:justify-center sm:p-6">
-      <div className="flex max-h-[86vh] w-full flex-col rounded-3xl border border-stone-200 bg-white p-5 sm:max-w-2xl sm:p-6">
+    <div className={cn(modalBackdropClassName, modalSheetPositionClassName)} onPointerDown={(pointerEvent) => handleModalBackdropPointerDown(pointerEvent, onClose)}>
+      <div className={cn(modalPanelClassName, "flex max-h-[86vh] w-full flex-col p-5 sm:max-w-2xl sm:p-6")} onPointerDown={(pointerEvent) => pointerEvent.stopPropagation()}>
         <div className="mb-5 flex items-start justify-between gap-4">
           <div className="min-w-0">
             <h2 className="text-base font-semibold text-stone-950">Importer calendrier MSTV</h2>
@@ -12227,10 +12249,11 @@ function QuoteImportModal({
       setSubmitting(false);
     }
   }
+  useEscapeToClose(onClose);
 
   return (
-    <div className="fixed inset-0 z-50 flex items-end bg-stone-950/10 p-3 sm:items-center sm:justify-center sm:p-6">
-      <form onSubmit={handleSubmit} className="w-full rounded-3xl border border-stone-200 bg-white p-5 sm:max-w-2xl sm:p-6">
+    <div className={cn(modalBackdropClassName, modalSheetPositionClassName)} onPointerDown={(pointerEvent) => handleModalBackdropPointerDown(pointerEvent, onClose)}>
+      <form onSubmit={handleSubmit} className={cn(modalPanelClassName, "w-full p-5 sm:max-w-2xl sm:p-6")} onPointerDown={(pointerEvent) => pointerEvent.stopPropagation()}>
         <div className="mb-5 flex items-center justify-between gap-4">
           <div>
             <h2 className="text-base font-semibold text-stone-950">
@@ -12461,9 +12484,11 @@ function EventHistorySheet({
   onRestore: (entry: EventActivityLog) => Promise<void>;
   canRestore: boolean;
 }) {
+  useEscapeToClose(onClose);
+
   return (
-    <div className="fixed inset-0 z-50 flex items-end bg-stone-950/10 p-3 sm:items-center sm:justify-center sm:p-6">
-      <div className="flex max-h-[82vh] w-full flex-col rounded-3xl border border-stone-200 bg-white p-4 sm:max-w-lg sm:p-5">
+    <div className={cn(modalBackdropClassName, modalSheetPositionClassName)} onPointerDown={(pointerEvent) => handleModalBackdropPointerDown(pointerEvent, onClose)}>
+      <div className={cn(modalPanelClassName, "flex max-h-[82vh] w-full flex-col p-4 sm:max-w-lg sm:p-5")} onPointerDown={(pointerEvent) => pointerEvent.stopPropagation()}>
         <div className="mb-4 flex items-start justify-between gap-3">
           <div className="min-w-0">
             <h2 className="text-base font-semibold text-stone-950">Historique</h2>
@@ -12546,9 +12571,11 @@ function TrashEventsSheet({
   canRestore: boolean;
   canPermanentDelete: boolean;
 }) {
+  useEscapeToClose(onClose);
+
   return (
-    <div className="fixed inset-0 z-50 flex items-end bg-stone-950/10 p-3 sm:items-center sm:justify-center sm:p-6">
-      <div className="flex max-h-[82vh] w-full flex-col rounded-3xl border border-stone-200 bg-white p-4 sm:max-w-2xl sm:p-5">
+    <div className={cn(modalBackdropClassName, modalSheetPositionClassName)} onPointerDown={(pointerEvent) => handleModalBackdropPointerDown(pointerEvent, onClose)}>
+      <div className={cn(modalPanelClassName, "flex max-h-[82vh] w-full flex-col p-4 sm:max-w-2xl sm:p-5")} onPointerDown={(pointerEvent) => pointerEvent.stopPropagation()}>
         <div className="mb-4 flex items-start justify-between gap-3">
           <div className="min-w-0">
             <h2 className="text-base font-semibold text-stone-950">Corbeille</h2>
@@ -12630,9 +12657,11 @@ function UserManagementSheet({
   onClose: () => void;
   onUpdateRole: (profile: UserProfile, role: UserRole) => Promise<void>;
 }) {
+  useEscapeToClose(onClose);
+
   return (
-    <div className="fixed inset-0 z-50 flex items-end bg-stone-950/10 p-3 sm:items-center sm:justify-center sm:p-6">
-      <div className="flex max-h-[82vh] w-full flex-col rounded-3xl border border-stone-200 bg-white p-4 sm:max-w-2xl sm:p-5">
+    <div className={cn(modalBackdropClassName, modalSheetPositionClassName)} onPointerDown={(pointerEvent) => handleModalBackdropPointerDown(pointerEvent, onClose)}>
+      <div className={cn(modalPanelClassName, "flex max-h-[82vh] w-full flex-col p-4 sm:max-w-2xl sm:p-5")} onPointerDown={(pointerEvent) => pointerEvent.stopPropagation()}>
         <div className="mb-4 flex items-start justify-between gap-3">
           <div className="min-w-0">
             <h2 className="text-base font-semibold text-stone-950">Gestion utilisateurs</h2>
@@ -12845,25 +12874,23 @@ function ExternalCalendarsSheet({
     setSelectedCalendarId(null);
     setView("list");
   }
+  useEscapeToClose(onClose);
 
   return (
     <div
       className={cn(
-        "fixed inset-0 z-50 flex bg-stone-950/10",
+        modalBackdropClassName,
         isMobileFormView ? "items-stretch p-0 sm:items-center sm:justify-center sm:p-6" : "items-end p-3 sm:items-center sm:justify-center sm:p-6",
       )}
-      onPointerDown={(pointerEvent) => {
-        if (pointerEvent.target === pointerEvent.currentTarget) {
-          onClose();
-        }
-      }}
+      onPointerDown={(pointerEvent) => handleModalBackdropPointerDown(pointerEvent, onClose)}
     >
       <div
         className={cn(
-          "flex w-full flex-col bg-white",
+          modalPanelClassName,
+          "flex w-full flex-col",
           isMobileFormView
-            ? "h-[100dvh] max-h-[100dvh] rounded-none border-0 px-4 pb-[calc(env(safe-area-inset-bottom)+1rem)] pt-[calc(env(safe-area-inset-top)+1rem)] sm:h-auto sm:max-h-[86vh] sm:max-w-2xl sm:rounded-3xl sm:border sm:border-stone-200 sm:p-5"
-            : "max-h-[86vh] rounded-3xl border border-stone-200 p-4 sm:max-w-2xl sm:p-5",
+            ? "h-[100dvh] max-h-[100dvh] rounded-none border-0 px-4 pb-[calc(env(safe-area-inset-bottom)+1rem)] pt-[calc(env(safe-area-inset-top)+1rem)] shadow-none sm:h-auto sm:max-h-[86vh] sm:max-w-2xl sm:rounded-3xl sm:border sm:border-stone-200 sm:p-5 sm:shadow-xl sm:shadow-black/10"
+            : "max-h-[86vh] p-4 sm:max-w-2xl sm:p-5",
         )}
         onPointerDown={(pointerEvent) => pointerEvent.stopPropagation()}
       >
@@ -13312,18 +13339,15 @@ function ExternalCalendarEventDetails({
   const dateLabel = event.allDay ? formatFullDate(event.startTime.slice(0, 10)) : formatFullDate(formatDateKey(new Date(event.startTime)));
   const timeRange = formatExternalEventTimeRange(event);
   const descriptionView = getExternalEventDescriptionView(event.description);
+  useEscapeToClose(onClose);
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-end bg-stone-950/10 p-3 sm:items-center sm:justify-center sm:p-6"
-      onPointerDown={(pointerEvent) => {
-        if (pointerEvent.target === pointerEvent.currentTarget) {
-          onClose();
-        }
-      }}
+      className={cn(modalBackdropClassName, modalSheetPositionClassName)}
+      onPointerDown={(pointerEvent) => handleModalBackdropPointerDown(pointerEvent, onClose)}
     >
       <div
-        className="flex max-h-[calc(100dvh-1.5rem)] w-full flex-col overflow-hidden rounded-3xl border border-stone-200 bg-white p-4 sm:max-h-[min(760px,calc(100dvh-3rem))] sm:max-w-lg sm:p-5"
+        className={cn(modalPanelClassName, "flex max-h-[calc(100dvh-1.5rem)] w-full flex-col overflow-hidden p-4 sm:max-h-[min(760px,calc(100dvh-3rem))] sm:max-w-lg sm:p-5")}
         onPointerDown={(pointerEvent) => pointerEvent.stopPropagation()}
       >
         <div className="mb-4 flex shrink-0 items-start justify-between gap-3">
@@ -13418,10 +13442,11 @@ function DuplicateEventDialog({
       setDuplicating(false);
     }
   }
+  useEscapeToClose(onClose);
 
   return (
-    <div className="fixed inset-0 z-50 flex items-end bg-stone-950/10 p-3 sm:items-center sm:justify-center sm:p-6">
-      <div className="w-full rounded-3xl border border-stone-200 bg-white p-5 sm:max-w-md sm:p-6">
+    <div className={cn(modalBackdropClassName, modalSheetPositionClassName)} onPointerDown={(pointerEvent) => handleModalBackdropPointerDown(pointerEvent, onClose)}>
+      <div className={cn(modalPanelClassName, "w-full p-5 sm:max-w-md sm:p-6")} onPointerDown={(pointerEvent) => pointerEvent.stopPropagation()}>
         <div className="mb-5">
           <p className="truncate text-base font-semibold text-stone-950">{request.event.clientName}</p>
           <p className="mt-1 truncate text-base text-stone-500">{request.event.eventName}</p>
@@ -13490,10 +13515,11 @@ function DeleteEventDialog({
       setDeleting(false);
     }
   }
+  useEscapeToClose(onClose);
 
   return (
-    <div className="fixed inset-0 z-50 flex items-end bg-stone-950/10 p-3 sm:items-center sm:justify-center sm:p-6">
-      <div className="w-full rounded-3xl border border-stone-200 bg-white p-5 sm:max-w-md sm:p-6">
+    <div className={cn(modalBackdropClassName, modalSheetPositionClassName)} onPointerDown={(pointerEvent) => handleModalBackdropPointerDown(pointerEvent, onClose)}>
+      <div className={cn(modalPanelClassName, "w-full p-5 sm:max-w-md sm:p-6")} onPointerDown={(pointerEvent) => pointerEvent.stopPropagation()}>
         <div className="mb-5">
           <h2 className="text-base font-semibold text-stone-950">Placer cet événement dans la corbeille ?</h2>
           <p className="mt-2 text-base font-medium text-stone-500">Vous pourrez le restaurer depuis la Corbeille.</p>
@@ -13549,10 +13575,11 @@ function PermanentDeleteEventDialog({
       setDeleting(false);
     }
   }
+  useEscapeToClose(onClose);
 
   return (
-    <div className="fixed inset-0 z-[60] flex items-end bg-stone-950/15 p-3 sm:items-center sm:justify-center sm:p-6">
-      <div className="w-full rounded-3xl border border-rose-200 bg-white p-5 sm:max-w-md sm:p-6">
+    <div className={cn(elevatedModalBackdropClassName, modalSheetPositionClassName)} onPointerDown={(pointerEvent) => handleModalBackdropPointerDown(pointerEvent, onClose)}>
+      <div className={cn(modalPanelClassName, "w-full border-rose-200 p-5 sm:max-w-md sm:p-6")} onPointerDown={(pointerEvent) => pointerEvent.stopPropagation()}>
         <div className="mb-5">
           <h2 className="text-base font-semibold text-stone-950">Supprimer définitivement cet événement ?</h2>
           <p className="mt-2 text-base font-medium text-rose-700">Cette action est irréversible.</p>
@@ -13620,6 +13647,7 @@ function SharedDatePicker({
       }
     };
   }, []);
+  useEscapeToClose(onClose);
 
   function selectDate(dateKey: string) {
     if (dateKey === selectedDate) {
@@ -13759,14 +13787,12 @@ function SharedDatePicker({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-end justify-center bg-stone-950/10 p-3 sm:items-center sm:p-6"
+      className={cn(modalBackdropClassName, "items-end justify-center p-3 sm:items-center sm:p-6")}
       onPointerDown={(pointerEvent) => {
-        if (pointerEvent.target === pointerEvent.currentTarget && !saving) {
-          onClose();
-        }
+        if (!saving) handleModalBackdropPointerDown(pointerEvent, onClose);
       }}
     >
-      <div className="w-full max-w-sm rounded-3xl border border-stone-200 bg-white p-3 sm:p-4" onPointerDown={(pointerEvent) => pointerEvent.stopPropagation()}>
+      <div className={cn(modalPanelClassName, "w-full max-w-sm p-3 sm:p-4")} onPointerDown={(pointerEvent) => pointerEvent.stopPropagation()}>
         <div
           ref={pickerPagerRef}
           className="overflow-hidden"
@@ -13836,14 +13862,14 @@ function SharedDatePicker({
 
       {pendingDate && (
         <div
-          className="absolute inset-0 flex items-end justify-center bg-stone-950/10 p-3 sm:items-center sm:p-6"
+          className="absolute inset-0 flex items-end justify-center bg-black/35 p-3 sm:items-center sm:p-6"
           onPointerDown={(pointerEvent) => {
             if (pointerEvent.target === pointerEvent.currentTarget && !saving) {
               onClose();
             }
           }}
         >
-          <div className="w-full max-w-sm rounded-3xl border border-stone-200 bg-white p-4 sm:p-5" onPointerDown={(pointerEvent) => pointerEvent.stopPropagation()}>
+          <div className={cn(modalPanelClassName, "w-full max-w-sm p-4 sm:p-5")} onPointerDown={(pointerEvent) => pointerEvent.stopPropagation()}>
             <div className="grid grid-cols-2 gap-2">
               <button
                 type="button"
@@ -13973,10 +13999,11 @@ function DocumentPreviewModal({
       setDownloadError(getUserFacingErrorMessage(error, "Impossible de télécharger le document."));
     }
   }
+  useEscapeToClose(onClose);
 
   return (
-    <div className="fixed inset-0 z-50 flex bg-stone-950/20 p-3 sm:p-6">
-      <div className="flex min-h-0 w-full flex-col overflow-hidden rounded-3xl border border-stone-200 bg-white">
+    <div className={cn(modalBackdropClassName, "p-3 sm:p-6")} onPointerDown={(pointerEvent) => handleModalBackdropPointerDown(pointerEvent, onClose)}>
+      <div className={cn(modalPanelClassName, "flex min-h-0 w-full flex-col overflow-hidden")} onPointerDown={(pointerEvent) => pointerEvent.stopPropagation()}>
         <div className="flex min-w-0 shrink-0 items-center justify-between gap-3 border-b border-stone-200 px-4 py-3 sm:px-5">
           <div className="flex min-w-0 items-center gap-2">
             <FileIcon className="h-5 w-5 shrink-0 text-amber-700" />
@@ -14140,6 +14167,7 @@ function NotificationMenu({
   onDismissNotification: (notification: AppNotification) => void;
 }) {
   const visibleNotifications = notifications.filter((notification) => !notification.readAt && importantNotificationTypes.has(notification.type));
+  useEscapeToClose(() => setOpen(false), open);
 
   return (
     <div className="relative">
@@ -14157,7 +14185,7 @@ function NotificationMenu({
       </button>
       {open && (
         <div
-          className="fixed inset-0 z-50 flex items-end bg-stone-950/10 p-3 sm:items-center sm:justify-center sm:p-6"
+          className={cn(notificationLayerClassName, modalSheetPositionClassName)}
           onPointerDown={(pointerEvent) => {
             if (pointerEvent.target === pointerEvent.currentTarget) {
               setOpen(false);
@@ -14165,7 +14193,7 @@ function NotificationMenu({
           }}
         >
           <div
-            className="flex max-h-[86vh] w-full flex-col overflow-hidden rounded-3xl border border-stone-200 bg-white p-4 text-left sm:max-w-2xl sm:p-5"
+            className={cn(modalPanelClassName, "flex max-h-[86vh] w-full flex-col overflow-hidden p-4 text-left sm:max-w-2xl sm:p-5")}
             onPointerDown={(pointerEvent) => pointerEvent.stopPropagation()}
           >
             <div className="mb-4 flex items-start justify-between gap-3">
@@ -14514,9 +14542,11 @@ function CompactGridDeleteDialog({
   onCancel: () => void;
   onConfirm: () => void;
 }) {
+  useEscapeToClose(onCancel);
+
   return (
-    <div className="fixed inset-0 z-50 flex items-end justify-center bg-stone-950/10 p-3 sm:items-center sm:p-6">
-      <div data-grid-delete-dialog className="w-full max-w-xs rounded-3xl border border-stone-200 bg-white p-4">
+    <div className={cn(modalBackdropClassName, "items-end justify-center p-3 sm:items-center sm:p-6")} onPointerDown={(pointerEvent) => handleModalBackdropPointerDown(pointerEvent, onCancel)}>
+      <div data-grid-delete-dialog className={cn(modalPanelClassName, "w-full max-w-xs p-4")} onPointerDown={(pointerEvent) => pointerEvent.stopPropagation()}>
         <p className="text-center text-base font-semibold text-stone-950">Supprimer cet élément ?</p>
         <div className="mt-4 grid grid-cols-2 gap-2">
           <button
