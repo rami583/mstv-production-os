@@ -146,44 +146,71 @@ async function createGoogleEvent(supabase: ReturnType<typeof getServiceSupabaseC
   );
 
   const now = new Date().toISOString();
-  const { error } = await supabase
-    .from("external_event_links")
-    .upsert(
-      {
-        event_id: event.id,
-        external_calendar_id: calendar.id,
-        provider_type: "google",
-        provider_calendar_id: providerCalendarId,
-        external_event_id: googleEvent.id,
-        external_event_uid: googleEvent.iCalUID ?? null,
-        sync_direction: "bidirectional",
-        sync_status: "synced",
-        local_updated_at: event.updated_at,
-        last_synced_at: now,
-        last_external_updated_at: googleEvent.updated ?? now,
-        last_sync_error: null,
-        updated_at: now,
-      },
-      { onConflict: "event_id,external_calendar_id" },
-    );
+  const linkPayload = {
+    provider_type: "google",
+    provider_calendar_id: providerCalendarId,
+    external_event_id: googleEvent.id,
+    external_event_uid: googleEvent.iCalUID ?? null,
+    sync_direction: "bidirectional",
+    sync_status: "synced",
+    local_updated_at: event.updated_at,
+    last_synced_at: now,
+    last_external_updated_at: googleEvent.updated ?? now,
+    last_sync_error: null,
+    updated_at: now,
+  };
 
-  if (error) throw error;
+  const { data: existingLink, error: existingLinkError } = await supabase
+    .from("external_event_links")
+    .select("id")
+    .eq("event_id", event.id)
+    .eq("external_calendar_id", calendar.id)
+    .maybeSingle();
+
+  if (existingLinkError) throw existingLinkError;
+
+  if (existingLink?.id) {
+    const { error } = await supabase.from("external_event_links").update(linkPayload).eq("id", existingLink.id);
+    if (error) throw error;
+  } else {
+    const { error } = await supabase.from("external_event_links").insert({
+      ...linkPayload,
+      event_id: event.id,
+      external_calendar_id: calendar.id,
+      created_at: now,
+    });
+    if (error) throw error;
+  }
   return googleEvent;
 }
 
 async function updateGoogleEvent(supabase: ReturnType<typeof getServiceSupabaseClient>, event: ProductionEventRow, link: ExternalEventLinkRow, calendar: ExternalCalendarRow, userId: string) {
   const { accessToken, providerCalendarId } = await getGoogleAccessForCalendar(supabase, calendar, userId);
-  const googleEvent = await fetchJson<{ id: string; iCalUID?: string; updated?: string }>(
-    `${googleCalendarApiBaseUrl}/calendars/${encodeURIComponent(providerCalendarId)}/events/${encodeURIComponent(link.external_event_id)}`,
-    {
-      method: "PATCH",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${accessToken}`,
+  let googleEvent: { id: string; iCalUID?: string; updated?: string };
+  try {
+    googleEvent = await fetchJson<{ id: string; iCalUID?: string; updated?: string }>(
+      `${googleCalendarApiBaseUrl}/calendars/${encodeURIComponent(providerCalendarId)}/events/${encodeURIComponent(link.external_event_id)}`,
+      {
+        method: "PATCH",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${accessToken}`,
+        },
+        body: JSON.stringify(toGoogleEventPayload(event)),
       },
-      body: JSON.stringify(toGoogleEventPayload(event)),
-    },
-  );
+    );
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Synchronisation Google Calendar impossible.";
+    await supabase
+      .from("external_event_links")
+      .update({
+        sync_status: "failed",
+        last_sync_error: message,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", link.id);
+    throw error;
+  }
 
   const now = new Date().toISOString();
   const { error } = await supabase
@@ -213,7 +240,16 @@ async function deleteGoogleEvent(supabase: ReturnType<typeof getServiceSupabaseC
 
   if (!response.ok && response.status !== 404 && response.status !== 410) {
     const payload = (await response.json().catch(() => null)) as { error?: { message?: string } } | null;
-    throw new Error(payload?.error?.message || "Suppression Google Calendar impossible.");
+    const message = payload?.error?.message || "Suppression Google Calendar impossible.";
+    await supabase
+      .from("external_event_links")
+      .update({
+        sync_status: "failed",
+        last_sync_error: message,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", link.id);
+    throw new Error(message);
   }
 
   const now = new Date().toISOString();

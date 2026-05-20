@@ -84,6 +84,7 @@ type NotificationRow = Database["public"]["Tables"]["notifications"]["Row"];
 type ProfileRow = Database["public"]["Tables"]["profiles"]["Row"];
 type ExternalCalendarRow = Database["public"]["Tables"]["external_calendars"]["Row"];
 type ExternalCalendarEventRow = Database["public"]["Tables"]["external_calendar_events"]["Row"];
+type ExternalEventLinkRow = Database["public"]["Tables"]["external_event_links"]["Row"];
 
 type UserRole = "admin" | "team";
 type ExternalCalendarVisibility = "admin_only" | "team" | "private";
@@ -109,6 +110,10 @@ type EventQueryRow = EventRow & {
 };
 
 type ExternalCalendarEventQueryRow = ExternalCalendarEventRow & {
+  external_calendars: ExternalCalendarRow | null;
+};
+
+type ExternalEventLinkQueryRow = ExternalEventLinkRow & {
   external_calendars: ExternalCalendarRow | null;
 };
 
@@ -281,6 +286,26 @@ type ExternalCalendarEvent = {
   calendarCreatedByProfileId: string | null;
 };
 
+type ExternalEventLink = {
+  id: string;
+  eventId: string;
+  externalCalendarId: string;
+  providerType: ExternalCalendarProviderType;
+  providerCalendarId: string;
+  externalEventId: string;
+  externalEventUid: string | null;
+  syncStatus: string;
+  lastSyncedAt: string | null;
+  lastExternalUpdatedAt: string | null;
+  conflictDetectedAt: string | null;
+  conflictReason: string | null;
+  lastSyncError: string | null;
+  calendarName: string;
+  calendarColor: string | null;
+  calendarProviderType: ExternalCalendarProviderType;
+  calendarSyncCapability: ExternalCalendarSyncCapability;
+};
+
 type GoogleCalendarAccount = {
   id: string;
   email: string | null;
@@ -326,6 +351,7 @@ type ProductionEvent = {
   options: EventOption[];
   links: EventLink[];
   documentGroups: EventDocumentGroup[];
+  externalLinks: ExternalEventLink[];
 };
 
 type ContextSelection =
@@ -2682,7 +2708,50 @@ function mapEvent(row: EventQueryRow): ProductionEvent {
     options,
     links,
     documentGroups: [],
+    externalLinks: [],
   };
+}
+
+function mapExternalEventLink(row: ExternalEventLinkQueryRow): ExternalEventLink {
+  const calendar = row.external_calendars;
+  return {
+    id: row.id,
+    eventId: row.event_id,
+    externalCalendarId: row.external_calendar_id,
+    providerType: normalizeExternalCalendarProviderType(row.provider_type),
+    providerCalendarId: row.provider_calendar_id,
+    externalEventId: row.external_event_id,
+    externalEventUid: row.external_event_uid ?? null,
+    syncStatus: row.sync_status,
+    lastSyncedAt: row.last_synced_at,
+    lastExternalUpdatedAt: row.last_external_updated_at,
+    conflictDetectedAt: row.conflict_detected_at,
+    conflictReason: row.conflict_reason,
+    lastSyncError: row.last_sync_error,
+    calendarName: calendar?.name ?? "Calendrier externe",
+    calendarColor: calendar?.color ?? null,
+    calendarProviderType: normalizeExternalCalendarProviderType(calendar?.provider_type ?? row.provider_type),
+    calendarSyncCapability: normalizeExternalCalendarSyncCapability(calendar?.sync_capability ?? "read_only"),
+  };
+}
+
+function getEventGoogleLinks(event: ProductionEvent) {
+  return event.externalLinks.filter((link) => link.providerType === "google" && link.calendarSyncCapability === "bidirectional");
+}
+
+function getExternalSyncStatusLabel(status: string | null) {
+  if (status === "synced") return "Synchronisé";
+  if (status === "pending" || status === "syncing") return "En attente";
+  if (status === "failed") return "Erreur";
+  if (status === "conflict") return "Conflit";
+  return "En attente";
+}
+
+function getExternalSyncStatusClassName(status: string | null) {
+  if (status === "synced") return "bg-emerald-50 text-emerald-700 ring-emerald-200";
+  if (status === "failed") return "bg-rose-50 text-rose-700 ring-rose-200";
+  if (status === "conflict") return "bg-amber-50 text-amber-800 ring-amber-200";
+  return "bg-sky-50 text-sky-700 ring-sky-200";
 }
 
 function mapEventLinkEntry(row: EventLinkEntryRow): EventLinkEntry {
@@ -2796,6 +2865,21 @@ function withDocumentGroups(events: ProductionEvent[], groups: EventDocumentGrou
   return events.map((event) => ({
     ...event,
     documentGroups: groupsByEventId.get(event.id) ?? [],
+  }));
+}
+
+function withExternalEventLinks(events: ProductionEvent[], links: ExternalEventLink[]) {
+  const linksByEventId = new Map<string, ExternalEventLink[]>();
+
+  for (const link of links) {
+    const eventLinks = linksByEventId.get(link.eventId) ?? [];
+    eventLinks.push(link);
+    linksByEventId.set(link.eventId, eventLinks);
+  }
+
+  return events.map((event) => ({
+    ...event,
+    externalLinks: linksByEventId.get(event.id) ?? [],
   }));
 }
 
@@ -2924,6 +3008,21 @@ async function fetchEvents(filter: "active" | "deleted" = "active") {
       console.error("Failed to load event_link_entries. Apply supabase/migrations/009_event_link_entries.sql if the table is missing.", linkEntryError);
     } else {
       events = withLinkEntries(events, (linkEntryData ?? []).map(mapEventLinkEntry));
+    }
+  }
+
+  if (eventIds.length > 0) {
+    const { data: externalLinkData, error: externalLinkError } = await supabase
+      .from("external_event_links")
+      .select("*, external_calendars (*)")
+      .in("event_id", eventIds)
+      .is("deleted_locally_at", null)
+      .order("created_at", { ascending: true });
+
+    if (externalLinkError) {
+      console.warn("External event links could not be loaded; continuing without Google sync status.", getDebugError(externalLinkError));
+    } else {
+      events = withExternalEventLinks(events, ((externalLinkData ?? []) as ExternalEventLinkQueryRow[]).map(mapExternalEventLink));
     }
   }
 
@@ -3257,6 +3356,18 @@ export default function Home() {
         }),
       ),
     [externalCalendarEvents, permissions, profile],
+  );
+  const writableGoogleCalendars = useMemo(
+    () =>
+      externalCalendars.filter(
+        (calendar) =>
+          calendar.providerType === "google" &&
+          calendar.syncCapability === "bidirectional" &&
+          calendar.syncEnabled &&
+          Boolean(calendar.providerAccountId) &&
+          Boolean(calendar.providerCalendarId),
+      ),
+    [externalCalendars],
   );
 
   useEffect(() => {
@@ -4089,6 +4200,26 @@ export default function Home() {
 
     if (!response.ok) {
       throw new Error(payload?.error ?? "Synchronisation Google Calendar impossible.");
+    }
+  }
+
+  async function markGoogleEventLinksDeletedLocally(eventId: string) {
+    if (!supabase) return;
+
+    const { error } = await supabase
+      .from("external_event_links")
+      .update({
+        deleted_locally_at: new Date().toISOString(),
+        sync_status: "synced",
+        last_sync_error: null,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("event_id", eventId)
+      .eq("provider_type", "google")
+      .is("deleted_locally_at", null);
+
+    if (error) {
+      console.error("Failed to unlink Google Calendar event after local trash move", getDebugError(error));
     }
   }
 
@@ -5119,6 +5250,7 @@ export default function Home() {
         options: offlineOptions,
         links: [],
         documentGroups: [],
+        externalLinks: [],
       };
 
       setEvents((current) => [...current, offlineEvent].sort((a, b) => eventSortValue(a) - eventSortValue(b)));
@@ -5257,7 +5389,7 @@ export default function Home() {
         await syncGoogleEventAction("create", event.id, normalizedInput.syncExternalCalendarId);
       } catch (googleSyncError) {
         console.error("Google Calendar event create failed", getDebugError(googleSyncError));
-        setExternalCalendarSettingsError(getUserFacingErrorMessage(googleSyncError, "Événement créé dans MSTV, mais pas synchronisé avec Google Calendar."));
+        setError(getUserFacingErrorMessage(googleSyncError, "L’événement MSTV a été enregistré, mais la synchronisation Google a échoué."));
       }
     }
 
@@ -5526,9 +5658,16 @@ export default function Home() {
     }
 
     try {
-      await syncGoogleEventAction("update", updatedEvent.id);
+      if (normalizedInput.syncExternalCalendarId) {
+        await syncGoogleEventAction("create", updatedEvent.id, normalizedInput.syncExternalCalendarId);
+      } else {
+        await syncGoogleEventAction("update", updatedEvent.id);
+      }
+      await reloadData(updatedEvent.id, { silent: true });
     } catch (googleSyncError) {
       console.error("Google Calendar event update failed", getDebugError(googleSyncError));
+      setError(getUserFacingErrorMessage(googleSyncError, "L’événement MSTV a été enregistré, mais la synchronisation Google a échoué."));
+      await reloadData(updatedEvent.id, { silent: true });
     }
   }
 
@@ -5972,6 +6111,9 @@ export default function Home() {
         await syncGoogleEventAction("update", event.id);
       } catch (googleSyncError) {
         console.error("Google Calendar time update failed", getDebugError(googleSyncError));
+        setError(getUserFacingErrorMessage(googleSyncError, "L’événement MSTV a été enregistré, mais la synchronisation Google a échoué."));
+      } finally {
+        await reloadData(event.id, { silent: true });
       }
     }
   }
@@ -6108,6 +6250,9 @@ export default function Home() {
         await syncGoogleEventAction("update", event.id);
       } catch (googleSyncError) {
         console.error("Google Calendar date update failed", getDebugError(googleSyncError));
+        setError(getUserFacingErrorMessage(googleSyncError, "L’événement MSTV a été enregistré, mais la synchronisation Google a échoué."));
+      } finally {
+        await reloadData(event.id, { silent: true });
       }
     }
   }
@@ -7683,7 +7828,7 @@ export default function Home() {
     downloadLink.remove();
   }
 
-  async function deleteCurrentEvent(eventToDelete: ProductionEvent) {
+  async function deleteCurrentEvent(eventToDelete: ProductionEvent, deleteGoogleEvent = true) {
     assertCanSoftDeleteEvents();
 
     if (!eventToDelete) {
@@ -7791,10 +7936,17 @@ export default function Home() {
       { dedupe: true },
     );
 
-    try {
-      await syncGoogleEventAction("delete", eventId);
-    } catch (googleSyncError) {
-      console.error("Google Calendar event delete failed", getDebugError(googleSyncError));
+    if (getEventGoogleLinks(eventToDelete).length > 0) {
+      if (deleteGoogleEvent) {
+        try {
+          await syncGoogleEventAction("delete", eventId);
+        } catch (googleSyncError) {
+          console.error("Google Calendar event delete failed", getDebugError(googleSyncError));
+          setError(getUserFacingErrorMessage(googleSyncError, "L’événement MSTV a été placé dans la corbeille, mais la suppression Google a échoué."));
+        }
+      } else {
+        await markGoogleEventLinksDeletedLocally(eventId);
+      }
     }
 
     applyOptimisticSoftDelete(deletedEvent.updated_at);
@@ -8162,6 +8314,12 @@ export default function Home() {
               hasNext={hasNextEvent}
               goPrevious={() => navigateEvent(-1)}
               goNext={() => navigateEvent(1)}
+              onEditEvent={() => {
+                if (!permissions.canManageEvents) return;
+                setEditingEvent(selectedEvent);
+                setEditingReturnScreen("detail");
+                setCreateModalOpen(true);
+              }}
               onUpdateEventTime={updateEventTime}
               onToggleOption={toggleOption}
               onChangeOptionCompletedBy={updateOptionCompletedBy}
@@ -8263,7 +8421,7 @@ export default function Home() {
         <CreateEventModal
           selectedDateKey={selectedDateKey}
           event={editingEvent}
-          syncCalendars={externalCalendars.filter((calendar) => calendar.providerType === "google" && calendar.syncCapability === "bidirectional" && calendar.syncEnabled)}
+          syncCalendars={writableGoogleCalendars}
           onClose={() => {
             setCreateModalOpen(false);
             setEditingEvent(null);
@@ -10293,6 +10451,7 @@ function ProductionDetail({
   hasNext,
   goPrevious,
   goNext,
+  onEditEvent,
   onUpdateEventTime,
   onToggleOption,
   onChangeOptionCompletedBy,
@@ -10326,6 +10485,7 @@ function ProductionDetail({
   hasNext: boolean;
   goPrevious: () => void;
   goNext: () => void;
+  onEditEvent: () => void;
   onUpdateEventTime: (event: ProductionEvent, field: EventTimeField, value: string) => Promise<void>;
   onToggleOption: (option: EventOption) => Promise<void>;
   onChangeOptionCompletedBy: (option: EventOption, choice: CompletedByOverrideChoice, customLabel?: string) => Promise<void>;
@@ -10374,6 +10534,7 @@ function ProductionDetail({
   const [eventSwipeIncomingEvent, setEventSwipeIncomingEvent] = useState<ProductionEvent | null>(null);
   const [isEventSwipeDragging, setIsEventSwipeDragging] = useState(false);
   const [eventSwipeAnimating, setEventSwipeAnimating] = useState(false);
+  const googleLinks = getEventGoogleLinks(event);
 
   function publishEventDateSwipeTransition({
     currentOffset,
@@ -10852,8 +11013,35 @@ function ProductionDetail({
           <div className="min-w-0 flex-1">
             <h1 className="truncate text-4xl font-semibold leading-tight text-stone-950 sm:text-6xl">{event.clientName}</h1>
             <p className="mt-2 truncate text-base font-medium text-stone-500">{event.eventName}</p>
+            {permissions.canManageEvents && (
+              <button
+                type="button"
+                onClick={onEditEvent}
+                className="mt-3 rounded-full border border-stone-200 bg-white px-3 py-2 text-sm font-semibold text-stone-600 transition hover:bg-stone-50 sm:hidden"
+              >
+                Modifier
+              </button>
+            )}
+            {googleLinks.length > 0 && (
+              <div className="mt-3 flex flex-wrap items-center gap-2">
+                {googleLinks.map((link) => (
+                  <span key={link.id} className="inline-flex max-w-full items-center gap-1.5 rounded-full bg-white px-2.5 py-1 text-xs font-semibold text-stone-600 ring-1 ring-stone-200">
+                    <ExternalCalendarColorDot color={link.calendarColor} className="h-2.5 w-2.5" />
+                    <span className="truncate">{link.calendarName}</span>
+                    <span className={cn("rounded-full px-1.5 py-0.5 ring-1", getExternalSyncStatusClassName(link.syncStatus))}>
+                      {getExternalSyncStatusLabel(link.syncStatus)}
+                    </span>
+                  </span>
+                ))}
+              </div>
+            )}
           </div>
           <div className="hidden items-center gap-2 sm:flex">
+            {permissions.canManageEvents && (
+              <button type="button" onClick={onEditEvent} className="rounded-full border border-stone-200 bg-white px-3 py-2 text-sm font-semibold text-stone-600 transition hover:bg-stone-50">
+                Modifier
+              </button>
+            )}
             <button onClick={goPrevious} disabled={!hasPrevious} className={calendarArrowClassName} aria-label="Événement précédent">
               ←
             </button>
@@ -12585,6 +12773,9 @@ function CreateEventModal({
   onSubmit: (input: CreateEventInput) => Promise<void>;
 }) {
   const isEditing = Boolean(event);
+  const googleLinks = event ? getEventGoogleLinks(event) : [];
+  const linkedGoogleCalendarIds = new Set(googleLinks.map((link) => link.externalCalendarId));
+  const linkableSyncCalendars = syncCalendars.filter((calendar) => !linkedGoogleCalendarIds.has(calendar.id));
   const [form, setForm] = useState<CreateEventInput>({
     clientName: event?.clientName ?? "",
     eventName: event?.eventName ?? "",
@@ -12659,7 +12850,7 @@ function CreateEventModal({
             <TimeTextInput value={form.endOfDayTime} onChange={(value) => updateField("endOfDayTime", value)} className={formInputClassName} />
           </Field>
           {!isEditing && syncCalendars.length > 0 && (
-            <Field label="Synchronisation">
+            <Field label="Calendrier">
               <select
                 value={form.syncExternalCalendarId ?? ""}
                 onChange={(event) => updateField("syncExternalCalendarId", event.target.value || null)}
@@ -12675,6 +12866,49 @@ function CreateEventModal({
             </Field>
           )}
         </div>
+
+        {isEditing && (
+          <div className="mt-4 rounded-2xl border border-stone-200 bg-stone-50/70 px-4 py-3">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+              <div className="min-w-0">
+                <p className="text-base font-semibold text-stone-950">Synchronisation calendrier</p>
+                {googleLinks.length > 0 ? (
+                  <div className="mt-2 flex flex-col gap-2">
+                    {googleLinks.map((link) => (
+                      <div key={link.id} className="flex flex-wrap items-center gap-2">
+                        <ExternalCalendarColorDot color={link.calendarColor} />
+                        <span className="text-sm font-semibold text-stone-700">{link.calendarName}</span>
+                        <span className={cn("rounded-full px-2 py-0.5 text-xs font-semibold ring-1", getExternalSyncStatusClassName(link.syncStatus))}>
+                          {getExternalSyncStatusLabel(link.syncStatus)}
+                        </span>
+                        {link.lastSyncError && <span className="text-xs font-semibold text-rose-600">{link.lastSyncError}</span>}
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="mt-1 text-sm font-semibold text-stone-400">MSTV uniquement pour le moment.</p>
+                )}
+              </div>
+              {linkableSyncCalendars.length > 0 && (
+                <label className="min-w-0 sm:w-64">
+                  <span className="mb-1.5 block text-sm font-semibold text-stone-500">Envoyer vers Google Calendar</span>
+                  <select
+                    value={form.syncExternalCalendarId ?? ""}
+                    onChange={(selectEvent) => updateField("syncExternalCalendarId", selectEvent.target.value || null)}
+                    className="h-10 w-full rounded-xl border border-stone-200 bg-white px-3 text-sm font-semibold text-stone-700 outline-none"
+                  >
+                    <option value="">Ne pas envoyer</option>
+                    {linkableSyncCalendars.map((calendar) => (
+                      <option key={calendar.id} value={calendar.id}>
+                        {calendar.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              )}
+            </div>
+          </div>
+        )}
 
         {error && <div className="mt-4 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-base font-medium text-rose-700">{error}</div>}
 
@@ -14499,8 +14733,11 @@ function DeleteEventDialog({
 }: {
   event: ProductionEvent;
   onClose: () => void;
-  onConfirm: (event: ProductionEvent) => Promise<void>;
+  onConfirm: (event: ProductionEvent, deleteGoogleEvent: boolean) => Promise<void>;
 }) {
+  const googleLinks = getEventGoogleLinks(event);
+  const hasGoogleLinks = googleLinks.length > 0;
+  const [deleteGoogleEvent, setDeleteGoogleEvent] = useState(hasGoogleLinks);
   const [deleting, setDeleting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -14514,7 +14751,7 @@ function DeleteEventDialog({
     setError(null);
 
     try {
-      await onConfirm(event);
+      await onConfirm(event, hasGoogleLinks ? deleteGoogleEvent : false);
     } catch (deleteError) {
       setError(getUserFacingErrorMessage(deleteError, "Impossible de supprimer l'événement."));
       setDeleting(false);
@@ -14531,6 +14768,24 @@ function DeleteEventDialog({
           <p className="mt-4 truncate text-base font-semibold text-stone-950">{event.clientName}</p>
           <p className="mt-1 truncate text-base text-stone-500">{event.eventName}</p>
         </div>
+
+        {hasGoogleLinks && (
+          <label className="mb-4 flex items-start gap-3 rounded-2xl border border-stone-200 bg-stone-50 px-4 py-3">
+            <input
+              type="checkbox"
+              checked={deleteGoogleEvent}
+              onChange={(checkboxEvent) => setDeleteGoogleEvent(checkboxEvent.target.checked)}
+              disabled={deleting}
+              className="mt-1 h-4 w-4 rounded border-stone-300 text-[#bb2720] focus:ring-[#bb2720]"
+            />
+            <span className="min-w-0">
+              <span className="block text-base font-semibold text-stone-800">Supprimer aussi cet événement du calendrier Google ?</span>
+              <span className="mt-1 block text-sm font-medium text-stone-500">
+                {googleLinks.map((link) => link.calendarName).join(", ")}
+              </span>
+            </span>
+          </label>
+        )}
 
         {error && <div className="mb-4 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-base font-medium text-rose-700">{error}</div>}
 

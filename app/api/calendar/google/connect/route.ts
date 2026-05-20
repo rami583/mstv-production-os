@@ -21,6 +21,12 @@ export function OPTIONS() {
 export async function POST(request: Request) {
   try {
     console.info("Google OAuth connect reached");
+    console.info("Google OAuth connect env diagnostic", {
+      hasGoogleClientId: Boolean(process.env.GOOGLE_CLIENT_ID),
+      hasGoogleClientSecret: Boolean(process.env.GOOGLE_CLIENT_SECRET),
+      hasGoogleRedirectUri: Boolean(process.env.GOOGLE_REDIRECT_URI),
+      siteUrl: process.env.NEXT_PUBLIC_SITE_URL || null,
+    });
     const authResult = await requireAuthenticatedUser(request);
     if ("error" in authResult) return authResult.error;
 
