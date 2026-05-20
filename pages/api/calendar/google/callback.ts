@@ -27,19 +27,40 @@ export default async function handler(request: NextApiRequest, response: NextApi
   const state = typeof request.query.state === "string" ? request.query.state : null;
   const oauthError = typeof request.query.error === "string" ? request.query.error : null;
 
+  console.info("Google OAuth callback reached", {
+    hasCode: Boolean(code),
+    hasState: Boolean(state),
+    hasOAuthError: Boolean(oauthError),
+  });
+
   if (oauthError) {
+    console.warn("Google OAuth callback returned OAuth error", { error: oauthError });
     response.redirect(302, getRedirectUrl("error", "Connexion Google annulée."));
     return;
   }
 
   if (!code || !state) {
+    console.warn("Google OAuth callback missing code or state", {
+      hasCode: Boolean(code),
+      hasState: Boolean(state),
+    });
     response.redirect(302, getRedirectUrl("error", "Réponse Google incomplète."));
     return;
   }
 
   try {
     const statePayload = verifyOAuthState(state);
+    console.info("Google OAuth callback state decoded", {
+      userId: statePayload.userId,
+      issuedAt: statePayload.issuedAt,
+    });
     const tokenPayload = await exchangeGoogleCode(code);
+    console.info("Google OAuth token exchange result", {
+      accessTokenPresent: Boolean(tokenPayload.access_token),
+      refreshTokenPresent: Boolean(tokenPayload.refresh_token),
+      expiresInPresent: Boolean(tokenPayload.expires_in),
+      scopeCount: tokenPayload.scope?.split(/\s+/).filter(Boolean).length ?? 0,
+    });
     if (!tokenPayload.refresh_token) {
       throw new Error("Google n'a pas renvoyé de jeton de synchronisation. Réessayez en validant le consentement.");
     }
@@ -51,6 +72,13 @@ export default async function handler(request: NextApiRequest, response: NextApi
     const tokenExpiresAt = tokenPayload.expires_in ? new Date(Date.now() + tokenPayload.expires_in * 1000).toISOString() : null;
     const now = new Date().toISOString();
     const supabase = getServiceSupabaseClient();
+
+    console.info("Google OAuth user info fetched", {
+      userId: statePayload.userId,
+      providerAccountIdPresent: Boolean(providerAccountId),
+      providerEmailPresent: Boolean(providerEmail),
+      providerEmail,
+    });
 
     const { error } = await supabase
       .from("external_calendar_accounts")
@@ -75,6 +103,11 @@ export default async function handler(request: NextApiRequest, response: NextApi
       );
 
     if (error) throw error;
+    console.info("Google OAuth account upsert success", {
+      userId: statePayload.userId,
+      providerAccountIdPresent: Boolean(providerAccountId),
+      providerEmailPresent: Boolean(providerEmail),
+    });
     response.redirect(302, getRedirectUrl("connected"));
   } catch (error) {
     const message = error instanceof Error ? error.message : "Connexion Google impossible.";

@@ -3590,6 +3590,27 @@ export default function Home() {
   }, []);
 
   useEffect(() => {
+    if (typeof window === "undefined") return;
+    const searchParams = new URLSearchParams(window.location.search);
+    const googleStatus = searchParams.get("calendarGoogle");
+    if (!googleStatus) return;
+
+    setExternalCalendarSettingsOpen(true);
+    if (googleStatus === "connected") {
+      setExternalCalendarSettingsError(null);
+      void refreshGoogleCalendarAccounts();
+      void refreshExternalCalendarSettings();
+    } else {
+      setExternalCalendarSettingsError(searchParams.get("message") || "Connexion Google Calendar impossible.");
+    }
+
+    searchParams.delete("calendarGoogle");
+    searchParams.delete("message");
+    const nextSearch = searchParams.toString();
+    window.history.replaceState(null, "", `${window.location.pathname}${nextSearch ? `?${nextSearch}` : ""}${window.location.hash}`);
+  }, [authSession?.user.id, online]);
+
+  useEffect(() => {
     function preventNativeFileDrop(dragEvent: DragEvent) {
       if (!dragEvent.dataTransfer || !hasFileDragItem(dragEvent.dataTransfer)) return;
       dragEvent.preventDefault();
@@ -3937,8 +3958,18 @@ export default function Home() {
         throw new Error(payload?.error ?? "Impossible de charger Google Calendar.");
       }
 
-      setGoogleCalendarAccounts(payload?.accounts ?? []);
-      setGoogleCalendarsByAccountId(payload?.calendarsByAccountId ?? {});
+      const nextAccounts = payload?.accounts ?? [];
+      const nextCalendarsByAccountId = payload?.calendarsByAccountId ?? {};
+      setGoogleCalendarAccounts(nextAccounts);
+      setGoogleCalendarsByAccountId(nextCalendarsByAccountId);
+
+      if (nextAccounts.length === 0) {
+        setExternalCalendarSettingsError("Compte Google non connecté.");
+      } else {
+        const connectedAccounts = nextAccounts.filter((account) => account.connectionStatus === "connected");
+        const loadedCalendarCount = connectedAccounts.reduce((count, account) => count + (nextCalendarsByAccountId[account.id]?.length ?? 0), 0);
+        setExternalCalendarSettingsError(connectedAccounts.length > 0 && loadedCalendarCount === 0 ? "Compte Google connecté, mais impossible de charger les calendriers." : null);
+      }
     } catch (googleError) {
       setExternalCalendarSettingsError(getUserFacingErrorMessage(googleError, "Impossible de charger Google Calendar."));
     } finally {

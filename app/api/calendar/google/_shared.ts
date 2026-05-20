@@ -82,16 +82,30 @@ export function encryptSecret(value: string) {
 }
 
 export function decryptSecret(value: string | null) {
-  if (!value) throw new Error("Compte Google incomplet : jeton absent.");
+  if (!value) {
+    console.error("Google token decrypt failed", { reason: "missing_token" });
+    throw new Error("Compte Google incomplet : jeton absent.");
+  }
   const [version, ivValue, tagValue, encryptedValue] = value.split(":");
   if (version !== "v1" || !ivValue || !tagValue || !encryptedValue) {
+    console.error("Google token decrypt failed", { reason: "invalid_format", version });
     throw new Error("Compte Google incomplet : jeton invalide.");
   }
 
-  const key = getEncryptionKey();
-  const decipher = crypto.createDecipheriv("aes-256-gcm", key, Buffer.from(ivValue, "base64url"));
-  decipher.setAuthTag(Buffer.from(tagValue, "base64url"));
-  return Buffer.concat([decipher.update(Buffer.from(encryptedValue, "base64url")), decipher.final()]).toString("utf8");
+  try {
+    const key = getEncryptionKey();
+    const decipher = crypto.createDecipheriv("aes-256-gcm", key, Buffer.from(ivValue, "base64url"));
+    decipher.setAuthTag(Buffer.from(tagValue, "base64url"));
+    const decrypted = Buffer.concat([decipher.update(Buffer.from(encryptedValue, "base64url")), decipher.final()]).toString("utf8");
+    console.info("Google token decrypt success");
+    return decrypted;
+  } catch (error) {
+    console.error("Google token decrypt failed", {
+      reason: "decrypt_error",
+      message: error instanceof Error ? error.message : String(error),
+    });
+    throw error;
+  }
 }
 
 export function signOAuthState(input: { userId: string; issuedAt: number; nonce: string }) {
@@ -252,6 +266,11 @@ export async function getFreshGoogleAccessToken(supabase: SupabaseClient<Databas
     })
     .eq("id", account.id);
 
+  console.info("Google access token refreshed", {
+    accountId: account.id,
+    tokenExpiresAt,
+  });
+
   return tokenPayload.access_token as string;
 }
 
@@ -287,6 +306,12 @@ export async function fetchGoogleCalendarList(accessToken: string) {
       },
     });
     const payload = (await response.json().catch(() => null)) as { items?: typeof calendars; nextPageToken?: string; error?: { message?: string } } | null;
+    console.info("Google calendar API list response", {
+      status: response.status,
+      ok: response.ok,
+      itemCount: payload?.items?.length ?? 0,
+      hasNextPage: Boolean(payload?.nextPageToken),
+    });
     if (!response.ok) {
       throw new Error(payload?.error?.message || "Impossible de charger les calendriers Google.");
     }

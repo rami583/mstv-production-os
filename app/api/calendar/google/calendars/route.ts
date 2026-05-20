@@ -37,6 +37,7 @@ function isGoogleCalendarWritable(accessRole?: string) {
 
 async function listGoogleCalendars(request: Request) {
   try {
+    console.info("Google calendars list route reached");
     const authResult = await requireAuthenticatedUser(request);
     if ("error" in authResult) return authResult.error;
 
@@ -49,6 +50,11 @@ async function listGoogleCalendars(request: Request) {
       .order("created_at", { ascending: true });
 
     if (accountsError) throw accountsError;
+    console.info("Google calendars account query complete", {
+      userId: authResult.user.id,
+      accountCount: accounts?.length ?? 0,
+      connectedCount: (accounts ?? []).filter((account) => account.connection_status === "connected").length,
+    });
 
     const { data: enabledCalendars, error: calendarsError } = await supabase
       .from("external_calendars")
@@ -78,6 +84,10 @@ async function listGoogleCalendars(request: Request) {
 
     for (const account of accounts ?? []) {
       if (account.connection_status !== "connected") {
+        console.info("Google calendars skipping non-connected account", {
+          accountId: account.id,
+          connectionStatus: account.connection_status,
+        });
         calendarsByAccountId[account.id] = [];
         continue;
       }
@@ -85,6 +95,10 @@ async function listGoogleCalendars(request: Request) {
       try {
         const accessToken = await getFreshGoogleAccessToken(supabase, account);
         const googleCalendars = await fetchGoogleCalendarList(accessToken);
+        console.info("Google calendars loaded for account", {
+          accountId: account.id,
+          calendarCount: googleCalendars.length,
+        });
         calendarsByAccountId[account.id] = googleCalendars.map((calendar) => {
           const enabledCalendar = enabledByProviderId.get(`${account.id}:${calendar.id}`);
           return {
@@ -101,6 +115,10 @@ async function listGoogleCalendars(request: Request) {
         });
       } catch (calendarError) {
         const message = calendarError instanceof Error ? calendarError.message : "Impossible de charger les calendriers Google.";
+        console.error("Google calendars fetch failed for account", {
+          accountId: account.id,
+          message,
+        });
         await supabase
           .from("external_calendar_accounts")
           .update({
@@ -119,12 +137,14 @@ async function listGoogleCalendars(request: Request) {
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Impossible de charger les calendriers Google.";
+    console.error("Google calendars list route failed", { message });
     return googleJsonResponse({ error: message }, { status: 500 });
   }
 }
 
 export async function POST(request: Request) {
   try {
+    console.info("Google calendars POST reached");
     const authResult = await requireAuthenticatedUser(request);
     if ("error" in authResult) return authResult.error;
 
@@ -196,6 +216,7 @@ export async function POST(request: Request) {
     return googleJsonResponse({ ok: true, enabled: true, calendarId: data.id });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Impossible de modifier ce calendrier Google.";
+    console.error("Google calendars POST failed", { message });
     return googleJsonResponse({ error: message }, { status: 500 });
   }
 }

@@ -20,6 +20,7 @@ export function OPTIONS() {
 
 export async function POST(request: Request) {
   try {
+    console.info("Google OAuth connect reached");
     const authResult = await requireAuthenticatedUser(request);
     if ("error" in authResult) return authResult.error;
 
@@ -40,9 +41,16 @@ export async function POST(request: Request) {
     authUrl.searchParams.set("include_granted_scopes", "true");
     authUrl.searchParams.set("state", state);
 
+    console.info("Google OAuth connect auth URL created", {
+      userId: authResult.user.id,
+      redirectHost: new URL(redirectUri).host,
+      scopeCount: googleCalendarScopes.length,
+    });
+
     return googleJsonResponse({ authUrl: authUrl.toString() });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Connexion Google impossible.";
+    console.error("Google OAuth connect failed", { message });
     return googleJsonResponse({ error: message }, { status: 500 });
   }
 }
