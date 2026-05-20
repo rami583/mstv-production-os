@@ -528,6 +528,14 @@ function createLocalId() {
   return globalThis.crypto?.randomUUID?.() ?? `local-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
 
+function chunkArray<T>(items: T[], size: number) {
+  const chunks: T[][] = [];
+  for (let index = 0; index < items.length; index += size) {
+    chunks.push(items.slice(index, index + size));
+  }
+  return chunks;
+}
+
 function isNetworkOrUnavailableError(error: unknown) {
   if (typeof navigator !== "undefined" && !navigator.onLine) return true;
   const message = error instanceof Error ? error.message : String(error ?? "");
@@ -841,6 +849,7 @@ const eventDocumentsBucket = "event-documents";
 const nativeMstvIcsImportSource = "apple_ics_mstv";
 const pendingSyncDbName = "mstv-production-os-sync";
 const pendingSyncStoreName = "pending_actions";
+const relatedDataFetchBatchSize = 200;
 const cachedAuthSessionKey = "mstv.cachedAuthSession";
 const cachedProfileKeyPrefix = "mstv.cachedProfile.";
 const cachedProfileMetaKeyPrefix = "mstv.cachedProfileMeta.";
@@ -2606,6 +2615,47 @@ function withDocumentGroups(events: ProductionEvent[], groups: EventDocumentGrou
   }));
 }
 
+async function fetchDocumentRowsForEvents(eventIds: string[]) {
+  if (!supabase) {
+    throw new Error("Configuration Supabase manquante.");
+  }
+
+  const groupRows: EventDocumentGroupRow[] = [];
+  const documentRows: EventDocumentRow[] = [];
+  const loadErrors: Array<{ batchIndex: number; batchSize: number; groupError?: unknown; documentError?: unknown }> = [];
+  const batches = chunkArray(eventIds, relatedDataFetchBatchSize);
+
+  for (const [batchIndex, eventIdBatch] of batches.entries()) {
+    const [{ data: groupData, error: groupError }, { data: documentData, error: documentError }] = await Promise.all([
+      supabase
+        .from("event_document_groups")
+        .select("*")
+        .in("event_id", eventIdBatch)
+        .order("created_at", { ascending: true }),
+      supabase
+        .from("event_documents")
+        .select("*")
+        .in("event_id", eventIdBatch)
+        .order("created_at", { ascending: true }),
+    ]);
+
+    if (groupError || documentError) {
+      loadErrors.push({
+        batchIndex: batchIndex + 1,
+        batchSize: eventIdBatch.length,
+        groupError,
+        documentError,
+      });
+      continue;
+    }
+
+    groupRows.push(...((groupData ?? []) as EventDocumentGroupRow[]));
+    documentRows.push(...((documentData ?? []) as EventDocumentRow[]));
+  }
+
+  return { groupRows, documentRows, loadErrors };
+}
+
 async function fetchEvents(filter: "active" | "deleted" = "active") {
   if (!supabase) {
     throw new Error("Configuration Supabase manquante.");
@@ -2636,26 +2686,27 @@ async function fetchEvents(filter: "active" | "deleted" = "active") {
   const linkIds = events.flatMap((event) => event.links.map((link) => link.id));
 
   if (eventIds.length > 0) {
-    const [{ data: groupData, error: groupError }, { data: documentData, error: documentError }] = await Promise.all([
-      supabase
-        .from("event_document_groups")
-        .select("*")
-        .in("event_id", eventIds)
-        .order("created_at", { ascending: true }),
-      supabase
-        .from("event_documents")
-        .select("*")
-        .in("event_id", eventIds)
-        .order("created_at", { ascending: true }),
-    ]);
+    try {
+      const { groupRows, documentRows, loadErrors } = await fetchDocumentRowsForEvents(eventIds);
+      events = withDocumentGroups(events, groupRows.map(mapEventDocumentGroup), documentRows.map(mapEventDocument));
 
-    if (groupError || documentError) {
-      console.error("Failed to load document groups/files. Apply supabase/migrations/005_event_document_groups.sql if the tables are missing.", {
-        groupError,
-        documentError,
+      if (loadErrors.length > 0) {
+        console.warn("Document groups/files could not be fully loaded; continuing with empty document lists for affected events.", {
+          eventCount: eventIds.length,
+          batchSize: relatedDataFetchBatchSize,
+          failedBatches: loadErrors.map((loadError) => ({
+            batchIndex: loadError.batchIndex,
+            batchSize: loadError.batchSize,
+            groupError: loadError.groupError ? getDebugError(loadError.groupError) : null,
+            documentError: loadError.documentError ? getDebugError(loadError.documentError) : null,
+          })),
+        });
+      }
+    } catch (documentLoadError) {
+      console.warn("Document groups/files could not be loaded; continuing with empty document lists.", {
+        eventCount: eventIds.length,
+        error: getDebugError(documentLoadError),
       });
-    } else {
-      events = withDocumentGroups(events, (groupData ?? []).map(mapEventDocumentGroup), (documentData ?? []).map(mapEventDocument));
     }
   }
 
