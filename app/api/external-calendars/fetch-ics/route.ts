@@ -107,7 +107,7 @@ export async function POST(request: Request) {
 
     const { data: calendar, error: calendarError } = await supabase
       .from("external_calendars")
-      .select("id, name, ics_url, created_by_profile_id")
+      .select("id, name, ics_url, provider_type, sync_capability, created_by_profile_id")
       .eq("id", calendarId)
       .maybeSingle();
 
@@ -122,7 +122,11 @@ export async function POST(request: Request) {
       return jsonResponse({ error: "Accès refusé." }, { status: 403 });
     }
 
-    const rawIcsUrl = calendar.ics_url.trim();
+    if (calendar.provider_type !== "ics_read_only" || calendar.sync_capability !== "read_only") {
+      return jsonResponse({ error: "Ce calendrier utilise une synchronisation connectée." }, { status: 400 });
+    }
+
+    const rawIcsUrl = calendar.ics_url?.trim() ?? "";
     const icsUrl = normalizeIcsUrl(rawIcsUrl);
     if (!icsUrl) {
       return jsonResponse({ error: "URL ICS manquante." }, { status: 400 });

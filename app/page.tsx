@@ -87,6 +87,8 @@ type ExternalCalendarEventRow = Database["public"]["Tables"]["external_calendar_
 
 type UserRole = "admin" | "team";
 type ExternalCalendarVisibility = "admin_only" | "team" | "private";
+type ExternalCalendarProviderType = "google" | "microsoft" | "apple_caldav" | "ics_read_only";
+type ExternalCalendarSyncCapability = "read_only" | "bidirectional";
 type ExternalCalendarSyncProgress = {
   calendarId: string;
   synced: number;
@@ -248,6 +250,14 @@ type ExternalCalendar = {
   icsUrl: string;
   color: string | null;
   visibility: ExternalCalendarVisibility;
+  providerType: ExternalCalendarProviderType;
+  providerAccountId: string | null;
+  providerCalendarId: string | null;
+  syncCapability: ExternalCalendarSyncCapability;
+  syncEnabled: boolean;
+  lastSyncStatus: string | null;
+  lastSyncError: string | null;
+  lastSyncFinishedAt: string | null;
   createdByProfileId: string | null;
   createdByName: string | null;
   createdAt: string;
@@ -2434,6 +2444,17 @@ function normalizeExternalCalendarVisibility(visibility: string | null | undefin
   return "private";
 }
 
+function normalizeExternalCalendarProviderType(providerType: string | null | undefined): ExternalCalendarProviderType {
+  if (providerType === "google") return "google";
+  if (providerType === "microsoft") return "microsoft";
+  if (providerType === "apple_caldav") return "apple_caldav";
+  return "ics_read_only";
+}
+
+function normalizeExternalCalendarSyncCapability(syncCapability: string | null | undefined): ExternalCalendarSyncCapability {
+  return syncCapability === "bidirectional" ? "bidirectional" : "read_only";
+}
+
 function normalizeExternalCalendarIcsUrl(value: string) {
   const trimmed = value.trim();
   if (/^webcal:\/\//i.test(trimmed)) {
@@ -2449,6 +2470,20 @@ function getExternalCalendarVisibilityLabel(visibility: ExternalCalendarVisibili
     private: "Privé",
   };
   return labels[visibility];
+}
+
+function getExternalCalendarProviderLabel(providerType: ExternalCalendarProviderType) {
+  const labels: Record<ExternalCalendarProviderType, string> = {
+    google: "Google",
+    microsoft: "Outlook",
+    apple_caldav: "Apple",
+    ics_read_only: "ICS",
+  };
+  return labels[providerType];
+}
+
+function getExternalCalendarCapabilityLabel(syncCapability: ExternalCalendarSyncCapability) {
+  return syncCapability === "bidirectional" ? "Bidirectionnel" : "Lecture seule";
 }
 
 function canViewExternalCalendar(permissions: AppPermissions, profile: UserProfile | null, calendar: Pick<ExternalCalendar, "visibility" | "createdByProfileId">) {
@@ -2643,9 +2678,17 @@ function mapExternalCalendar(row: ExternalCalendarRow): ExternalCalendar {
   return {
     id: row.id,
     name: row.name,
-    icsUrl: row.ics_url,
+    icsUrl: row.ics_url ?? "",
     color: row.color,
     visibility: normalizeExternalCalendarVisibility(row.visibility),
+    providerType: normalizeExternalCalendarProviderType(row.provider_type),
+    providerAccountId: row.provider_account_id ?? null,
+    providerCalendarId: row.provider_calendar_id ?? null,
+    syncCapability: normalizeExternalCalendarSyncCapability(row.sync_capability),
+    syncEnabled: Boolean(row.sync_enabled),
+    lastSyncStatus: row.last_sync_status ?? null,
+    lastSyncError: row.last_sync_error ?? null,
+    lastSyncFinishedAt: row.last_sync_finished_at ?? null,
     createdByProfileId: row.created_by_profile_id ?? null,
     createdByName: row.created_by_name ?? null,
     createdAt: row.created_at,
@@ -3854,6 +3897,9 @@ export default function Home() {
         ics_url: icsUrl,
         color: input.color,
         visibility,
+        provider_type: "ics_read_only",
+        sync_capability: "read_only",
+        sync_enabled: true,
         created_by_profile_id: profile.id,
         created_by_name: actorName,
       });
@@ -3877,6 +3923,9 @@ export default function Home() {
         ics_url: icsUrl,
         color: input.color,
         visibility,
+        provider_type: calendar.providerType,
+        sync_capability: calendar.syncCapability,
+        sync_enabled: calendar.syncEnabled,
       })
       .eq("id", calendar.id);
 
@@ -3888,6 +3937,9 @@ export default function Home() {
     if (!supabase) throw new Error("Configuration Supabase manquante.");
     if (!canManageExternalCalendar(permissions, profile, calendar)) {
       throw new Error("Vous ne pouvez synchroniser que vos calendriers.");
+    }
+    if (calendar.providerType !== "ics_read_only" || calendar.syncCapability !== "read_only") {
+      throw new Error("Utilisez la synchronisation du fournisseur connecté pour ce calendrier.");
     }
     if (!calendar.icsUrl.trim()) {
       throw new Error("Ajoutez une URL ICS avant de synchroniser.");
@@ -13442,7 +13494,7 @@ function ExternalCalendarsSheet({
               <h2 className="text-base font-semibold text-stone-950">
                 {view === "add" ? "Ajouter un calendrier" : view === "detail" ? selectedCalendar?.name ?? "Calendrier" : "Calendriers externes"}
               </h2>
-              <p className="mt-1 text-base font-medium text-stone-500">Flux ICS en lecture seule.</p>
+              <p className="mt-1 text-base font-medium text-stone-500">Flux ICS en lecture seule. Les comptes connectés arrivent sur la couche bidirectionnelle.</p>
             </div>
           </div>
           <button type="button" onClick={onClose} className="rounded-full border border-stone-200 bg-white px-3 py-1.5 text-base font-semibold text-stone-600 transition hover:bg-stone-50">
@@ -13457,6 +13509,7 @@ function ExternalCalendarsSheet({
             <ExternalCalendarsListView
               calendars={calendars}
               events={events}
+              permissions={permissions}
               loading={loading}
               error={error}
               canCreate={canCreateExternalCalendar}
@@ -13525,6 +13578,7 @@ function getExternalCalendarStatusLine(events: ExternalCalendarEvent[]) {
 function ExternalCalendarsListView({
   calendars,
   events,
+  permissions,
   loading,
   error,
   canCreate,
@@ -13533,6 +13587,7 @@ function ExternalCalendarsListView({
 }: {
   calendars: ExternalCalendar[];
   events: ExternalCalendarEvent[];
+  permissions: AppPermissions;
   loading: boolean;
   error: string | null;
   canCreate: boolean;
@@ -13545,6 +13600,25 @@ function ExternalCalendarsListView({
 
   return (
     <div className="space-y-2">
+      <div className="mb-4 rounded-2xl border border-stone-200 bg-white px-4 py-3">
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <h3 className="text-base font-semibold text-stone-950">Comptes calendrier connectés</h3>
+            <p className="mt-1 text-sm font-semibold text-stone-400">Google, Outlook et Apple CalDAV seront synchronisés via des comptes sécurisés côté serveur.</p>
+          </div>
+          <span className="rounded-full bg-stone-100 px-2.5 py-1 text-xs font-semibold text-stone-500">V1</span>
+        </div>
+        <div className="mt-3 grid gap-2 sm:grid-cols-3">
+          {(["google", "microsoft", "apple_caldav"] as ExternalCalendarProviderType[]).map((providerType) => (
+            <div key={providerType} className="rounded-2xl border border-stone-200 bg-stone-50 px-3 py-2">
+              <div className="text-sm font-semibold text-stone-800">{getExternalCalendarProviderLabel(providerType)}</div>
+              <div className="mt-0.5 text-xs font-semibold text-stone-400">
+                {permissions.canManageEvents ? "Prêt pour connexion OAuth/CalDAV" : "Connexion privée à venir"}
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
       {calendars.length === 0 && !error && (
         <div className="rounded-2xl bg-stone-50 px-4 py-3 text-base font-medium text-stone-500">Aucun calendrier externe pour le moment.</div>
       )}
@@ -13564,8 +13638,20 @@ function ExternalCalendarsListView({
                 <span className="shrink-0 rounded-full bg-white px-2 py-0.5 text-xs font-semibold text-stone-500 ring-1 ring-stone-200">
                   {getExternalCalendarVisibilityLabel(calendar.visibility)}
                 </span>
+                <span
+                  className={cn(
+                    "shrink-0 rounded-full px-2 py-0.5 text-xs font-semibold ring-1",
+                    calendar.syncCapability === "bidirectional"
+                      ? "bg-emerald-50 text-emerald-700 ring-emerald-200"
+                      : "bg-white text-stone-500 ring-stone-200",
+                  )}
+                >
+                  {getExternalCalendarCapabilityLabel(calendar.syncCapability)}
+                </span>
               </span>
-              <span className="mt-0.5 block truncate text-sm font-semibold text-stone-400">{getExternalCalendarStatusLine(calendarEvents)}</span>
+              <span className="mt-0.5 block truncate text-sm font-semibold text-stone-400">
+                {getExternalCalendarProviderLabel(calendar.providerType)} · {getExternalCalendarStatusLine(calendarEvents)}
+              </span>
             </span>
             <ChevronRight className="h-5 w-5 text-stone-300" />
           </button>
@@ -13747,6 +13833,18 @@ function ExternalCalendarSettingsDetail({
         <p className="text-sm font-semibold text-stone-400">
           {getExternalCalendarStatusLine(events)}
         </p>
+        <div
+          className={cn(
+            "rounded-2xl border px-3 py-2 text-sm font-semibold",
+            calendar.syncCapability === "bidirectional"
+              ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+              : "border-stone-200 bg-white text-stone-500",
+          )}
+        >
+          {calendar.syncCapability === "bidirectional"
+            ? "Les modifications MSTV seront synchronisées avec ce calendrier."
+            : "Ce calendrier est en lecture seule."}
+        </div>
         <input
           value={draft.icsUrl}
           onChange={(event) => setDraft((current) => ({ ...current, icsUrl: event.target.value }))}
@@ -13794,7 +13892,7 @@ function ExternalCalendarSettingsDetail({
           <button
             type="button"
             onClick={() => void handleSync()}
-            disabled={!canManage || syncing || saving || !draft.icsUrl.trim()}
+            disabled={!canManage || calendar.syncCapability !== "read_only" || syncing || saving || !draft.icsUrl.trim()}
             className="rounded-full border border-indigo-200 bg-indigo-50 px-3 py-1.5 text-base font-semibold text-indigo-700 transition hover:bg-indigo-100 disabled:border-stone-200 disabled:bg-white disabled:text-stone-300"
           >
             {syncProgress
