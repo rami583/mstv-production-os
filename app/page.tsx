@@ -361,6 +361,26 @@ type NativeMstvIcsReviewEvent = {
   skipReason: string | null;
 };
 
+type NativeMstvIcsImportFailure = {
+  externalImportId: string;
+  sourceTitle: string;
+  reason: string;
+};
+
+type NativeMstvIcsImportProgress = {
+  processed: number;
+  total: number;
+};
+
+type NativeMstvIcsImportResult = {
+  importedCount: number;
+  skippedCount: number;
+  duplicateCount: number;
+  failedCount: number;
+  remainingCount: number;
+  failures: NativeMstvIcsImportFailure[];
+};
+
 type PendingSyncStatus = "pending" | "syncing" | "synced" | "failed";
 
 type PendingSyncAction = {
@@ -407,6 +427,11 @@ type CachedAuthState = {
   session: Session;
   profile: UserProfile;
   appData: CachedAppData | null;
+};
+
+type LocalCacheWriteMeta = {
+  lastWarningAt: number;
+  suppressedCount: number;
 };
 
 type CompletedByOverrideValue = "rami" | "antoine" | "arthur" | "tony" | "gauthier" | "externe";
@@ -705,12 +730,58 @@ function getLocalStorageJson<T>(key: string) {
   }
 }
 
+function getSerializedPayloadSize(value: string) {
+  if (typeof Blob !== "undefined") {
+    return new Blob([value]).size;
+  }
+  return value.length;
+}
+
+function getLocalCacheErrorSignature(error: unknown) {
+  if (error && typeof error === "object") {
+    const record = error as { name?: unknown; message?: unknown };
+    return `${typeof record.name === "string" ? record.name : "Error"}:${typeof record.message === "string" ? record.message : getRawErrorMessage(error)}`;
+  }
+  return getRawErrorMessage(error);
+}
+
+function warnLocalCacheWriteFailed(key: string, error: unknown, payloadSizeBytes: number) {
+  const signature = `${key}:${getLocalCacheErrorSignature(error)}`;
+  const now = Date.now();
+  const previous = localCacheWriteWarnings.get(signature);
+
+  if (previous && now - previous.lastWarningAt < localCacheWarningThrottleMs) {
+    localCacheWriteWarnings.set(signature, {
+      ...previous,
+      suppressedCount: previous.suppressedCount + 1,
+    });
+    return;
+  }
+
+  const errorRecord = error && typeof error === "object" ? (error as { name?: unknown; message?: unknown }) : null;
+  console.warn("Failed to write local cache.", {
+    key,
+    payloadSizeBytes,
+    payloadSizeKb: Math.round(payloadSizeBytes / 1024),
+    errorName: typeof errorRecord?.name === "string" ? errorRecord.name : error instanceof Error ? error.name : typeof error,
+    errorMessage: typeof errorRecord?.message === "string" ? errorRecord.message : getRawErrorMessage(error),
+    suppressedCount: previous?.suppressedCount ?? 0,
+  });
+
+  localCacheWriteWarnings.set(signature, {
+    lastWarningAt: now,
+    suppressedCount: 0,
+  });
+}
+
 function setLocalStorageJson(key: string, value: unknown) {
   if (typeof window === "undefined") return;
+  let serializedValue = "";
   try {
-    window.localStorage.setItem(key, JSON.stringify(value));
+    serializedValue = JSON.stringify(value);
+    window.localStorage.setItem(key, serializedValue);
   } catch (error) {
-    console.warn("Failed to write local cache.", { key, error });
+    warnLocalCacheWriteFailed(key, error, getSerializedPayloadSize(serializedValue));
   }
 }
 
@@ -787,9 +858,48 @@ function readCachedAuthState(): CachedAuthState | null {
   };
 }
 
+function sanitizeEventForCache(event: ProductionEvent): ProductionEvent {
+  return {
+    ...event,
+    sourceQuoteText: null,
+    options: event.options.slice(0, maxCachedOptionsPerEvent).map((option) => ({
+      ...option,
+      details: null,
+      items: [],
+    })),
+    links: event.links.slice(0, maxCachedLinksPerEvent).map((link) => ({
+      ...link,
+      entries: [],
+    })),
+    documentGroups: [],
+  };
+}
+
+function sanitizeExternalCalendarEventForCache(event: ExternalCalendarEvent): ExternalCalendarEvent {
+  return {
+    ...event,
+    description: event.description && event.description.length > 800 ? `${event.description.slice(0, 800)}...` : event.description,
+    rawEvent: null,
+  };
+}
+
+function prepareCachedAppData(data: Omit<CachedAppData, "cachedAt">): Omit<CachedAppData, "cachedAt"> {
+  const sortedProductionEvents = [...data.events].sort((a, b) => eventSortValue(a) - eventSortValue(b));
+  const recentProductionEvents = sortedProductionEvents.slice(-maxCachedProductionEvents);
+  const sortedExternalEvents = [...data.externalCalendarEvents].sort((a, b) => a.startTime.localeCompare(b.startTime));
+  const recentExternalEvents = sortedExternalEvents.slice(-maxCachedExternalCalendarEvents);
+
+  return {
+    events: recentProductionEvents.map(sanitizeEventForCache),
+    externalCalendars: data.externalCalendars,
+    externalCalendarEvents: recentExternalEvents.map(sanitizeExternalCalendarEventForCache),
+  };
+}
+
 function cacheAppData(userId: string, data: Omit<CachedAppData, "cachedAt">) {
+  const cachePayload = prepareCachedAppData(data);
   setLocalStorageJson(`${cachedAppDataKeyPrefix}${userId}`, {
-    ...data,
+    ...cachePayload,
     cachedAt: new Date().toISOString(),
   } satisfies CachedAppData);
 }
@@ -850,6 +960,8 @@ const nativeMstvIcsImportSource = "apple_ics_mstv";
 const pendingSyncDbName = "mstv-production-os-sync";
 const pendingSyncStoreName = "pending_actions";
 const relatedDataFetchBatchSize = 200;
+const nativeMstvIcsImportBatchSize = 100;
+const supabaseFetchPageSize = 1000;
 const cachedAuthSessionKey = "mstv.cachedAuthSession";
 const cachedProfileKeyPrefix = "mstv.cachedProfile.";
 const cachedProfileMetaKeyPrefix = "mstv.cachedProfileMeta.";
@@ -863,6 +975,12 @@ const modalSheetPositionClassName = "items-end p-3 sm:items-center sm:justify-ce
 const modalPanelClassName = "rounded-3xl border border-stone-200 bg-white shadow-xl shadow-black/10";
 const calendarArrowClassName =
   "flex h-9 w-9 items-center justify-center rounded-full text-base text-[#bb2720] transition hover:bg-[#bb2720]/[0.08] disabled:cursor-not-allowed disabled:text-stone-300 disabled:hover:bg-transparent";
+const localCacheWarningThrottleMs = 60_000;
+const maxCachedProductionEvents = 600;
+const maxCachedExternalCalendarEvents = 1200;
+const maxCachedOptionsPerEvent = 24;
+const maxCachedLinksPerEvent = 24;
+const localCacheWriteWarnings = new Map<string, LocalCacheWriteMeta>();
 
 const monthNames = [
   "Janvier",
@@ -2798,6 +2916,38 @@ async function fetchProfiles() {
 
   if (error) throw error;
   return (data ?? []).map(mapUserProfile);
+}
+
+async function fetchNativeMstvIcsImportIds() {
+  if (!supabase) {
+    throw new Error("Configuration Supabase manquante.");
+  }
+
+  const importIds = new Set<string>();
+  let from = 0;
+
+  while (true) {
+    const { data, error } = await supabase
+      .from("events")
+      .select("id, external_import_id")
+      .eq("imported_from", nativeMstvIcsImportSource)
+      .not("external_import_id", "is", null)
+      .order("id", { ascending: true })
+      .range(from, from + supabaseFetchPageSize - 1);
+
+    if (error) throw error;
+
+    for (const row of data ?? []) {
+      if (row.external_import_id) {
+        importIds.add(row.external_import_id);
+      }
+    }
+
+    if (!data || data.length < supabaseFetchPageSize) break;
+    from += supabaseFetchPageSize;
+  }
+
+  return importIds;
 }
 
 async function fetchExternalCalendars() {
@@ -4806,59 +4956,141 @@ export default function Home() {
     setScreen("detail");
   }
 
-  async function importNativeMstvIcsEvents(reviewEvents: NativeMstvIcsReviewEvent[]) {
+  async function importNativeMstvIcsEvents(
+    reviewEvents: NativeMstvIcsReviewEvent[],
+    onProgress?: (progress: NativeMstvIcsImportProgress) => void,
+  ): Promise<NativeMstvIcsImportResult> {
     assertCanManageEvents();
     if (!supabase) {
       throw new Error("Configuration Supabase manquante.");
     }
+    const nativeImportSupabase = supabase;
 
     const importableEvents = reviewEvents.filter((event) => !event.skipped);
-    if (importableEvents.length === 0) return { importedCount: 0, skippedCount: reviewEvents.length };
+    if (importableEvents.length === 0) {
+      return {
+        importedCount: 0,
+        skippedCount: reviewEvents.length,
+        duplicateCount: 0,
+        failedCount: 0,
+        remainingCount: 0,
+        failures: [],
+      };
+    }
 
     let firstImportedEvent: EventRow | null = null;
     let importedCount = 0;
     let duplicateCount = 0;
+    let processedCount = 0;
+    const failures: NativeMstvIcsImportFailure[] = [];
+    const insertedEvents: Array<{ row: EventRow; source: NativeMstvIcsReviewEvent }> = [];
 
-    for (const event of importableEvents) {
-      const { data, error: eventError } = await supabase
+    onProgress?.({ processed: 0, total: importableEvents.length });
+
+    async function insertOneEvent(event: NativeMstvIcsReviewEvent) {
+      const insertPayload = {
+        client_name: event.clientName,
+        event_name: event.eventName,
+        date: event.date,
+        client_arrival_time: null,
+        start_time: event.startTime || null,
+        end_time: event.endTime || null,
+        end_of_day_time: null,
+        imported_from: nativeMstvIcsImportSource,
+        external_import_id: event.externalImportId,
+      } satisfies Database["public"]["Tables"]["events"]["Insert"];
+
+      const { data, error: eventError } = await nativeImportSupabase
         .from("events")
-        .insert({
-          client_name: event.clientName,
-          event_name: event.eventName,
-          date: event.date,
-          client_arrival_time: null,
-          start_time: event.startTime || null,
-          end_time: event.endTime || null,
-          end_of_day_time: null,
-          imported_from: nativeMstvIcsImportSource,
-          external_import_id: event.externalImportId,
-        })
+        .insert(insertPayload)
         .select()
         .single();
 
       if (eventError) {
         if (eventError.code === "23505") {
           duplicateCount += 1;
-          continue;
+          return;
         }
-        throw eventError;
+        console.error("Native MSTV ICS event insert failed", {
+          externalImportId: event.externalImportId,
+          sourceTitle: event.sourceTitle,
+          errorMessage: eventError.message,
+          errorCode: eventError.code,
+          errorDetails: eventError.details,
+          errorHint: eventError.hint,
+        });
+        failures.push({
+          externalImportId: event.externalImportId,
+          sourceTitle: event.sourceTitle,
+          reason: eventError.message || "Erreur Supabase inconnue.",
+        });
+        return;
       }
 
       importedCount += 1;
       firstImportedEvent = firstImportedEvent ?? data;
+      insertedEvents.push({ row: data, source: event });
+    }
 
+    for (const [batchIndex, eventBatch] of chunkArray(importableEvents, nativeMstvIcsImportBatchSize).entries()) {
+      const rowsToInsert = eventBatch.map((event) => ({
+        client_name: event.clientName,
+        event_name: event.eventName,
+        date: event.date,
+        client_arrival_time: null,
+        start_time: event.startTime || null,
+        end_time: event.endTime || null,
+        end_of_day_time: null,
+        imported_from: nativeMstvIcsImportSource,
+        external_import_id: event.externalImportId,
+      })) satisfies Database["public"]["Tables"]["events"]["Insert"][];
+
+      const { data: insertedBatch, error: batchError } = await nativeImportSupabase.from("events").insert(rowsToInsert).select();
+
+      if (batchError) {
+        console.error("Native MSTV ICS batch insert failed; retrying row by row", {
+          batchIndex: batchIndex + 1,
+          batchSize: eventBatch.length,
+          errorMessage: batchError.message,
+          errorCode: batchError.code,
+          errorDetails: batchError.details,
+          errorHint: batchError.hint,
+        });
+
+        for (const event of eventBatch) {
+          await insertOneEvent(event);
+          processedCount += 1;
+          onProgress?.({ processed: processedCount, total: importableEvents.length });
+        }
+        continue;
+      }
+
+      const insertedRows = insertedBatch ?? [];
+      importedCount += insertedRows.length;
+      firstImportedEvent = firstImportedEvent ?? insertedRows[0] ?? null;
+      insertedRows.forEach((row, rowIndex) => {
+        const source = eventBatch[rowIndex];
+        if (source) {
+          insertedEvents.push({ row, source });
+        }
+      });
+      processedCount += eventBatch.length;
+      onProgress?.({ processed: processedCount, total: importableEvents.length });
+    }
+
+    for (const { row, source } of insertedEvents) {
       await logEventActivity({
-        eventId: data.id,
+        eventId: row.id,
         actionType: "event_imported_from_apple_ics",
         entityType: "event",
-        entityId: data.id,
+        entityId: row.id,
         description: "Événement importé depuis calendrier Apple",
         newValue: {
           source: nativeMstvIcsImportSource,
-          externalImportId: event.externalImportId,
-          sourceTitle: event.sourceTitle,
-          location: event.location,
-          description: event.description,
+          externalImportId: source.externalImportId,
+          sourceTitle: source.sourceTitle,
+          location: source.location,
+          description: source.description,
         },
       });
     }
@@ -4870,9 +5102,16 @@ export default function Home() {
       setScreen("detail");
     }
 
+    const refreshedImportIds = await fetchNativeMstvIcsImportIds();
+    const remainingCount = reviewEvents.filter((event) => !refreshedImportIds.has(event.externalImportId)).length;
+
     return {
       importedCount,
       skippedCount: reviewEvents.filter((event) => event.skipped).length + duplicateCount,
+      duplicateCount,
+      failedCount: failures.length,
+      remainingCount,
+      failures,
     };
   }
 
@@ -7737,10 +7976,7 @@ export default function Home() {
       {nativeMstvIcsImportOpen && (
         <NativeMstvIcsImportModal
           onClose={() => setNativeMstvIcsImportOpen(false)}
-          onImport={async (reviewEvents) => {
-            await importNativeMstvIcsEvents(reviewEvents);
-            setNativeMstvIcsImportOpen(false);
-          }}
+          onImport={importNativeMstvIcsEvents}
         />
       )}
 
@@ -12110,13 +12346,18 @@ function NativeMstvIcsImportModal({
   onImport,
 }: {
   onClose: () => void;
-  onImport: (events: NativeMstvIcsReviewEvent[]) => Promise<void>;
+  onImport: (
+    events: NativeMstvIcsReviewEvent[],
+    onProgress?: (progress: NativeMstvIcsImportProgress) => void,
+  ) => Promise<NativeMstvIcsImportResult>;
 }) {
   const [fileName, setFileName] = useState("");
   const [reviewEvents, setReviewEvents] = useState<NativeMstvIcsReviewEvent[]>([]);
   const [step, setStep] = useState<"upload" | "review">("upload");
   const [parsing, setParsing] = useState(false);
   const [importing, setImporting] = useState(false);
+  const [importProgress, setImportProgress] = useState<NativeMstvIcsImportProgress | null>(null);
+  const [importResult, setImportResult] = useState<NativeMstvIcsImportResult | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const importableCount = reviewEvents.filter((event) => !event.skipped).length;
@@ -12125,14 +12366,7 @@ function NativeMstvIcsImportModal({
   async function loadExistingImportIds() {
     if (!supabase) throw new Error("Configuration Supabase manquante.");
 
-    const { data, error: loadError } = await supabase
-      .from("events")
-      .select("external_import_id")
-      .eq("imported_from", nativeMstvIcsImportSource)
-      .not("external_import_id", "is", null);
-
-    if (loadError) throw loadError;
-    return new Set((data ?? []).map((row) => row.external_import_id).filter(Boolean));
+    return fetchNativeMstvIcsImportIds();
   }
 
   async function handleFile(file: File | null) {
@@ -12159,6 +12393,8 @@ function NativeMstvIcsImportModal({
       }
 
       setReviewEvents(nextReviewEvents);
+      setImportResult(null);
+      setImportProgress(null);
       setStep("review");
     } catch (parseError) {
       console.error("Native MSTV ICS import parsing failed", parseError);
@@ -12171,14 +12407,32 @@ function NativeMstvIcsImportModal({
   async function confirmImport() {
     setImporting(true);
     setError(null);
+    setImportResult(null);
+    setImportProgress({ processed: 0, total: importableCount });
 
     try {
-      await onImport(reviewEvents);
+      const result = await onImport(reviewEvents, setImportProgress);
+      const refreshedImportIds = await loadExistingImportIds();
+      const nextReviewEvents = reviewEvents.map((event) => {
+        if (!refreshedImportIds.has(event.externalImportId)) return event;
+        return {
+          ...event,
+          skipped: true,
+          skipReason: "Déjà importé",
+        };
+      });
+      const remainingCount = nextReviewEvents.filter((event) => !event.skipped).length;
+      setReviewEvents(nextReviewEvents);
+      setImportResult({
+        ...result,
+        remainingCount,
+      });
     } catch (importError) {
       console.error("Native MSTV ICS import failed", importError);
       setError(getUserFacingErrorMessage(importError, "Impossible d'importer ce calendrier."));
     } finally {
       setImporting(false);
+      setImportProgress(null);
     }
   }
   useEscapeToClose(onClose);
@@ -12190,7 +12444,9 @@ function NativeMstvIcsImportModal({
           <div className="min-w-0">
             <h2 className="text-base font-semibold text-stone-950">Importer calendrier MSTV</h2>
             <p className="mt-1 text-base font-medium text-stone-500">
-              {step === "review" ? `${reviewEvents.length} événement${reviewEvents.length > 1 ? "s" : ""} détecté${reviewEvents.length > 1 ? "s" : ""}` : "Migration Apple Calendar en événements MSTV natifs."}
+              {step === "review"
+                ? `${reviewEvents.length} événement${reviewEvents.length > 1 ? "s" : ""} trouvé${reviewEvents.length > 1 ? "s" : ""} dans le fichier`
+                : "Migration Apple Calendar en événements MSTV natifs."}
             </p>
             {fileName && <p className="mt-1 truncate text-sm font-semibold text-stone-400">{fileName}</p>}
           </div>
@@ -12200,6 +12456,35 @@ function NativeMstvIcsImportModal({
         </div>
 
         {error && <div className="mb-3 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-base font-medium text-rose-700">{error}</div>}
+        {importProgress && (
+          <div className="mb-3 rounded-2xl border border-blue-200 bg-blue-50 px-4 py-3 text-base font-semibold text-blue-800">
+            Importation {importProgress.processed} / {importProgress.total}...
+          </div>
+        )}
+        {importResult && (
+          <div className="mb-3 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-base font-medium text-emerald-900">
+            <p className="font-semibold">
+              {importResult.importedCount} événement{importResult.importedCount > 1 ? "s" : ""} importé{importResult.importedCount > 1 ? "s" : ""}
+            </p>
+            <p className="mt-1">
+              {importResult.remainingCount} événement{importResult.remainingCount > 1 ? "s" : ""} restant{importResult.remainingCount > 1 ? "s" : ""}
+            </p>
+            {importResult.failedCount > 0 && (
+              <div className="mt-2 text-rose-700">
+                <p>
+                  {importResult.failedCount} échec{importResult.failedCount > 1 ? "s" : ""}. Consultez la console pour le détail Supabase.
+                </p>
+                <ul className="mt-1 space-y-1 text-sm">
+                  {importResult.failures.slice(0, 3).map((failure) => (
+                    <li key={failure.externalImportId}>
+                      {failure.sourceTitle}: {failure.reason}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+          </div>
+        )}
 
         {step === "upload" ? (
           <label
@@ -12228,14 +12513,15 @@ function NativeMstvIcsImportModal({
           <>
             <div className="mb-3 grid grid-cols-2 gap-2">
               <div className="rounded-2xl border border-emerald-200 bg-emerald-50 px-3 py-2">
-                <p className="text-sm font-semibold text-emerald-700">À importer</p>
+                <p className="text-sm font-semibold text-emerald-700">Nouveaux événements à importer</p>
                 <p className="text-lg font-semibold text-emerald-950">{importableCount}</p>
               </div>
               <div className="rounded-2xl border border-stone-200 bg-stone-50 px-3 py-2">
-                <p className="text-sm font-semibold text-stone-500">Ignorés</p>
+                <p className="text-sm font-semibold text-stone-500">Déjà présents, ignorés</p>
                 <p className="text-lg font-semibold text-stone-800">{skippedCount}</p>
               </div>
             </div>
+            {skippedCount > 0 && <p className="-mt-1 mb-3 px-1 text-sm font-medium text-stone-500">Les événements ignorés semblent déjà avoir été importés.</p>}
             <div className="no-scrollbar min-h-0 flex-1 overflow-y-auto overscroll-contain rounded-2xl border border-stone-200">
               {reviewEvents.map((event) => (
                 <div key={event.externalImportId} className="grid gap-2 border-b border-stone-100 px-3 py-3 last:border-b-0 sm:grid-cols-[1fr_auto] sm:items-start">
@@ -12270,7 +12556,7 @@ function NativeMstvIcsImportModal({
                 disabled={importing || importableCount === 0}
                 className="rounded-full bg-[#bb2720] px-4 py-2 text-base font-semibold text-white disabled:bg-stone-300"
               >
-                {importing ? "Import..." : "Importer"}
+                {importing && importProgress ? `Importation ${importProgress.processed} / ${importProgress.total}` : importing ? "Import..." : "Importer"}
               </button>
             </div>
           </>
