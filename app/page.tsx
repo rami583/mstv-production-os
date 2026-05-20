@@ -14042,7 +14042,7 @@ function NotificationMenu({
         )}
       </button>
       {open && (
-        <div className="absolute right-0 top-12 z-40 w-[min(22rem,calc(100vw-2rem))] overflow-hidden rounded-2xl border border-stone-200 bg-white/95 text-left backdrop-blur-xl">
+        <div className="fixed bottom-[calc(env(safe-area-inset-bottom)+0.75rem)] left-[calc(env(safe-area-inset-left)+0.75rem)] right-[calc(env(safe-area-inset-right)+0.75rem)] z-50 flex max-h-[60vh] flex-col overflow-hidden rounded-2xl border border-stone-200 bg-white/95 text-left backdrop-blur-xl sm:absolute sm:bottom-auto sm:left-auto sm:right-0 sm:top-12 sm:z-40 sm:max-h-none sm:w-[min(22rem,calc(100vw-2rem))]">
           <div className="flex items-center justify-between gap-3 border-b border-stone-100 px-3 py-2.5">
             <div>
               <p className="text-sm font-semibold text-stone-950">Notifications</p>
@@ -14060,7 +14060,7 @@ function NotificationMenu({
               </button>
             )}
           </div>
-          <div className="max-h-[min(28rem,70vh)] overflow-y-auto p-1.5">
+          <div className="min-h-0 flex-1 overflow-y-auto p-1.5 sm:max-h-[min(28rem,70vh)]">
             {notifications.length === 0 ? (
               <div className="px-3 py-6 text-center text-sm font-medium text-stone-400">Aucune notification</div>
             ) : (
