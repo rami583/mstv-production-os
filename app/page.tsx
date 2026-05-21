@@ -3416,7 +3416,6 @@ export default function Home() {
   const [appleCalendarsByAccountId, setAppleCalendarsByAccountId] = useState<Record<string, AppleProviderCalendar[]>>({});
   const [appleCalendarLoading, setAppleCalendarLoading] = useState(false);
   const [connectingAppleCalendar, setConnectingAppleCalendar] = useState(false);
-  const [cleaningAppleDuplicates, setCleaningAppleDuplicates] = useState(false);
   const [googleAutoSyncStatus, setGoogleAutoSyncStatus] = useState<GoogleAutoSyncStatus>({
     state: "idle",
     lastSyncedAt: null,
@@ -4532,44 +4531,6 @@ export default function Home() {
     }
   }
 
-  async function cleanupAppleCalendarDuplicates() {
-    if (!authSession) throw new Error(sessionExpiredMessage);
-
-    setCleaningAppleDuplicates(true);
-    setExternalCalendarSettingsError(null);
-    try {
-      const accessToken = await getServerApiAccessToken(authSession.access_token);
-      const response = await fetch(getAppApiUrl("/api/calendar/apple/calendars", "Nettoyage Apple Calendar momentanément indisponible."), {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${accessToken}`,
-        },
-        body: JSON.stringify({ action: "cleanup_duplicates" }),
-      });
-      const payload = (await response.json().catch(() => null)) as {
-        error?: string;
-        duplicatesDisabled?: number;
-        canonicalRowsUpdated?: number;
-        duplicateGroupCount?: number;
-      } | null;
-
-      if (!response.ok) {
-        throw new Error(payload?.error ?? "Impossible de nettoyer les doublons Apple.");
-      }
-
-      removeLocalStorageKey(`${cachedAppDataKeyPrefix}${authSession.user.id}`);
-      await refreshExternalCalendarSettings();
-      await refreshAppleCalendarAccounts();
-      await reloadData(selectedId, { silent: true });
-    } catch (cleanupError) {
-      console.error("Apple duplicate cleanup failed", cleanupError);
-      setExternalCalendarSettingsError(getUserFacingErrorMessage(cleanupError, "Impossible de nettoyer les doublons Apple."));
-    } finally {
-      setCleaningAppleDuplicates(false);
-    }
-  }
-
   async function connectAppleCalendar(input: { appleId: string; appPassword: string }) {
     if (!authSession) throw new Error(sessionExpiredMessage);
 
@@ -4595,6 +4556,50 @@ export default function Home() {
       await refreshExternalCalendarSettings();
     } catch (connectError) {
       setExternalCalendarSettingsError(getUserFacingErrorMessage(connectError, "Impossible de connecter Apple Calendar."));
+    } finally {
+      setConnectingAppleCalendar(false);
+    }
+  }
+
+  async function disconnectAppleCalendar(account: AppleCalendarAccount) {
+    if (!authSession || !supabase) throw new Error(sessionExpiredMessage);
+
+    setConnectingAppleCalendar(true);
+    setExternalCalendarSettingsError(null);
+    try {
+      const now = new Date().toISOString();
+      const { error: accountError } = await supabase
+        .from("external_calendar_accounts")
+        .update({
+          connection_status: "disconnected",
+          last_error: null,
+          updated_at: now,
+        })
+        .eq("id", account.id)
+        .eq("user_id", authSession.user.id)
+        .eq("provider_type", "apple_caldav");
+
+      if (accountError) throw accountError;
+
+      const { error: calendarError } = await supabase
+        .from("external_calendars")
+        .update({
+          sync_enabled: false,
+          last_sync_status: "idle",
+          last_sync_error: null,
+        })
+        .eq("provider_account_id", account.id)
+        .eq("created_by_profile_id", authSession.user.id)
+        .eq("provider_type", "apple_caldav");
+
+      if (calendarError) throw calendarError;
+
+      removeLocalStorageKey(`${cachedAppDataKeyPrefix}${authSession.user.id}`);
+      await refreshAppleCalendarAccounts();
+      await refreshExternalCalendarSettings();
+      await reloadData(selectedId, { silent: true });
+    } catch (disconnectError) {
+      setExternalCalendarSettingsError(getUserFacingErrorMessage(disconnectError, "Impossible de déconnecter Apple Calendar."));
     } finally {
       setConnectingAppleCalendar(false);
     }
@@ -4648,49 +4653,25 @@ export default function Home() {
         throw new Error(payload?.error ?? "Impossible de déconnecter Google Calendar.");
       }
 
+      if (supabase) {
+        const { error: calendarDisableError } = await supabase
+          .from("external_calendars")
+          .update({
+            sync_enabled: false,
+            last_sync_status: "idle",
+            last_sync_error: null,
+          })
+          .eq("provider_account_id", account.id)
+          .eq("created_by_profile_id", authSession.user.id)
+          .eq("provider_type", "google");
+        if (calendarDisableError) throw calendarDisableError;
+      }
+      removeLocalStorageKey(`${cachedAppDataKeyPrefix}${authSession.user.id}`);
       await refreshGoogleCalendarAccounts();
       await refreshExternalCalendarSettings();
+      await reloadData(selectedId, { silent: true });
     } catch (disconnectError) {
       setExternalCalendarSettingsError(getUserFacingErrorMessage(disconnectError, "Impossible de déconnecter Google Calendar."));
-    } finally {
-      setUpdatingGoogleCalendarKey(null);
-    }
-  }
-
-  async function setGoogleCalendarSyncEnabled(account: GoogleCalendarAccount, calendar: GoogleProviderCalendar, enabled: boolean) {
-    if (!authSession) throw new Error(sessionExpiredMessage);
-
-    const updateKey = `${account.id}:${calendar.providerCalendarId}`;
-    setUpdatingGoogleCalendarKey(updateKey);
-    setExternalCalendarSettingsError(null);
-    try {
-      const accessToken = await getServerApiAccessToken(authSession.access_token);
-      const response = await fetch(getAppApiUrl("/api/calendar/google/calendars", "Google Calendar momentanément indisponible."), {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${accessToken}`,
-        },
-        body: JSON.stringify({
-          accountId: account.id,
-          providerCalendarId: calendar.providerCalendarId,
-          name: calendar.summary,
-          color: calendar.color || "blue",
-          visibility: calendar.visibility || "private",
-          enabled,
-          action: "set_enabled",
-        }),
-      });
-      const payload = (await response.json().catch(() => null)) as { error?: string } | null;
-
-      if (!response.ok) {
-        throw new Error(payload?.error ?? "Impossible de modifier ce calendrier Google.");
-      }
-
-      await refreshGoogleCalendarAccounts();
-      await refreshExternalCalendarSettings();
-    } catch (toggleError) {
-      setExternalCalendarSettingsError(getUserFacingErrorMessage(toggleError, "Impossible de modifier ce calendrier Google."));
     } finally {
       setUpdatingGoogleCalendarKey(null);
     }
@@ -9533,7 +9514,6 @@ export default function Home() {
           appleCalendarsByAccountId={appleCalendarsByAccountId}
           appleLoading={appleCalendarLoading}
           connectingApple={connectingAppleCalendar}
-          cleaningAppleDuplicates={cleaningAppleDuplicates}
           loading={externalCalendarSettingsLoading}
           error={externalCalendarSettingsError}
           syncingCalendarId={syncingExternalCalendarId}
@@ -9543,9 +9523,8 @@ export default function Home() {
           onUpdate={updateExternalCalendar}
           onConnectGoogle={connectGoogleCalendar}
           onDisconnectGoogle={disconnectGoogleCalendar}
-          onToggleGoogleCalendar={setGoogleCalendarSyncEnabled}
           onConnectApple={connectAppleCalendar}
-          onCleanupAppleDuplicates={cleanupAppleCalendarDuplicates}
+          onDisconnectApple={disconnectAppleCalendar}
           onDelete={async (calendar) => {
             try {
               await deleteExternalCalendar(calendar);
@@ -14914,7 +14893,6 @@ function ExternalCalendarsSheet({
   appleCalendarsByAccountId,
   appleLoading,
   connectingApple,
-  cleaningAppleDuplicates,
   loading,
   error,
   syncingCalendarId,
@@ -14924,9 +14902,8 @@ function ExternalCalendarsSheet({
   onUpdate,
   onConnectGoogle,
   onDisconnectGoogle,
-  onToggleGoogleCalendar,
   onConnectApple,
-  onCleanupAppleDuplicates,
+  onDisconnectApple,
   onDelete,
   onSync,
 }: {
@@ -14943,7 +14920,6 @@ function ExternalCalendarsSheet({
   appleCalendarsByAccountId: Record<string, AppleProviderCalendar[]>;
   appleLoading: boolean;
   connectingApple: boolean;
-  cleaningAppleDuplicates: boolean;
   loading: boolean;
   error: string | null;
   syncingCalendarId: string | null;
@@ -14953,9 +14929,8 @@ function ExternalCalendarsSheet({
   onUpdate: (calendar: ExternalCalendar, input: { name: string; icsUrl: string; color: string; visibility: ExternalCalendarVisibility; syncEnabled?: boolean }) => Promise<void>;
   onConnectGoogle: () => Promise<void>;
   onDisconnectGoogle: (account: GoogleCalendarAccount) => Promise<void>;
-  onToggleGoogleCalendar: (account: GoogleCalendarAccount, calendar: GoogleProviderCalendar, enabled: boolean) => Promise<void>;
   onConnectApple: (input: { appleId: string; appPassword: string }) => Promise<void>;
-  onCleanupAppleDuplicates: () => Promise<void>;
+  onDisconnectApple: (account: AppleCalendarAccount) => Promise<void>;
   onDelete: (calendar: ExternalCalendar) => Promise<void>;
   onSync: (calendar: ExternalCalendar) => Promise<ExternalCalendarSyncResult>;
 }) {
@@ -15093,7 +15068,6 @@ function ExternalCalendarsSheet({
               appleCalendarsByAccountId={appleCalendarsByAccountId}
               appleLoading={appleLoading}
               connectingApple={connectingApple}
-              cleaningAppleDuplicates={cleaningAppleDuplicates}
               loading={loading}
               error={error}
               syncingCalendarId={syncingCalendarId}
@@ -15101,7 +15075,7 @@ function ExternalCalendarsSheet({
               onConnectGoogle={onConnectGoogle}
               onDisconnectGoogle={onDisconnectGoogle}
               onConnectApple={onConnectApple}
-              onCleanupAppleDuplicates={onCleanupAppleDuplicates}
+              onDisconnectApple={onDisconnectApple}
               onUpdate={onUpdate}
               onDelete={onDelete}
               onSync={onSync}
@@ -15176,7 +15150,6 @@ function ExternalCalendarsListView({
   appleCalendarsByAccountId,
   appleLoading,
   connectingApple,
-  cleaningAppleDuplicates,
   loading,
   error,
   syncingCalendarId,
@@ -15184,7 +15157,7 @@ function ExternalCalendarsListView({
   onConnectGoogle,
   onDisconnectGoogle,
   onConnectApple,
-  onCleanupAppleDuplicates,
+  onDisconnectApple,
   onUpdate,
   onDelete,
   onSync,
@@ -15203,7 +15176,6 @@ function ExternalCalendarsListView({
   appleCalendarsByAccountId: Record<string, AppleProviderCalendar[]>;
   appleLoading: boolean;
   connectingApple: boolean;
-  cleaningAppleDuplicates: boolean;
   loading: boolean;
   error: string | null;
   syncingCalendarId: string | null;
@@ -15211,7 +15183,7 @@ function ExternalCalendarsListView({
   onConnectGoogle: () => Promise<void>;
   onDisconnectGoogle: (account: GoogleCalendarAccount) => Promise<void>;
   onConnectApple: (input: { appleId: string; appPassword: string }) => Promise<void>;
-  onCleanupAppleDuplicates: () => Promise<void>;
+  onDisconnectApple: (account: AppleCalendarAccount) => Promise<void>;
   onUpdate: (calendar: ExternalCalendar, input: { name: string; icsUrl: string; color: string; visibility: ExternalCalendarVisibility; syncEnabled?: boolean }) => Promise<void>;
   onDelete: (calendar: ExternalCalendar) => Promise<void>;
   onSync: (calendar: ExternalCalendar) => Promise<ExternalCalendarSyncResult>;
@@ -15224,11 +15196,12 @@ function ExternalCalendarsListView({
   const [appleDraft, setAppleDraft] = useState({ appleId: "", appPassword: "" });
   const [appleConnectError, setAppleConnectError] = useState<string | null>(null);
   const [calendarActionErrorById, setCalendarActionErrorById] = useState<Record<string, string>>({});
-  const [environmentDiagnostic, setEnvironmentDiagnostic] = useState<Record<string, unknown> | null>(null);
-  const [environmentDiagnosticLoading, setEnvironmentDiagnosticLoading] = useState(false);
-  const [environmentDiagnosticError, setEnvironmentDiagnosticError] = useState<string | null>(null);
-  const googleConnected = googleAccounts.some((account) => account.connectionStatus === "connected");
-  const appleConnected = appleAccounts.some((account) => account.connectionStatus === "connected");
+  const [disconnectRequest, setDisconnectRequest] = useState<"google" | "apple" | null>(null);
+  const [disconnectingProvider, setDisconnectingProvider] = useState<"google" | "apple" | null>(null);
+  const connectedGoogleAccounts = googleAccounts.filter((account) => account.connectionStatus === "connected");
+  const connectedAppleAccounts = appleAccounts.filter((account) => account.connectionStatus === "connected");
+  const googleConnected = connectedGoogleAccounts.length > 0;
+  const appleConnected = connectedAppleAccounts.length > 0;
 
   async function handleAppleConnect() {
     setAppleConnectError(null);
@@ -15311,32 +15284,44 @@ function ExternalCalendarsListView({
     }
   }
 
-  async function handleEnvironmentDiagnostic() {
-    setEnvironmentDiagnosticLoading(true);
-    setEnvironmentDiagnosticError(null);
-    try {
-      const accessToken = await getCurrentSupabaseAccessToken();
-      const response = await fetch(getAppApiUrl("/api/debug/environment", "Diagnostic environnement indisponible."), {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${accessToken}`,
-        },
-      });
-      const payload = (await response.json().catch(() => null)) as Record<string, unknown> | null;
-      if (!response.ok) {
-        throw new Error(typeof payload?.error === "string" ? payload.error : "Impossible de charger le diagnostic environnement.");
+  const icsCalendars = calendars.filter((calendar) => calendar.providerType === "ics_read_only");
+
+  function handleProviderButtonClick(provider: "google" | "apple") {
+    if (provider === "google") {
+      if (googleConnected) {
+        setDisconnectRequest("google");
+        return;
       }
-      console.info("Diagnostic environnement MSTV", payload);
-      setEnvironmentDiagnostic(payload);
-    } catch (diagnosticError) {
-      console.error("Environment diagnostic failed", diagnosticError);
-      setEnvironmentDiagnosticError(getUserFacingErrorMessage(diagnosticError, "Impossible de charger le diagnostic environnement."));
-    } finally {
-      setEnvironmentDiagnosticLoading(false);
+      void onConnectGoogle();
+      return;
     }
+
+    if (appleConnected) {
+      setDisconnectRequest("apple");
+      return;
+    }
+    setAppleConnectOpen((current) => !current);
   }
 
-  const icsCalendars = calendars.filter((calendar) => calendar.providerType === "ics_read_only");
+  async function confirmProviderDisconnect() {
+    if (!disconnectRequest) return;
+    setDisconnectingProvider(disconnectRequest);
+    try {
+      if (disconnectRequest === "google") {
+        for (const account of connectedGoogleAccounts) {
+          await onDisconnectGoogle(account);
+        }
+      } else {
+        for (const account of connectedAppleAccounts) {
+          await onDisconnectApple(account);
+        }
+        setAppleConnectOpen(false);
+      }
+      setDisconnectRequest(null);
+    } finally {
+      setDisconnectingProvider(null);
+    }
+  }
 
   function getCalendarStatusLine(calendar: ExternalCalendar | null) {
     if (!calendar) return "";
@@ -15420,79 +15405,7 @@ function ExternalCalendarsListView({
   return (
     <div className="space-y-2">
       <div className="space-y-3">
-        <div className="flex items-start justify-between gap-3">
-          <div>
-            <h3 className="text-sm font-semibold text-stone-400">Comptes connectés</h3>
-          </div>
-          <div className="flex shrink-0 flex-col gap-1.5 sm:flex-row">
-            {permissions.canManageUsers && (
-              <button
-                type="button"
-                onClick={() => void handleEnvironmentDiagnostic()}
-                disabled={environmentDiagnosticLoading}
-                className="rounded-full border border-stone-200 bg-white px-3 py-1.5 text-sm font-semibold text-stone-500 transition hover:bg-stone-50 disabled:text-stone-300"
-              >
-                {environmentDiagnosticLoading ? "Diagnostic..." : "Diagnostic environnement"}
-              </button>
-            )}
-            <button
-              type="button"
-              onClick={() => {
-                if (!googleConnected) void onConnectGoogle();
-              }}
-              disabled={connectingGoogle || googleConnected}
-              className={cn(
-                "rounded-full border px-3 py-1.5 text-sm font-semibold transition disabled:cursor-default",
-                googleConnected
-                  ? "border-emerald-200 bg-emerald-50 text-emerald-700"
-                  : "border-stone-200 bg-white text-stone-700 hover:bg-stone-50 disabled:text-stone-300",
-              )}
-            >
-              {googleConnected ? "Google Calendar connecté" : connectingGoogle ? "Connexion..." : "Connecter Google Calendar"}
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                if (!appleConnected) setAppleConnectOpen((current) => !current);
-              }}
-              disabled={connectingApple || appleConnected}
-              className={cn(
-                "rounded-full border px-3 py-1.5 text-sm font-semibold transition disabled:cursor-default",
-                appleConnected
-                  ? "border-emerald-200 bg-emerald-50 text-emerald-700"
-                  : "border-stone-200 bg-white text-stone-700 hover:bg-stone-50 disabled:text-stone-300",
-              )}
-            >
-              {appleConnected ? "Apple Calendar connecté" : connectingApple ? "Connexion..." : "Connecter Apple Calendar"}
-            </button>
-          </div>
-        </div>
-        {(environmentDiagnostic || environmentDiagnosticError) && (
-          <div className={cn("rounded-2xl border px-3 py-3", environmentDiagnosticError ? "border-rose-200 bg-rose-50" : "border-stone-200 bg-stone-50")}>
-            <div className="flex items-center justify-between gap-3">
-              <p className={cn("text-sm font-semibold", environmentDiagnosticError ? "text-rose-700" : "text-stone-700")}>
-                Diagnostic environnement
-              </p>
-              <button
-                type="button"
-                onClick={() => {
-                  setEnvironmentDiagnostic(null);
-                  setEnvironmentDiagnosticError(null);
-                }}
-                className="rounded-full border border-stone-200 bg-white px-2.5 py-1 text-xs font-semibold text-stone-500 transition hover:bg-stone-100"
-              >
-                Masquer
-              </button>
-            </div>
-            {environmentDiagnosticError ? (
-              <p className="mt-2 text-sm font-semibold text-rose-700">{environmentDiagnosticError}</p>
-            ) : (
-              <pre className="mt-2 max-h-72 overflow-auto rounded-xl bg-white px-3 py-2 text-xs font-semibold text-stone-600 ring-1 ring-stone-200">
-                {JSON.stringify(environmentDiagnostic, null, 2)}
-              </pre>
-            )}
-          </div>
-        )}
+        <h3 className="text-sm font-semibold text-stone-400">Comptes connectés</h3>
         <div className="mt-3 space-y-2">
           {appleConnectOpen && (
             <div className="rounded-2xl border border-stone-200 bg-stone-50 px-3 py-3">
@@ -15545,30 +15458,34 @@ function ExternalCalendarsListView({
 
           <div className="space-y-4">
             <section className="space-y-2">
-              <h4 className="text-xs font-semibold uppercase tracking-wide text-stone-400">Google</h4>
+              <button
+                type="button"
+                onClick={() => handleProviderButtonClick("google")}
+                disabled={connectingGoogle || disconnectingProvider === "google"}
+                className={cn(
+                  "flex w-full items-center justify-between rounded-2xl border px-4 py-3 text-left text-base font-semibold transition disabled:cursor-default",
+                  googleConnected
+                    ? "border-emerald-200 bg-emerald-50 text-emerald-800 hover:bg-emerald-100"
+                    : "border-stone-200 bg-white text-stone-800 hover:bg-stone-50 disabled:text-stone-300",
+                )}
+              >
+                <span>{googleConnected ? "Google Calendar connecté" : connectingGoogle ? "Connexion..." : "Connecter Google Calendar"}</span>
+                <span className="text-xs font-semibold text-current opacity-60">{googleConnected ? "Déconnecter" : "Connecter"}</span>
+              </button>
           {googleLoading && <div className="rounded-2xl bg-stone-50 px-3 py-2 text-sm font-semibold text-stone-400">Chargement Google Calendar...</div>}
-          {!googleLoading && googleAccounts.length === 0 && (
+          {!googleLoading && !googleConnected && (
               <div className="rounded-xl bg-white px-3 py-2 text-sm font-semibold text-stone-400 ring-1 ring-stone-200">Aucun compte Google connecté.</div>
           )}
             <div className="mt-2 space-y-2">
-              {googleAccounts.map((account) => (
+              {connectedGoogleAccounts.map((account) => (
                 <div key={account.id} className="rounded-2xl border border-stone-200 bg-white px-3 py-3">
               <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0">
                       <div className="truncate text-sm font-semibold text-stone-950">{account.email || account.displayName || "Compte Google"}</div>
                   <div className="mt-0.5 flex flex-wrap items-center gap-1.5 text-xs font-semibold">
                     <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-emerald-700 ring-1 ring-emerald-200">Bidirectionnel</span>
-                    <span className="rounded-full bg-white px-2 py-0.5 text-stone-500 ring-1 ring-stone-200">{account.connectionStatus === "connected" ? "Connecté" : account.connectionStatus === "disconnected" ? "Déconnecté" : "Erreur"}</span>
                   </div>
                 </div>
-                <button
-                  type="button"
-                  onClick={() => void onDisconnectGoogle(account)}
-                  disabled={updatingGoogleKey === `disconnect:${account.id}`}
-                  className="shrink-0 rounded-full border border-stone-200 bg-white px-2.5 py-1 text-xs font-semibold text-stone-500 transition hover:bg-stone-100 disabled:text-stone-300"
-                >
-                  Déconnecter
-                </button>
               </div>
               {account.lastError && <div className="mt-2 text-xs font-semibold text-rose-600">{account.lastError}</div>}
                   <div className="mt-3 space-y-1.5 border-l border-stone-200 pl-3">
@@ -15667,31 +15584,31 @@ function ExternalCalendarsListView({
             </section>
 
             <section className="space-y-2">
-              <div className="flex items-center justify-between gap-3">
-                <h4 className="text-xs font-semibold uppercase tracking-wide text-stone-400">Apple</h4>
-                {appleAccounts.length > 0 && (
-                  <button
-                    type="button"
-                    onClick={() => void onCleanupAppleDuplicates()}
-                    disabled={cleaningAppleDuplicates}
-                    className="rounded-full border border-stone-200 bg-white px-2.5 py-1 text-xs font-semibold text-stone-500 transition hover:bg-stone-100 disabled:text-stone-300"
-                  >
-                    {cleaningAppleDuplicates ? "Nettoyage..." : "Nettoyer les doublons Apple"}
-                  </button>
+              <button
+                type="button"
+                onClick={() => handleProviderButtonClick("apple")}
+                disabled={connectingApple || disconnectingProvider === "apple"}
+                className={cn(
+                  "flex w-full items-center justify-between rounded-2xl border px-4 py-3 text-left text-base font-semibold transition disabled:cursor-default",
+                  appleConnected
+                    ? "border-emerald-200 bg-emerald-50 text-emerald-800 hover:bg-emerald-100"
+                    : "border-stone-200 bg-white text-stone-800 hover:bg-stone-50 disabled:text-stone-300",
                 )}
-              </div>
+              >
+                <span>{appleConnected ? "Apple Calendar connecté" : connectingApple ? "Connexion..." : "Connecter Apple Calendar"}</span>
+                <span className="text-xs font-semibold text-current opacity-60">{appleConnected ? "Déconnecter" : "Connecter"}</span>
+              </button>
           {appleLoading && <div className="rounded-2xl bg-stone-50 px-3 py-2 text-sm font-semibold text-stone-400">Chargement Apple Calendar...</div>}
-          {!appleLoading && appleAccounts.length === 0 && (
+          {!appleLoading && !appleConnected && (
               <div className="mt-2 rounded-xl bg-white px-3 py-2 text-sm font-semibold text-stone-400 ring-1 ring-stone-200">Aucun compte Apple Calendar connecté.</div>
           )}
             <div className="mt-2 space-y-2">
-              {appleAccounts.map((account) => (
+              {connectedAppleAccounts.map((account) => (
                 <div key={account.id} className="rounded-2xl border border-stone-200 bg-white px-3 py-3">
               <div className="min-w-0">
                     <div className="truncate text-sm font-semibold text-stone-950">{account.email || account.displayName || "Compte Apple"}</div>
                 <div className="mt-0.5 flex flex-wrap items-center gap-1.5 text-xs font-semibold">
                   <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-emerald-700 ring-1 ring-emerald-200">Bidirectionnel</span>
-                  <span className="rounded-full bg-white px-2 py-0.5 text-stone-500 ring-1 ring-stone-200">{account.connectionStatus === "connected" ? "Connecté" : account.connectionStatus === "disconnected" ? "Déconnecté" : "Erreur"}</span>
                 </div>
               </div>
               {account.lastError && <div className="mt-2 text-xs font-semibold text-rose-600">{account.lastError}</div>}
@@ -15874,11 +15791,19 @@ function ExternalCalendarsListView({
             </section>
           )}
 
-          {googleAccounts.length === 0 && appleAccounts.length === 0 && icsCalendars.length === 0 && !error && (
+          {!googleConnected && !appleConnected && icsCalendars.length === 0 && !error && (
             <div className="rounded-2xl bg-stone-50 px-4 py-3 text-base font-medium text-stone-500">Aucun calendrier externe pour le moment.</div>
           )}
         </div>
       </div>
+      {disconnectRequest && (
+        <ProviderDisconnectDialog
+          provider={disconnectRequest}
+          busy={disconnectingProvider === disconnectRequest}
+          onClose={() => setDisconnectRequest(null)}
+          onConfirm={() => void confirmProviderDisconnect()}
+        />
+      )}
       {canCreate && (
         <button
           type="button"
@@ -15888,6 +15813,56 @@ function ExternalCalendarsListView({
           Ajouter un flux ICS / Webcal
         </button>
       )}
+    </div>
+  );
+}
+
+function ProviderDisconnectDialog({
+  provider,
+  busy,
+  onClose,
+  onConfirm,
+}: {
+  provider: "google" | "apple";
+  busy: boolean;
+  onClose: () => void;
+  onConfirm: () => void;
+}) {
+  const providerName = provider === "google" ? "Google Calendar" : "Apple Calendar";
+  useEscapeToClose(onClose);
+
+  return (
+    <div
+      className="fixed inset-0 z-[70] flex items-end bg-black/35 p-3 sm:items-center sm:justify-center sm:p-6"
+      onPointerDown={(pointerEvent) => handleModalBackdropPointerDown(pointerEvent, onClose)}
+    >
+      <div
+        className={cn(modalPanelClassName, "w-full p-5 sm:max-w-md")}
+        onPointerDown={(pointerEvent) => pointerEvent.stopPropagation()}
+      >
+        <h3 className="text-lg font-semibold text-stone-950">Déconnecter {providerName} ?</h3>
+        <p className="mt-2 text-base font-medium leading-relaxed text-stone-500">
+          Les calendriers externes de ce compte disparaîtront de MSTV. Les événements natifs MSTV ne seront pas supprimés.
+        </p>
+        <div className="mt-5 flex justify-end gap-2">
+          <button
+            type="button"
+            onClick={onClose}
+            disabled={busy}
+            className="rounded-full border border-stone-200 bg-white px-4 py-2 text-base font-semibold text-stone-600 transition hover:bg-stone-50 disabled:text-stone-300"
+          >
+            Annuler
+          </button>
+          <button
+            type="button"
+            onClick={onConfirm}
+            disabled={busy}
+            className="rounded-full bg-[#bb2720] px-4 py-2 text-base font-semibold text-white transition hover:bg-[#a0201b] disabled:bg-stone-300"
+          >
+            {busy ? "Déconnexion..." : "Déconnecter"}
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
