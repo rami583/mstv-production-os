@@ -65,6 +65,20 @@ export async function POST(request: Request) {
           calendars,
         });
 
+        const { data: refreshedStoredCalendars, error: refreshedStoredCalendarsError } = await supabase
+          .from("external_calendars")
+          .select("id, provider_account_id, provider_calendar_id, sync_enabled, visibility, color")
+          .eq("provider_account_id", account.id)
+          .eq("provider_type", "apple_caldav")
+          .eq("created_by_profile_id", authResult.user.id);
+
+        if (refreshedStoredCalendarsError) throw refreshedStoredCalendarsError;
+        for (const storedCalendar of refreshedStoredCalendars ?? []) {
+          if (storedCalendar.provider_account_id && storedCalendar.provider_calendar_id) {
+            storedByProviderId.set(`${storedCalendar.provider_account_id}:${storedCalendar.provider_calendar_id}`, storedCalendar);
+          }
+        }
+
         calendarsByAccountId[account.id] = calendars.map((calendar) => {
           const stored = storedByProviderId.get(`${account.id}:${calendar.providerCalendarId}`);
           return {

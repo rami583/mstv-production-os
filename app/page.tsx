@@ -4544,6 +4544,36 @@ export default function Home() {
         };
       }
 
+      if (calendar.providerType === "apple_caldav" && calendar.syncCapability === "read_only") {
+        const response = await fetch(getAppApiUrl("/api/calendar/apple/sync", "Synchronisation Apple Calendar momentanément indisponible."), {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${accessToken}`,
+          },
+          body: JSON.stringify({ externalCalendarId: calendar.id }),
+        });
+        const syncPayload = (await response.json().catch(() => null)) as GooglePullSyncApiResponse | null;
+        if (!response.ok || syncPayload?.success === false) {
+          console.error("Apple pull sync failed response", {
+            status: response.status,
+            payload: syncPayload,
+          });
+          throw new Error(syncPayload?.message?.trim() || "Impossible de synchroniser Apple Calendar.");
+        }
+        await refreshExternalCalendarSettings();
+        await reloadData(selectedId, { silent: true });
+        return {
+          synced: syncPayload?.synced ?? 0,
+          total: syncPayload?.total ?? 0,
+          created: syncPayload?.created ?? 0,
+          updated: syncPayload?.updated ?? 0,
+          unchanged: syncPayload?.unchanged ?? 0,
+          conflicts: syncPayload?.conflicts ?? 0,
+          deleted: syncPayload?.deleted ?? 0,
+        };
+      }
+
       if (calendar.providerType !== "ics_read_only" || calendar.syncCapability !== "read_only") {
         throw new Error("Ce calendrier n'utilise pas la synchronisation ICS.");
       }
@@ -14678,6 +14708,8 @@ function ExternalCalendarsListView({
 }) {
   const [googleSyncSummaryByCalendarId, setGoogleSyncSummaryByCalendarId] = useState<Record<string, string>>({});
   const [googleSyncErrorByCalendarId, setGoogleSyncErrorByCalendarId] = useState<Record<string, string>>({});
+  const [appleSyncSummaryByCalendarId, setAppleSyncSummaryByCalendarId] = useState<Record<string, string>>({});
+  const [appleSyncErrorByCalendarId, setAppleSyncErrorByCalendarId] = useState<Record<string, string>>({});
   const [appleConnectOpen, setAppleConnectOpen] = useState(false);
   const [appleDraft, setAppleDraft] = useState({ appleId: "", appPassword: "" });
   const [appleConnectError, setAppleConnectError] = useState<string | null>(null);
@@ -14725,6 +14757,37 @@ function ExternalCalendarsListView({
       setGoogleSyncErrorByCalendarId((current) => ({
         ...current,
         [key]: getUserFacingErrorMessage(syncError, "Impossible de synchroniser Google Calendar."),
+      }));
+    }
+  }
+
+  async function handleApplePullSync(providerCalendar: AppleProviderCalendar) {
+    const calendar = calendars.find((item) => item.id === providerCalendar.externalCalendarId)
+      ?? calendars.find((item) => item.providerType === "apple_caldav" && item.providerCalendarId === providerCalendar.providerCalendarId)
+      ?? null;
+    const key = providerCalendar.externalCalendarId ?? providerCalendar.providerCalendarId;
+
+    setAppleSyncSummaryByCalendarId((current) => ({ ...current, [key]: "" }));
+    setAppleSyncErrorByCalendarId((current) => ({ ...current, [key]: "" }));
+
+    if (!calendar) {
+      setAppleSyncErrorByCalendarId((current) => ({
+        ...current,
+        [key]: "Calendrier Apple indisponible dans MSTV. Rouvrez ce panneau ou reconnectez Apple Calendar.",
+      }));
+      return;
+    }
+
+    try {
+      const result = await onSync(calendar);
+      setAppleSyncSummaryByCalendarId((current) => ({
+        ...current,
+        [key]: `Synchronisation Apple terminée : ${result.created ?? 0} créé(s), ${result.updated ?? 0} mis à jour.`,
+      }));
+    } catch (syncError) {
+      setAppleSyncErrorByCalendarId((current) => ({
+        ...current,
+        [key]: getUserFacingErrorMessage(syncError, "Impossible de synchroniser Apple Calendar."),
       }));
     }
   }
@@ -14900,17 +14963,36 @@ function ExternalCalendarsListView({
               </div>
               {account.lastError && <div className="mt-2 text-xs font-semibold text-rose-600">{account.lastError}</div>}
               <div className="mt-2 space-y-1.5">
-                {(appleCalendarsByAccountId[account.id] ?? []).map((calendar) => (
-                  <div key={calendar.providerCalendarId} className="rounded-xl bg-white px-3 py-2 ring-1 ring-stone-200">
-                    <div className="flex items-center gap-2">
-                      <ExternalCalendarColorDot color={calendar.color} />
-                      <div className="min-w-0">
-                        <div className="truncate text-sm font-semibold text-stone-800">{calendar.name}</div>
-                        <div className="text-xs font-semibold text-stone-400">Apple Calendar · Lecture seule</div>
+                {(appleCalendarsByAccountId[account.id] ?? []).map((calendar) => {
+                  const syncKey = calendar.externalCalendarId ?? calendar.providerCalendarId;
+                  const isPullSyncing = Boolean(calendar.externalCalendarId) && syncingCalendarId === calendar.externalCalendarId;
+                  const canPullSync = calendar.enabled && Boolean(calendar.externalCalendarId);
+                  const syncSummary = appleSyncSummaryByCalendarId[syncKey];
+                  const syncError = appleSyncErrorByCalendarId[syncKey];
+                  return (
+                    <div key={calendar.providerCalendarId} className="rounded-xl bg-white px-3 py-2 ring-1 ring-stone-200">
+                      <div className="flex items-center justify-between gap-3">
+                        <div className="flex min-w-0 items-center gap-2">
+                          <ExternalCalendarColorDot color={calendar.color} />
+                          <div className="min-w-0">
+                            <div className="truncate text-sm font-semibold text-stone-800">{calendar.name}</div>
+                            <div className="text-xs font-semibold text-stone-400">Apple Calendar · Lecture seule</div>
+                          </div>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => void handleApplePullSync(calendar)}
+                          disabled={!canPullSync || isPullSyncing}
+                          className="shrink-0 rounded-full border border-stone-200 bg-stone-50 px-2.5 py-1 text-xs font-semibold text-stone-600 transition hover:bg-stone-100 disabled:border-stone-200 disabled:bg-stone-50 disabled:text-stone-300"
+                        >
+                          {isPullSyncing ? "Synchronisation..." : "Synchroniser depuis Apple"}
+                        </button>
                       </div>
+                      {syncSummary && <p className="mt-1.5 text-xs font-semibold text-emerald-600">{syncSummary}</p>}
+                      {syncError && <p className="mt-1.5 text-xs font-semibold text-rose-600">{syncError}</p>}
                     </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             </div>
           ))}

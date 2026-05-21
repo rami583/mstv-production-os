@@ -35,7 +35,7 @@ function normalizeAppleEmail(value: string) {
   return value.trim().toLowerCase();
 }
 
-function xmlDecode(value: string) {
+export function xmlDecode(value: string) {
   return value
     .replace(/&amp;/g, "&")
     .replace(/&lt;/g, "<")
@@ -44,7 +44,7 @@ function xmlDecode(value: string) {
     .replace(/&apos;/g, "'");
 }
 
-function getFirstXmlTagValue(xml: string, localName: string) {
+export function getFirstXmlTagValue(xml: string, localName: string) {
   const match = xml.match(new RegExp(`<[^>]*:?${localName}[^>]*>([\\s\\S]*?)<\\/[^>]*:?${localName}>`, "i"));
   return match?.[1] ? xmlDecode(match[1].trim()) : null;
 }
@@ -60,11 +60,11 @@ function getHrefInsideTag(xml: string, localName: string) {
   return getFirstXmlTagValue(body, "href");
 }
 
-function getXmlResponses(xml: string) {
+export function getXmlResponses(xml: string) {
   return Array.from(xml.matchAll(/<[^>]*:?response[^>]*>([\s\S]*?)<\/[^>]*:?response>/gi)).map((match) => match[1] ?? "");
 }
 
-function joinCalDavUrl(baseUrl: string, pathOrUrl: string) {
+export function joinCalDavUrl(baseUrl: string, pathOrUrl: string) {
   return new URL(pathOrUrl, baseUrl).toString();
 }
 
@@ -90,6 +90,29 @@ async function calDavPropfind(input: { url: string; appleId: string; appPassword
       host: new URL(input.url).host,
     });
     throw new Error(response.status === 401 ? "Identifiants Apple Calendar incorrects." : "Impossible de charger Apple Calendar.");
+  }
+
+  return text;
+}
+
+export async function calDavReport(input: { url: string; appleId: string; appPassword: string; body: string; depth?: "0" | "1" }) {
+  const response = await fetch(input.url, {
+    method: "REPORT",
+    headers: {
+      Authorization: getBasicAuthHeader(input.appleId, input.appPassword),
+      Depth: input.depth ?? "1",
+      "Content-Type": "application/xml; charset=utf-8",
+    },
+    body: input.body,
+  });
+  const text = await response.text().catch(() => "");
+
+  if (!response.ok) {
+    console.error("Apple CalDAV REPORT failed", {
+      status: response.status,
+      host: new URL(input.url).host,
+    });
+    throw new Error(response.status === 401 ? "Identifiants Apple Calendar incorrects." : "Impossible de lire Apple Calendar.");
   }
 
   return text;
