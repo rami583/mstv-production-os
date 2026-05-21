@@ -311,6 +311,7 @@ type ExternalCalendarEvent = {
   calendarColor: string | null;
   calendarVisibility: ExternalCalendarVisibility;
   calendarSyncEnabled: boolean;
+  calendarProviderType: ExternalCalendarProviderType | null;
   calendarCreatedByProfileId: string | null;
 };
 
@@ -2827,6 +2828,89 @@ function getPrimaryExternalEventLink(event: ProductionEvent) {
   return event.externalLinks.find((link) => link.calendarSyncEnabled && Boolean(link.calendarColor)) ?? null;
 }
 
+function containsDirectionText(value: string | null | undefined) {
+  return normalizeLabel(value ?? "").includes("direction");
+}
+
+type DirectionRenderDebug = {
+  sourceArray: string;
+  renderedEventId: string;
+  title: string;
+  start: string | null;
+  end: string | null;
+  sourceType: string;
+  calendarIdUsedForRendering: string | null;
+  externalCalendarId: string | null;
+  externalEventLinkId: string | null;
+  providerType: string | null;
+  colorSource: string;
+  whyVisible: string;
+  externalLinks?: Array<{
+    linkId: string;
+    externalCalendarId: string;
+    providerType: string;
+    providerCalendarId: string;
+    syncEnabled: boolean;
+    calendarName: string;
+    calendarColor: string | null;
+    syncStatus: string;
+  }>;
+};
+
+function getProductionDirectionRenderDebug(event: ProductionEvent): DirectionRenderDebug | null {
+  const title = `${event.clientName} ${event.eventName}`.trim();
+  if (!containsDirectionText(title)) return null;
+
+  const primaryLink = getPrimaryExternalEventLink(event);
+  return {
+    sourceArray: "visibleProductionEvents",
+    renderedEventId: event.id,
+    title: `${event.clientName} — ${event.eventName}`,
+    start: `${event.date}${event.startTime ? ` ${event.startTime}` : ""}`,
+    end: event.endTime ? `${event.date} ${event.endTime}` : null,
+    sourceType: event.externalLinks.length > 0 ? "production_event_with_external_event_links" : "native_or_orphan_production_event",
+    calendarIdUsedForRendering: primaryLink?.externalCalendarId ?? null,
+    externalCalendarId: primaryLink?.externalCalendarId ?? null,
+    externalEventLinkId: primaryLink?.id ?? null,
+    providerType: primaryLink?.providerType ?? null,
+    colorSource: primaryLink?.calendarColor ? `external_event_link:${primaryLink.calendarColor}` : "mstv_native_red",
+    whyVisible: event.externalLinks.length > 0
+      ? "Rendu car tous les external_event_links de cet événement passent le filtre de visibilité."
+      : "Rendu car l'objet n'a aucun external_event_link: l'UI le traite comme un événement MSTV natif ou orphelin.",
+    externalLinks: event.externalLinks.map((link) => ({
+      linkId: link.id,
+      externalCalendarId: link.externalCalendarId,
+      providerType: link.providerType,
+      providerCalendarId: link.providerCalendarId,
+      syncEnabled: link.calendarSyncEnabled,
+      calendarName: link.calendarName,
+      calendarColor: link.calendarColor,
+      syncStatus: link.syncStatus,
+    })),
+  };
+}
+
+function getExternalDirectionRenderDebug(event: ExternalCalendarEvent): DirectionRenderDebug | null {
+  if (!containsDirectionText(`${event.title} ${event.calendarName}`)) return null;
+
+  return {
+    sourceArray: "visibleExternalCalendarEvents",
+    renderedEventId: event.id,
+    title: event.title,
+    start: event.startTime,
+    end: event.endTime,
+    sourceType: "external_calendar_events",
+    calendarIdUsedForRendering: event.externalCalendarId,
+    externalCalendarId: event.externalCalendarId,
+    externalEventLinkId: null,
+    providerType: event.calendarProviderType,
+    colorSource: event.calendarColor ? `external_calendars.color:${event.calendarColor}` : "external_calendar_default",
+    whyVisible: event.calendarSyncEnabled
+      ? "Rendu car external_calendar_events passe sync_enabled + règles de visibilité."
+      : "Diagnostic: l'objet est visible malgré calendarSyncEnabled=false.",
+  };
+}
+
 function getExternalSyncStatusLabel(status: string | null) {
   if (status === "synced") return "Synchronisé";
   if (status === "pending" || status === "syncing") return "En attente";
@@ -2892,6 +2976,7 @@ function mapExternalCalendarEvent(row: ExternalCalendarEventQueryRow): ExternalC
     calendarColor: row.external_calendars?.color ?? null,
     calendarVisibility: normalizeExternalCalendarVisibility(row.external_calendars?.visibility),
     calendarSyncEnabled: Boolean(row.external_calendars?.sync_enabled ?? true),
+    calendarProviderType: row.external_calendars?.provider_type ? normalizeExternalCalendarProviderType(row.external_calendars.provider_type) : null,
     calendarCreatedByProfileId: row.external_calendars?.created_by_profile_id ?? null,
   };
 }
@@ -3499,6 +3584,21 @@ export default function Home() {
       })),
     [events, externalCalendarEnabledById, externalCalendarProviderStateByKey],
   );
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const directionDebug = [
+      ...visibleProductionEvents.map(getProductionDirectionRenderDebug).filter((item): item is DirectionRenderDebug => Boolean(item)),
+      ...visibleExternalCalendarEvents.map(getExternalDirectionRenderDebug).filter((item): item is DirectionRenderDebug => Boolean(item)),
+    ];
+    if (directionDebug.length === 0) return;
+    console.info("MSTV visible Direction render debug", {
+      selectedDateKey,
+      visibleMonth: `${visibleMonth.getFullYear()}-${String(visibleMonth.getMonth() + 1).padStart(2, "0")}`,
+      visibleProductionEventCount: visibleProductionEvents.length,
+      visibleExternalCalendarEventCount: visibleExternalCalendarEvents.length,
+      directionDebug,
+    });
+  }, [selectedDateKey, visibleExternalCalendarEvents, visibleMonth, visibleProductionEvents]);
   const writableGoogleCalendars = useMemo(
     () =>
       externalCalendars.filter(
@@ -4253,6 +4353,7 @@ export default function Home() {
               calendarColor: mappedCalendar.color,
               calendarVisibility: mappedCalendar.visibility,
               calendarSyncEnabled: mappedCalendar.syncEnabled,
+              calendarProviderType: mappedCalendar.providerType,
               calendarCreatedByProfileId: mappedCalendar.createdByProfileId,
             }
           : event
@@ -11019,6 +11120,7 @@ function ExternalCalendarEventRow({
 }) {
   const tone = getExternalCalendarTone(event.calendarColor);
   const timeRange = formatExternalEventTimeRange(event);
+  const directionDebug = getExternalDirectionRenderDebug(event);
 
   return (
     <button
@@ -11033,9 +11135,24 @@ function ExternalCalendarEventRow({
           {event.calendarName}
           {event.location ? ` · ${event.location}` : ""}
         </span>
+        {directionDebug && <DirectionRenderDebugPanel debug={directionDebug} />}
       </span>
       {timeRange && <span className={cn("pl-2 text-right text-base font-medium", tone.meta)}>{timeRange}</span>}
     </button>
+  );
+}
+
+function DirectionRenderDebugPanel({ debug }: { debug: DirectionRenderDebug }) {
+  return (
+    <span className="mt-2 block rounded-lg border border-amber-200 bg-amber-50 px-2 py-1 text-left text-[11px] font-semibold leading-snug text-amber-900">
+      Debug Direction · source {debug.sourceArray} · id {debug.renderedEventId} · type {debug.sourceType}
+      <br />
+      calendrier {debug.calendarIdUsedForRendering ?? "aucun"} · external_calendar {debug.externalCalendarId ?? "aucun"} · lien {debug.externalEventLinkId ?? "aucun"}
+      <br />
+      provider {debug.providerType ?? "aucun"} · couleur {debug.colorSource}
+      <br />
+      visibilité: {debug.whyVisible}
+    </span>
   );
 }
 
@@ -11080,6 +11197,7 @@ function SwipeableCalendarEventRow({
   const timeRange = formatTimeRange(event.startTime, event.endTime);
   const externalLink = getPrimaryExternalEventLink(event);
   const externalTone = getExternalCalendarTone(externalLink?.calendarColor ?? null);
+  const directionDebug = getProductionDirectionRenderDebug(event);
 
   function handlePointerDown(pointerEvent: ReactPointerEvent<HTMLDivElement>) {
     if (!canSwipe) return;
@@ -11243,6 +11361,7 @@ function SwipeableCalendarEventRow({
         <span className="min-w-0">
           <span className="block text-base font-semibold leading-snug text-stone-950">{event.clientName}</span>
           <span className="block truncate text-base font-medium text-stone-500">{event.eventName}</span>
+          {directionDebug && <DirectionRenderDebugPanel debug={directionDebug} />}
         </span>
         {timeRange && <span className="pl-2 text-right text-base font-medium text-stone-500">{timeRange}</span>}
       </div>
