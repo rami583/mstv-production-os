@@ -3454,6 +3454,9 @@ export default function Home() {
   const googleSyncInFlightRef = useRef(false);
   const googleAutoSyncRunningRef = useRef(false);
   const googleAutoSyncLastStartedAtRef = useRef(0);
+  const appleSyncInFlightRef = useRef(false);
+  const appleAutoSyncRunningRef = useRef(false);
+  const appleAutoSyncLastStartedAtRef = useRef(0);
   const onlineRef = useRef(online);
   const processPendingSyncQueueRef = useRef<((options?: { forceOnline?: boolean }) => Promise<void>) | null>(null);
   const googleCalendarBootstrapKeyRef = useRef<string | null>(null);
@@ -4909,11 +4912,18 @@ export default function Home() {
     }
 
     const isGoogleBidirectionalCalendar = calendar.providerType === "google" && calendar.syncCapability === "bidirectional";
+    const isAppleBidirectionalCalendar = calendar.providerType === "apple_caldav" && calendar.syncCapability === "bidirectional";
     if (isGoogleBidirectionalCalendar && googleSyncInFlightRef.current) {
       throw new Error("Synchronisation Google déjà en cours.");
     }
+    if (isAppleBidirectionalCalendar && appleSyncInFlightRef.current) {
+      throw new Error("Synchronisation Apple déjà en cours.");
+    }
     if (isGoogleBidirectionalCalendar) {
       googleSyncInFlightRef.current = true;
+    }
+    if (isAppleBidirectionalCalendar) {
+      appleSyncInFlightRef.current = true;
     }
 
     setSyncingExternalCalendarId(calendar.id);
@@ -5126,6 +5136,9 @@ export default function Home() {
       if (isGoogleBidirectionalCalendar) {
         googleSyncInFlightRef.current = false;
       }
+      if (isAppleBidirectionalCalendar) {
+        appleSyncInFlightRef.current = false;
+      }
       setSyncingExternalCalendarId(null);
       setExternalCalendarSyncProgress(null);
     }
@@ -5175,17 +5188,51 @@ export default function Home() {
       }
     }
 
+    async function runAutomaticAppleSync(source: "interval" | "online" | "visible") {
+      if (!authSession || !profile) return;
+      if (!onlineRef.current) return;
+      if (document.visibilityState !== "visible") return;
+      if (writableAppleCalendars.length === 0) return;
+      if (appleAutoSyncRunningRef.current || appleSyncInFlightRef.current || syncingExternalCalendarId) return;
+
+      const now = Date.now();
+      if (now - appleAutoSyncLastStartedAtRef.current < GOOGLE_AUTO_SYNC_MIN_GAP_MS) return;
+
+      appleAutoSyncRunningRef.current = true;
+      appleAutoSyncLastStartedAtRef.current = now;
+
+      try {
+        for (const calendar of writableAppleCalendars) {
+          if (!onlineRef.current || document.visibilityState !== "visible") break;
+          await syncExternalCalendar(calendar);
+        }
+      } catch (syncError) {
+        console.error("Automatic Apple Calendar sync failed", {
+          source,
+          message: getUserFacingErrorMessage(syncError, "Erreur de synchronisation Apple."),
+          technicalMessage: getRawErrorMessage(syncError),
+        });
+      } finally {
+        appleAutoSyncRunningRef.current = false;
+      }
+    }
+
+    async function runAutomaticExternalCalendarSync(source: "interval" | "online" | "visible") {
+      await runAutomaticGoogleSync(source);
+      await runAutomaticAppleSync(source);
+    }
+
     const intervalId = window.setInterval(() => {
-      void runAutomaticGoogleSync("interval");
+      void runAutomaticExternalCalendarSync("interval");
     }, GOOGLE_AUTO_SYNC_INTERVAL_MS);
 
     function handleOnline() {
-      void runAutomaticGoogleSync("online");
+      void runAutomaticExternalCalendarSync("online");
     }
 
     function handleVisibilityChange() {
       if (document.visibilityState === "visible") {
-        void runAutomaticGoogleSync("visible");
+        void runAutomaticExternalCalendarSync("visible");
       }
     }
 
@@ -5197,7 +5244,7 @@ export default function Home() {
       window.removeEventListener("online", handleOnline);
       document.removeEventListener("visibilitychange", handleVisibilityChange);
     };
-  }, [authSession, hasMounted, online, profile, selectedId, syncingExternalCalendarId, writableGoogleCalendars]);
+  }, [authSession, hasMounted, online, profile, selectedId, syncingExternalCalendarId, writableAppleCalendars, writableGoogleCalendars]);
 
   async function deleteExternalCalendar(calendar: ExternalCalendar) {
     if (!supabase) throw new Error("Configuration Supabase manquante.");
