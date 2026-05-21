@@ -68,6 +68,26 @@ async function refetchStoredAppleCalendar(
   return data;
 }
 
+async function getMatchingStoredAppleCalendarIds(
+  supabase: ReturnType<typeof getServiceSupabaseClient>,
+  input: { accountId: string; providerCalendarId: string; userId: string; primaryCalendarId?: string | null },
+) {
+  const { data, error } = await supabase
+    .from("external_calendars")
+    .select("id, provider_calendar_id")
+    .eq("provider_account_id", input.accountId)
+    .eq("provider_type", "apple_caldav")
+    .eq("created_by_profile_id", input.userId);
+
+  if (error) throw error;
+  const providerCalendarKey = normalizeProviderCalendarKey(input.providerCalendarId);
+  const ids = (data ?? [])
+    .filter((calendar) => normalizeProviderCalendarKey(calendar.provider_calendar_id) === providerCalendarKey)
+    .map((calendar) => calendar.id);
+  if (input.primaryCalendarId && !ids.includes(input.primaryCalendarId)) ids.unshift(input.primaryCalendarId);
+  return Array.from(new Set(ids));
+}
+
 export async function POST(request: Request) {
   try {
     const authResult = await requireAuthenticatedUser(request);
@@ -103,6 +123,12 @@ export async function POST(request: Request) {
       }
 
       if (body.action === "remove") {
+        const matchingCalendarIds = await getMatchingStoredAppleCalendarIds(supabase, {
+          accountId,
+          providerCalendarId: calendar.provider_calendar_id ?? providerCalendarId,
+          userId: authResult.user.id,
+          primaryCalendarId: calendar.id,
+        });
         const { data, error } = await supabase
           .from("external_calendars")
           .update({
@@ -110,8 +136,9 @@ export async function POST(request: Request) {
             last_sync_status: "idle",
             last_sync_error: null,
           })
-          .eq("id", calendar.id)
+          .in("id", matchingCalendarIds)
           .select("id, sync_enabled, color")
+          .eq("id", calendar.id)
           .single();
 
         if (error) throw error;
@@ -124,6 +151,12 @@ export async function POST(request: Request) {
       }
 
       const visibility = body.visibility === "admin_only" || body.visibility === "team" ? body.visibility : "private";
+      const matchingCalendarIds = await getMatchingStoredAppleCalendarIds(supabase, {
+        accountId,
+        providerCalendarId: calendar.provider_calendar_id ?? providerCalendarId,
+        userId: authResult.user.id,
+        primaryCalendarId: calendar.id,
+      });
       const { data, error } = await supabase
         .from("external_calendars")
         .update({
@@ -132,8 +165,9 @@ export async function POST(request: Request) {
           sync_enabled: typeof body.enabled === "boolean" ? body.enabled : calendar.sync_enabled,
           last_sync_error: null,
         })
-        .eq("id", calendar.id)
+        .in("id", matchingCalendarIds)
         .select("id, sync_enabled, color, visibility")
+        .eq("id", calendar.id)
         .single();
 
       if (error) throw error;

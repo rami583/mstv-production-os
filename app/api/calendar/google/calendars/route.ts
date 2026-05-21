@@ -83,6 +83,24 @@ async function refetchStoredGoogleCalendar(
   return data;
 }
 
+async function getMatchingStoredGoogleCalendarIds(
+  supabase: ReturnType<typeof getServiceSupabaseClient>,
+  input: { accountId: string; providerCalendarId: string; userId: string; primaryCalendarId?: string | null },
+) {
+  const { data, error } = await supabase
+    .from("external_calendars")
+    .select("id")
+    .eq("provider_account_id", input.accountId)
+    .eq("provider_calendar_id", input.providerCalendarId)
+    .eq("provider_type", "google")
+    .eq("created_by_profile_id", input.userId);
+
+  if (error) throw error;
+  const ids = (data ?? []).map((calendar) => calendar.id);
+  if (input.primaryCalendarId && !ids.includes(input.primaryCalendarId)) ids.unshift(input.primaryCalendarId);
+  return Array.from(new Set(ids));
+}
+
 async function materializeWritableGoogleCalendar(
   supabase: ReturnType<typeof getServiceSupabaseClient>,
   input: {
@@ -292,6 +310,12 @@ export async function POST(request: Request) {
       if (!existingCalendar?.id) {
         return googleJsonResponse({ ok: true, enabled: false });
       }
+      const matchingCalendarIds = await getMatchingStoredGoogleCalendarIds(supabase, {
+        accountId: account.id,
+        providerCalendarId: existingCalendar.provider_calendar_id ?? providerCalendarId,
+        userId: authResult.user.id,
+        primaryCalendarId: existingCalendar.id,
+      });
 
       const { data, error } = await supabase
         .from("external_calendars")
@@ -300,8 +324,9 @@ export async function POST(request: Request) {
           last_sync_status: "idle",
           last_sync_error: null,
         })
-        .eq("id", existingCalendar.id)
+        .in("id", matchingCalendarIds)
         .select("id, sync_enabled, color")
+        .eq("id", existingCalendar.id)
         .single();
 
       if (error) throw error;
@@ -319,6 +344,12 @@ export async function POST(request: Request) {
       }
 
       const visibility = body.visibility === "admin_only" || body.visibility === "team" ? body.visibility : "private";
+      const matchingCalendarIds = await getMatchingStoredGoogleCalendarIds(supabase, {
+        accountId: account.id,
+        providerCalendarId: existingCalendar.provider_calendar_id ?? providerCalendarId,
+        userId: authResult.user.id,
+        primaryCalendarId: existingCalendar.id,
+      });
       const { data, error } = await supabase
         .from("external_calendars")
         .update({
@@ -327,8 +358,9 @@ export async function POST(request: Request) {
           sync_enabled: typeof body.enabled === "boolean" ? body.enabled : existingCalendar.sync_enabled,
           last_sync_error: null,
         })
-        .eq("id", existingCalendar.id)
+        .in("id", matchingCalendarIds)
         .select("id, sync_enabled, color, visibility")
+        .eq("id", existingCalendar.id)
         .single();
 
       if (error) throw error;
