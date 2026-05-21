@@ -199,9 +199,11 @@ async function listGoogleCalendars(request: Request) {
       calendarRole: string | null;
     }>> = {};
 
-    for (const account of accounts ?? []) {
-      if (account.connection_status !== "connected") {
-        console.info("Google calendars skipping non-connected account", {
+    const safeAccounts = [...(accounts ?? [])];
+
+    for (const account of safeAccounts) {
+      if (account.connection_status === "disconnected") {
+        console.info("Google calendars skipping disconnected account", {
           accountId: account.id,
           connectionStatus: account.connection_status,
         });
@@ -212,6 +214,8 @@ async function listGoogleCalendars(request: Request) {
       try {
         const accessToken = await getFreshGoogleAccessToken(supabase, account);
         const googleCalendars = await fetchGoogleCalendarList(accessToken);
+        account.connection_status = "connected";
+        account.last_error = null;
         console.info("Google calendars loaded for account", {
           accountId: account.id,
           calendarCount: googleCalendars.length,
@@ -263,7 +267,7 @@ async function listGoogleCalendars(request: Request) {
     }
 
     return googleJsonResponse({
-      accounts: (accounts ?? []).map(toSafeAccount),
+      accounts: safeAccounts.map(toSafeAccount),
       calendarsByAccountId,
     });
   } catch (error) {

@@ -256,9 +256,10 @@ export async function POST(request: Request) {
     );
 
     const calendarsByAccountId: Record<string, AppleCalDavCalendar[]> = {};
+    const safeAccounts = [...(accounts ?? [])];
 
-    for (const account of accounts ?? []) {
-      if (account.connection_status !== "connected") {
+    for (const account of safeAccounts) {
+      if (account.connection_status === "disconnected") {
         calendarsByAccountId[account.id] = [];
         continue;
       }
@@ -271,6 +272,16 @@ export async function POST(request: Request) {
           userId: authResult.user.id,
           calendars,
         });
+        await supabase
+          .from("external_calendar_accounts")
+          .update({
+            connection_status: "connected",
+            last_error: null,
+            updated_at: new Date().toISOString(),
+          })
+          .eq("id", account.id);
+        account.connection_status = "connected";
+        account.last_error = null;
 
         const { data: refreshedStoredCalendars, error: refreshedStoredCalendarsError } = await supabase
           .from("external_calendars")
@@ -317,7 +328,7 @@ export async function POST(request: Request) {
     }
 
     return appleJsonResponse({
-      accounts: (accounts ?? []).map(toSafeAppleAccount),
+      accounts: safeAccounts.map(toSafeAppleAccount),
       calendarsByAccountId,
     });
   } catch (error) {
