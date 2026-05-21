@@ -295,6 +295,16 @@ type ExternalCalendar = {
   createdAt: string;
 };
 
+type ExternalCalendarControlDebug = {
+  action: "color" | "update" | "remove";
+  clickedCalendarId: string | null;
+  providerCalendarId: string | null;
+  apiCalendarId: string | null;
+  updated: boolean;
+  refetchedSyncEnabled: boolean | null;
+  refetchedColor: string | null;
+};
+
 type ExternalCalendarEvent = {
   id: string;
   externalCalendarId: string;
@@ -4175,6 +4185,16 @@ export default function Home() {
     }
   }
 
+  function mergeRefetchedExternalCalendar(row: ExternalCalendarRow) {
+    const mappedCalendar = mapExternalCalendar(row);
+    setExternalCalendars((current) => {
+      const existingIndex = current.findIndex((calendar) => calendar.id === mappedCalendar.id);
+      if (existingIndex === -1) return [...current, mappedCalendar];
+      return current.map((calendar) => (calendar.id === mappedCalendar.id ? mappedCalendar : calendar));
+    });
+    return mappedCalendar;
+  }
+
   async function refreshGoogleCalendarAccounts() {
     if (!authSession || !online) return;
 
@@ -4471,7 +4491,7 @@ export default function Home() {
   async function updateExternalCalendar(
     calendar: ExternalCalendar,
     input: { name: string; icsUrl: string; color: string; visibility: ExternalCalendarVisibility; syncEnabled?: boolean },
-  ) {
+  ): Promise<ExternalCalendarControlDebug | void> {
     if (!supabase) throw new Error("Configuration Supabase manquante.");
     if (!canManageExternalCalendar(permissions, profile, calendar)) {
       throw new Error("Vous ne pouvez modifier que vos calendriers.");
@@ -4480,6 +4500,13 @@ export default function Home() {
     const icsUrl = normalizeExternalCalendarIcsUrl(input.icsUrl);
 
     if ((calendar.providerType === "google" || calendar.providerType === "apple_caldav") && calendar.providerAccountId && calendar.providerCalendarId) {
+      console.info("External calendar control update clicked", {
+        clickedCalendar: calendar,
+        externalCalendarId: calendar.id,
+        providerCalendarId: calendar.providerCalendarId,
+        nextColor: input.color,
+        nextSyncEnabled: input.syncEnabled ?? calendar.syncEnabled,
+      });
       const accessToken = await getServerApiAccessToken(authSession?.access_token);
       const apiPath = calendar.providerType === "google" ? "/api/calendar/google/calendars" : "/api/calendar/apple/calendars";
       const response = await fetch(getAppApiUrl(apiPath, "Calendrier externe momentanément indisponible."), {
@@ -4491,23 +4518,46 @@ export default function Home() {
         body: JSON.stringify({
           action: "update_settings",
           accountId: calendar.providerAccountId,
+          calendarId: calendar.id,
           providerCalendarId: calendar.providerCalendarId,
           color: input.color,
           visibility,
           enabled: input.syncEnabled ?? calendar.syncEnabled,
         }),
       });
-      const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+      const payload = (await response.json().catch(() => null)) as { error?: string; calendarId?: string | null; calendar?: ExternalCalendarRow | null } | null;
+      console.info("External calendar control update API response", {
+        externalCalendarId: calendar.id,
+        providerCalendarId: calendar.providerCalendarId,
+        nextColor: input.color,
+        ok: response.ok,
+        payload,
+      });
       if (!response.ok) {
         throw new Error(payload?.error ?? "Impossible de modifier ce calendrier.");
       }
+      const refetchedCalendar = payload?.calendar ? mergeRefetchedExternalCalendar(payload.calendar) : null;
+      console.info("External calendar control update refetched row", {
+        externalCalendarId: calendar.id,
+        providerCalendarId: calendar.providerCalendarId,
+        refetchedRow: payload?.calendar ?? null,
+      });
       await refreshExternalCalendarSettings();
       if (calendar.providerType === "google") {
         await refreshGoogleCalendarAccounts();
       } else {
         await refreshAppleCalendarAccounts();
       }
-      return;
+      if (payload?.calendar) mergeRefetchedExternalCalendar(payload.calendar);
+      return {
+        action: input.color !== calendar.color ? "color" : "update",
+        clickedCalendarId: calendar.id,
+        providerCalendarId: calendar.providerCalendarId,
+        apiCalendarId: payload?.calendarId ?? payload?.calendar?.id ?? null,
+        updated: true,
+        refetchedSyncEnabled: refetchedCalendar?.syncEnabled ?? (typeof payload?.calendar?.sync_enabled === "boolean" ? payload.calendar.sync_enabled : null),
+        refetchedColor: refetchedCalendar?.color ?? payload?.calendar?.color ?? null,
+      };
     }
 
     const { error: updateError } = await supabase
@@ -4530,6 +4580,7 @@ export default function Home() {
     } else if (calendar.providerType === "apple_caldav") {
       await refreshAppleCalendarAccounts();
     }
+    return undefined;
   }
 
   async function syncExternalCalendar(calendar: ExternalCalendar): Promise<ExternalCalendarSyncResult> {
@@ -4832,13 +4883,18 @@ export default function Home() {
     };
   }, [authSession, hasMounted, online, profile, selectedId, syncingExternalCalendarId, writableGoogleCalendars]);
 
-  async function deleteExternalCalendar(calendar: ExternalCalendar) {
+  async function deleteExternalCalendar(calendar: ExternalCalendar): Promise<ExternalCalendarControlDebug | void> {
     if (!supabase) throw new Error("Configuration Supabase manquante.");
     if (!canManageExternalCalendar(permissions, profile, calendar)) {
       throw new Error("Vous ne pouvez supprimer que vos calendriers.");
     }
 
     if ((calendar.providerType === "google" || calendar.providerType === "apple_caldav") && calendar.providerAccountId && calendar.providerCalendarId) {
+      console.info("External calendar control remove clicked", {
+        clickedCalendar: calendar,
+        externalCalendarId: calendar.id,
+        providerCalendarId: calendar.providerCalendarId,
+      });
       const accessToken = await getServerApiAccessToken(authSession?.access_token);
       const apiPath = calendar.providerType === "google" ? "/api/calendar/google/calendars" : "/api/calendar/apple/calendars";
       const response = await fetch(getAppApiUrl(apiPath, "Calendrier externe momentanément indisponible."), {
@@ -4850,20 +4906,42 @@ export default function Home() {
         body: JSON.stringify({
           action: "remove",
           accountId: calendar.providerAccountId,
+          calendarId: calendar.id,
           providerCalendarId: calendar.providerCalendarId,
         }),
       });
-      const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+      const payload = (await response.json().catch(() => null)) as { error?: string; calendarId?: string | null; calendar?: ExternalCalendarRow | null } | null;
+      console.info("External calendar control remove API response", {
+        externalCalendarId: calendar.id,
+        providerCalendarId: calendar.providerCalendarId,
+        ok: response.ok,
+        payload,
+      });
       if (!response.ok) {
         throw new Error(payload?.error ?? "Impossible de retirer ce calendrier.");
       }
+      const refetchedCalendar = payload?.calendar ? mergeRefetchedExternalCalendar(payload.calendar) : null;
+      console.info("External calendar control remove refetched row", {
+        externalCalendarId: calendar.id,
+        providerCalendarId: calendar.providerCalendarId,
+        refetchedRow: payload?.calendar ?? null,
+      });
       await refreshExternalCalendarSettings();
       if (calendar.providerType === "google") {
         await refreshGoogleCalendarAccounts();
       } else {
         await refreshAppleCalendarAccounts();
       }
-      return;
+      if (payload?.calendar) mergeRefetchedExternalCalendar(payload.calendar);
+      return {
+        action: "remove",
+        clickedCalendarId: calendar.id,
+        providerCalendarId: calendar.providerCalendarId,
+        apiCalendarId: payload?.calendarId ?? payload?.calendar?.id ?? null,
+        updated: true,
+        refetchedSyncEnabled: refetchedCalendar?.syncEnabled ?? (typeof payload?.calendar?.sync_enabled === "boolean" ? payload.calendar.sync_enabled : null),
+        refetchedColor: refetchedCalendar?.color ?? payload?.calendar?.color ?? null,
+      };
     }
 
     const { error: deleteError } = await supabase
@@ -4873,6 +4951,7 @@ export default function Home() {
 
     if (deleteError) throw deleteError;
     await refreshExternalCalendarSettings();
+    return undefined;
   }
 
   async function fetchActivityLog(eventId: string) {
@@ -14519,12 +14598,12 @@ function ExternalCalendarsSheet({
   syncProgress: ExternalCalendarSyncProgress | null;
   onClose: () => void;
   onCreate: (input: { name: string; icsUrl: string; color: string; visibility: ExternalCalendarVisibility }) => Promise<void>;
-  onUpdate: (calendar: ExternalCalendar, input: { name: string; icsUrl: string; color: string; visibility: ExternalCalendarVisibility; syncEnabled?: boolean }) => Promise<void>;
+  onUpdate: (calendar: ExternalCalendar, input: { name: string; icsUrl: string; color: string; visibility: ExternalCalendarVisibility; syncEnabled?: boolean }) => Promise<ExternalCalendarControlDebug | void>;
   onConnectGoogle: () => Promise<void>;
   onDisconnectGoogle: (account: GoogleCalendarAccount) => Promise<void>;
   onToggleGoogleCalendar: (account: GoogleCalendarAccount, calendar: GoogleProviderCalendar, enabled: boolean) => Promise<void>;
   onConnectApple: (input: { appleId: string; appPassword: string }) => Promise<void>;
-  onDelete: (calendar: ExternalCalendar) => Promise<void>;
+  onDelete: (calendar: ExternalCalendar) => Promise<ExternalCalendarControlDebug | void>;
   onSync: (calendar: ExternalCalendar) => Promise<ExternalCalendarSyncResult>;
 }) {
   const [view, setView] = useState<"list" | "add" | "detail">("list");
@@ -14777,8 +14856,8 @@ function ExternalCalendarsListView({
   onDisconnectGoogle: (account: GoogleCalendarAccount) => Promise<void>;
   onToggleGoogleCalendar: (account: GoogleCalendarAccount, calendar: GoogleProviderCalendar, enabled: boolean) => Promise<void>;
   onConnectApple: (input: { appleId: string; appPassword: string }) => Promise<void>;
-  onUpdate: (calendar: ExternalCalendar, input: { name: string; icsUrl: string; color: string; visibility: ExternalCalendarVisibility; syncEnabled?: boolean }) => Promise<void>;
-  onDelete: (calendar: ExternalCalendar) => Promise<void>;
+  onUpdate: (calendar: ExternalCalendar, input: { name: string; icsUrl: string; color: string; visibility: ExternalCalendarVisibility; syncEnabled?: boolean }) => Promise<ExternalCalendarControlDebug | void>;
+  onDelete: (calendar: ExternalCalendar) => Promise<ExternalCalendarControlDebug | void>;
   onSync: (calendar: ExternalCalendar) => Promise<ExternalCalendarSyncResult>;
   onAdd: () => void;
 }) {
@@ -14789,6 +14868,7 @@ function ExternalCalendarsListView({
   const [appleDraft, setAppleDraft] = useState({ appleId: "", appPassword: "" });
   const [appleConnectError, setAppleConnectError] = useState<string | null>(null);
   const [calendarActionErrorById, setCalendarActionErrorById] = useState<Record<string, string>>({});
+  const [calendarActionDebugById, setCalendarActionDebugById] = useState<Record<string, ExternalCalendarControlDebug>>({});
   const googleConnected = googleAccounts.some((account) => account.connectionStatus === "connected");
   const appleConnected = appleAccounts.some((account) => account.connectionStatus === "connected");
 
@@ -14895,16 +14975,26 @@ function ExternalCalendarsListView({
       ?? null;
   }
 
-  async function updateStoredCalendar(calendar: ExternalCalendar, patch: Partial<Pick<ExternalCalendar, "color" | "visibility" | "syncEnabled">>) {
+  async function updateStoredCalendar(calendar: ExternalCalendar, patch: Partial<Pick<ExternalCalendar, "color" | "visibility" | "syncEnabled">>, source?: unknown) {
+    console.info("External calendar UI update clicked", {
+      clickedCalendar: calendar,
+      sourceCalendar: source ?? null,
+      externalCalendarId: calendar.id,
+      providerCalendarId: calendar.providerCalendarId,
+      patch,
+    });
     setCalendarActionErrorById((current) => ({ ...current, [calendar.id]: "" }));
     try {
-      await onUpdate(calendar, {
+      const debug = await onUpdate(calendar, {
         name: calendar.name,
         icsUrl: calendar.icsUrl,
         color: patch.color ?? calendar.color ?? "blue",
         visibility: patch.visibility ?? calendar.visibility,
         syncEnabled: patch.syncEnabled ?? calendar.syncEnabled,
       });
+      if (debug) {
+        setCalendarActionDebugById((current) => ({ ...current, [calendar.id]: debug }));
+      }
     } catch (updateError) {
       setCalendarActionErrorById((current) => ({
         ...current,
@@ -14913,16 +15003,35 @@ function ExternalCalendarsListView({
     }
   }
 
-  async function deleteStoredCalendar(calendar: ExternalCalendar) {
+  async function deleteStoredCalendar(calendar: ExternalCalendar, source?: unknown) {
+    console.info("External calendar UI remove clicked", {
+      clickedCalendar: calendar,
+      sourceCalendar: source ?? null,
+      externalCalendarId: calendar.id,
+      providerCalendarId: calendar.providerCalendarId,
+    });
     setCalendarActionErrorById((current) => ({ ...current, [calendar.id]: "" }));
     try {
-      await onDelete(calendar);
+      const debug = await onDelete(calendar);
+      if (debug) {
+        setCalendarActionDebugById((current) => ({ ...current, [calendar.id]: debug }));
+      }
     } catch (deleteError) {
       setCalendarActionErrorById((current) => ({
         ...current,
         [calendar.id]: getUserFacingErrorMessage(deleteError, "Impossible de supprimer ce calendrier."),
       }));
     }
+  }
+
+  function CalendarControlDebugLine({ debug }: { debug: ExternalCalendarControlDebug | undefined }) {
+    if (!debug) return null;
+    return (
+      <p className="mt-1.5 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-800">
+        Diagnostic temporaire : calendar id: {debug.apiCalendarId ?? debug.clickedCalendarId ?? "absent"} · updated: {debug.updated ? "true" : "false"} · sync_enabled:{" "}
+        {debug.refetchedSyncEnabled === null ? "null" : String(debug.refetchedSyncEnabled)} · color: {debug.refetchedColor ?? "null"}
+      </p>
+    );
   }
 
   function CapabilityBadge({ capability }: { capability: ExternalCalendarSyncCapability }) {
@@ -15110,7 +15219,7 @@ function ExternalCalendarsListView({
                         <div className="mt-2 grid gap-2 sm:grid-cols-[auto_1fr_auto_auto] sm:items-center">
                           <ExternalCalendarColorPalette
                             value={storedCalendar.color ?? "blue"}
-                            onChange={(nextColor) => void updateStoredCalendar(storedCalendar, { color: nextColor })}
+                            onChange={(nextColor) => void updateStoredCalendar(storedCalendar, { color: nextColor }, calendar)}
                             disabled={!canManageStored}
                           />
                           <select
@@ -15131,10 +15240,10 @@ function ExternalCalendarsListView({
                           >
                             {googleEnabled ? "Désactiver" : "Activer"}
                           </button>
-                          {canManageStored && (
+                            {canManageStored && (
                             <button
                               type="button"
-                              onClick={() => void deleteStoredCalendar(storedCalendar)}
+                              onClick={() => void deleteStoredCalendar(storedCalendar, calendar)}
                               className="rounded-full border border-[#bb2720]/20 bg-white px-3 py-1.5 text-sm font-semibold text-[#bb2720] transition hover:bg-[#bb2720]/[0.05]"
                             >
                               Retirer
@@ -15142,6 +15251,7 @@ function ExternalCalendarsListView({
                           )}
                         </div>
                       )}
+                      <CalendarControlDebugLine debug={storedCalendar ? calendarActionDebugById[storedCalendar.id] : undefined} />
                       {storedCalendar && calendarActionErrorById[storedCalendar.id] && <p className="mt-1.5 text-xs font-semibold text-rose-600">{calendarActionErrorById[storedCalendar.id]}</p>}
                       {syncError && <p className="mt-1.5 text-xs font-semibold text-rose-600">{syncError}</p>}
                     </div>
@@ -15217,7 +15327,7 @@ function ExternalCalendarsListView({
                         <div className="mt-2 grid gap-2 sm:grid-cols-[auto_1fr_auto_auto] sm:items-center">
                           <ExternalCalendarColorPalette
                             value={storedCalendar.color ?? "blue"}
-                            onChange={(nextColor) => void updateStoredCalendar(storedCalendar, { color: nextColor })}
+                            onChange={(nextColor) => void updateStoredCalendar(storedCalendar, { color: nextColor }, calendar)}
                             disabled={!canManageStored}
                           />
                           <select
@@ -15241,7 +15351,7 @@ function ExternalCalendarsListView({
                           {canManageStored && (
                             <button
                               type="button"
-                              onClick={() => void deleteStoredCalendar(storedCalendar)}
+                              onClick={() => void deleteStoredCalendar(storedCalendar, calendar)}
                               className="rounded-full border border-[#bb2720]/20 bg-white px-3 py-1.5 text-sm font-semibold text-[#bb2720] transition hover:bg-[#bb2720]/[0.05]"
                             >
                               Retirer
@@ -15249,6 +15359,7 @@ function ExternalCalendarsListView({
                           )}
                         </div>
                       )}
+                      <CalendarControlDebugLine debug={storedCalendar ? calendarActionDebugById[storedCalendar.id] : undefined} />
                       {storedCalendar && calendarActionErrorById[storedCalendar.id] && <p className="mt-1.5 text-xs font-semibold text-rose-600">{calendarActionErrorById[storedCalendar.id]}</p>}
                       {syncError && <p className="mt-1.5 text-xs font-semibold text-rose-600">{syncError}</p>}
                     </div>
@@ -15445,8 +15556,8 @@ function ExternalCalendarSettingsDetail({
   profile: UserProfile | null;
   syncing: boolean;
   syncProgress: ExternalCalendarSyncProgress | null;
-  onUpdate: (calendar: ExternalCalendar, input: { name: string; icsUrl: string; color: string; visibility: ExternalCalendarVisibility; syncEnabled?: boolean }) => Promise<void>;
-  onDelete: (calendar: ExternalCalendar) => Promise<void>;
+  onUpdate: (calendar: ExternalCalendar, input: { name: string; icsUrl: string; color: string; visibility: ExternalCalendarVisibility; syncEnabled?: boolean }) => Promise<ExternalCalendarControlDebug | void>;
+  onDelete: (calendar: ExternalCalendar) => Promise<ExternalCalendarControlDebug | void>;
   onSync: (calendar: ExternalCalendar) => Promise<ExternalCalendarSyncResult>;
 }) {
   const [draft, setDraft] = useState<{ name: string; icsUrl: string; color: string; visibility: ExternalCalendarVisibility }>({

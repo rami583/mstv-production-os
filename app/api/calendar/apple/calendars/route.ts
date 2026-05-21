@@ -21,17 +21,37 @@ export function OPTIONS() {
 
 async function findStoredAppleCalendar(
   supabase: ReturnType<typeof getServiceSupabaseClient>,
-  input: { accountId: string; providerCalendarId: string; userId: string },
+  input: { accountId: string; providerCalendarId: string; userId: string; calendarId?: string | null },
 ) {
-  const { data, error } = await supabase
+  let query = supabase
     .from("external_calendars")
     .select("id, provider_account_id, provider_calendar_id, sync_enabled, visibility, color")
     .eq("provider_account_id", input.accountId)
     .eq("provider_calendar_id", input.providerCalendarId)
     .eq("provider_type", "apple_caldav")
     .eq("created_by_profile_id", input.userId)
-    .limit(1)
-    .maybeSingle();
+    .limit(1);
+
+  if (input.calendarId) {
+    query = query.eq("id", input.calendarId);
+  }
+
+  const { data, error } = await query.maybeSingle();
+
+  if (error) throw error;
+  return data;
+}
+
+async function refetchStoredAppleCalendar(
+  supabase: ReturnType<typeof getServiceSupabaseClient>,
+  calendarId: string,
+) {
+  const { data, error } = await supabase
+    .from("external_calendars")
+    .select("*")
+    .eq("id", calendarId)
+    .eq("provider_type", "apple_caldav")
+    .single();
 
   if (error) throw error;
   return data;
@@ -45,6 +65,7 @@ export async function POST(request: Request) {
     const body = (await request.json().catch(() => null)) as {
       action?: "list" | "update_settings" | "remove";
       accountId?: string;
+      calendarId?: string;
       providerCalendarId?: string;
       color?: string | null;
       visibility?: string | null;
@@ -64,10 +85,18 @@ export async function POST(request: Request) {
         accountId,
         providerCalendarId,
         userId: authResult.user.id,
+        calendarId: body.calendarId?.trim() || null,
       });
       if (!calendar?.id) {
         return appleJsonResponse({ error: "Calendrier Apple introuvable dans MSTV." }, { status: 404 });
       }
+
+      console.info("Apple calendar settings action target", {
+        action: body.action,
+        requestedCalendarId: body.calendarId ?? null,
+        resolvedCalendarId: calendar.id,
+        providerCalendarId,
+      });
 
       if (body.action === "remove") {
         const { data, error } = await supabase
@@ -82,12 +111,15 @@ export async function POST(request: Request) {
           .single();
 
         if (error) throw error;
+        const refetchedCalendar = await refetchStoredAppleCalendar(supabase, data.id);
         console.info("Apple calendar local sync disabled", {
           externalCalendarId: data.id,
           providerCalendarId,
-          syncEnabled: data.sync_enabled,
+          updateResponse: data,
+          refetchedSyncEnabled: refetchedCalendar.sync_enabled,
+          refetchedColor: refetchedCalendar.color,
         });
-        return appleJsonResponse({ ok: true, enabled: false, calendarId: data.id });
+        return appleJsonResponse({ ok: true, enabled: false, calendarId: data.id, calendar: refetchedCalendar });
       }
 
       const visibility = body.visibility === "admin_only" || body.visibility === "team" ? body.visibility : "private";
@@ -104,13 +136,15 @@ export async function POST(request: Request) {
         .single();
 
       if (error) throw error;
+      const refetchedCalendar = await refetchStoredAppleCalendar(supabase, data.id);
       console.info("Apple calendar local settings updated", {
         externalCalendarId: data.id,
         providerCalendarId,
-        syncEnabled: data.sync_enabled,
-        color: data.color,
+        updateResponse: data,
+        refetchedSyncEnabled: refetchedCalendar.sync_enabled,
+        refetchedColor: refetchedCalendar.color,
       });
-      return appleJsonResponse({ ok: true, calendarId: data.id, enabled: data.sync_enabled, color: data.color, visibility: data.visibility });
+      return appleJsonResponse({ ok: true, calendarId: data.id, enabled: data.sync_enabled, color: data.color, visibility: data.visibility, calendar: refetchedCalendar });
     }
 
     const { data: accounts, error: accountsError } = await supabase

@@ -37,17 +37,37 @@ function isGoogleCalendarWritable(accessRole?: string) {
 
 async function findStoredGoogleCalendar(
   supabase: ReturnType<typeof getServiceSupabaseClient>,
-  input: { accountId: string; providerCalendarId: string; userId: string },
+  input: { accountId: string; providerCalendarId: string; userId: string; calendarId?: string | null },
 ) {
-  const { data, error } = await supabase
+  let query = supabase
     .from("external_calendars")
     .select("id, provider_account_id, provider_calendar_id, sync_enabled, visibility, color")
     .eq("provider_account_id", input.accountId)
     .eq("provider_calendar_id", input.providerCalendarId)
     .eq("provider_type", "google")
     .eq("created_by_profile_id", input.userId)
-    .limit(1)
-    .maybeSingle();
+    .limit(1);
+
+  if (input.calendarId) {
+    query = query.eq("id", input.calendarId);
+  }
+
+  const { data, error } = await query.maybeSingle();
+
+  if (error) throw error;
+  return data;
+}
+
+async function refetchStoredGoogleCalendar(
+  supabase: ReturnType<typeof getServiceSupabaseClient>,
+  calendarId: string,
+) {
+  const { data, error } = await supabase
+    .from("external_calendars")
+    .select("*")
+    .eq("id", calendarId)
+    .eq("provider_type", "google")
+    .single();
 
   if (error) throw error;
   return data;
@@ -231,6 +251,7 @@ export async function POST(request: Request) {
     const body = (await request.json().catch(() => null)) as {
       action?: "list" | "set_enabled" | "update_settings" | "remove";
       accountId?: string;
+      calendarId?: string;
       providerCalendarId?: string;
       name?: string;
       color?: string | null;
@@ -254,6 +275,14 @@ export async function POST(request: Request) {
       accountId: account.id,
       providerCalendarId,
       userId: authResult.user.id,
+      calendarId: body.calendarId?.trim() || null,
+    });
+
+    console.info("Google calendar settings action target", {
+      action: body.action,
+      requestedCalendarId: body.calendarId ?? null,
+      resolvedCalendarId: existingCalendar?.id ?? null,
+      providerCalendarId,
     });
 
     if (body.action === "remove") {
@@ -273,12 +302,15 @@ export async function POST(request: Request) {
         .single();
 
       if (error) throw error;
+      const refetchedCalendar = await refetchStoredGoogleCalendar(supabase, data.id);
       console.info("Google calendar local sync disabled", {
         externalCalendarId: data.id,
         providerCalendarId,
-        syncEnabled: data.sync_enabled,
+        updateResponse: data,
+        refetchedSyncEnabled: refetchedCalendar.sync_enabled,
+        refetchedColor: refetchedCalendar.color,
       });
-      return googleJsonResponse({ ok: true, enabled: false, calendarId: data.id });
+      return googleJsonResponse({ ok: true, enabled: false, calendarId: data.id, calendar: refetchedCalendar });
     }
 
     if (body.action === "update_settings") {
@@ -300,13 +332,15 @@ export async function POST(request: Request) {
         .single();
 
       if (error) throw error;
+      const refetchedCalendar = await refetchStoredGoogleCalendar(supabase, data.id);
       console.info("Google calendar local settings updated", {
         externalCalendarId: data.id,
         providerCalendarId,
-        syncEnabled: data.sync_enabled,
-        color: data.color,
+        updateResponse: data,
+        refetchedSyncEnabled: refetchedCalendar.sync_enabled,
+        refetchedColor: refetchedCalendar.color,
       });
-      return googleJsonResponse({ ok: true, calendarId: data.id, enabled: data.sync_enabled, color: data.color, visibility: data.visibility });
+      return googleJsonResponse({ ok: true, calendarId: data.id, enabled: data.sync_enabled, color: data.color, visibility: data.visibility, calendar: refetchedCalendar });
     }
 
     if (!body?.enabled) {
