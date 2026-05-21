@@ -2899,7 +2899,7 @@ function mapExternalCalendarEvent(row: ExternalCalendarEventQueryRow): ExternalC
     calendarName: row.external_calendars?.name ?? "Calendrier externe",
     calendarColor: row.external_calendars?.color ?? null,
     calendarVisibility: normalizeExternalCalendarVisibility(row.external_calendars?.visibility),
-    calendarSyncEnabled: Boolean(row.external_calendars?.sync_enabled ?? true),
+    calendarSyncEnabled: Boolean(row.external_calendars?.sync_enabled ?? false),
     calendarProviderType: row.external_calendars?.provider_type ? normalizeExternalCalendarProviderType(row.external_calendars.provider_type) : null,
     calendarCreatedByProfileId: row.external_calendars?.created_by_profile_id ?? null,
   };
@@ -3447,11 +3447,6 @@ export default function Home() {
     }
   }
 
-  const chronologicalEvents = useMemo(() => [...events].sort((a, b) => eventSortValue(a) - eventSortValue(b)), [events]);
-  const selectedEvent = useMemo(() => chronologicalEvents.find((item) => item.id === selectedId) ?? chronologicalEvents[0] ?? null, [chronologicalEvents, selectedId]);
-  const selectedEventIndex = selectedEvent ? chronologicalEvents.findIndex((item) => item.id === selectedEvent.id) : -1;
-  const hasPreviousEvent = selectedEventIndex > 0;
-  const hasNextEvent = selectedEventIndex >= 0 && selectedEventIndex < chronologicalEvents.length - 1;
   const isSelectedDateToday = selectedDateKey === todayKey;
   const yearLabel = String(visibleMonth.getFullYear());
   const permissions = useMemo(() => getPermissionsForRole(profile?.role ?? "team"), [profile?.role]);
@@ -3481,35 +3476,51 @@ export default function Home() {
     }
     return stateByKey;
   }, [externalCalendars]);
+  const isExternalEventLinkVisible = useCallback(
+    (link: ExternalEventLink) => {
+      const exactEnabled = externalCalendarEnabledById.get(link.externalCalendarId);
+      const providerKey = getExternalCalendarProviderKey({
+        providerType: link.calendarProviderType ?? link.providerType,
+        providerAccountId: link.calendarProviderAccountId,
+        providerCalendarId: link.providerCalendarId,
+      });
+      const providerEnabled = providerKey ? externalCalendarProviderStateByKey.get(providerKey)?.enabled : undefined;
+      if (providerEnabled === false) return false;
+      if (exactEnabled === false) return false;
+      if (exactEnabled === true) return true;
+      return providerEnabled ?? link.calendarSyncEnabled;
+    },
+    [externalCalendarEnabledById, externalCalendarProviderStateByKey],
+  );
+  const isExternalCalendarEventVisible = useCallback(
+    (event: ExternalCalendarEvent) =>
+      (externalCalendarEnabledById.get(event.externalCalendarId) ?? event.calendarSyncEnabled) &&
+      canViewExternalCalendar(permissions, profile, {
+        visibility: event.calendarVisibility,
+        createdByProfileId: event.calendarCreatedByProfileId,
+      }),
+    [externalCalendarEnabledById, permissions, profile],
+  );
+  const isProductionEventVisible = useCallback(
+    (event: ProductionEvent) => {
+      if (isLikelyStaleAppleDirectionOrphanEvent(event)) return false;
+      return event.externalLinks.every(isExternalEventLinkVisible);
+    },
+    [isExternalEventLinkVisible],
+  );
   const visibleExternalCalendarEvents = useMemo(
-    () =>
-      externalCalendarEvents.filter((event) =>
-        (externalCalendarEnabledById.get(event.externalCalendarId) ?? event.calendarSyncEnabled) &&
-        canViewExternalCalendar(permissions, profile, {
-          visibility: event.calendarVisibility,
-          createdByProfileId: event.calendarCreatedByProfileId,
-        }),
-      ),
-    [externalCalendarEnabledById, externalCalendarEvents, permissions, profile],
+    () => externalCalendarEvents.filter(isExternalCalendarEventVisible),
+    [externalCalendarEvents, isExternalCalendarEventVisible],
   );
   const visibleProductionEvents = useMemo(
-    () =>
-      events.filter((event) => {
-        if (isLikelyStaleAppleDirectionOrphanEvent(event)) return false;
-        return event.externalLinks.every((link) => {
-        const exactEnabled = externalCalendarEnabledById.get(link.externalCalendarId);
-        const providerKey = getExternalCalendarProviderKey({
-          providerType: link.calendarProviderType ?? link.providerType,
-          providerAccountId: link.calendarProviderAccountId,
-          providerCalendarId: link.providerCalendarId,
-        });
-        const providerEnabled = providerKey ? externalCalendarProviderStateByKey.get(providerKey)?.enabled : undefined;
-        if (providerEnabled === false) return false;
-        return exactEnabled ?? providerEnabled ?? link.calendarSyncEnabled;
-        });
-      }),
-    [events, externalCalendarEnabledById, externalCalendarProviderStateByKey],
+    () => events.filter(isProductionEventVisible),
+    [events, isProductionEventVisible],
   );
+  const chronologicalEvents = useMemo(() => [...visibleProductionEvents].sort((a, b) => eventSortValue(a) - eventSortValue(b)), [visibleProductionEvents]);
+  const selectedEvent = useMemo(() => chronologicalEvents.find((item) => item.id === selectedId) ?? chronologicalEvents[0] ?? null, [chronologicalEvents, selectedId]);
+  const selectedEventIndex = selectedEvent ? chronologicalEvents.findIndex((item) => item.id === selectedEvent.id) : -1;
+  const hasPreviousEvent = selectedEventIndex > 0;
+  const hasNextEvent = selectedEventIndex >= 0 && selectedEventIndex < chronologicalEvents.length - 1;
   const writableGoogleCalendars = useMemo(
     () =>
       externalCalendars.filter(
@@ -9119,7 +9130,7 @@ export default function Home() {
       {yearOverviewOpen && (
         <YearOverviewOverlay
           initialYear={visibleMonth.getFullYear()}
-          events={events}
+          events={visibleProductionEvents}
           visibleMonth={visibleMonth}
           todayKey={todayKey}
           isSelectedDateToday={isSelectedDateToday}
@@ -9203,7 +9214,7 @@ export default function Home() {
           online={online}
           initialFile={quoteImportFile}
           selectedDateKey={selectedDateKey}
-          events={events}
+          events={visibleProductionEvents}
           onClose={() => {
             setQuoteImportOpen(false);
             setQuoteImportFile(null);
