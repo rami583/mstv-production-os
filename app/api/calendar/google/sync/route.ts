@@ -7,9 +7,11 @@ import {
   googleJsonResponse,
   requireAuthenticatedUser,
 } from "../_shared";
+import type { Database } from "@/lib/supabase";
 
 export const runtime = "nodejs";
 
+type ProductionEventRow = Database["public"]["Tables"]["events"]["Row"];
 type SyncFailureKind = "google_auth" | "google_api" | "supabase_write" | "supabase_read" | "generic";
 type SyncFailureStage =
   | "google_auth"
@@ -88,6 +90,24 @@ function parseGoogleSummary(summary?: string) {
   return { clientName: cleanSummary, eventName: "Événement Google" };
 }
 
+function normalizeGoogleTime(time: string | null) {
+  if (!time) return "09:00:00";
+  const [hours = "09", minutes = "00", seconds = "00"] = time.split(":");
+  return `${hours.padStart(2, "0")}:${minutes.padStart(2, "0")}:${seconds.padStart(2, "0")}`;
+}
+
+function getParisDateTime(date: string, time: string | null) {
+  return `${date}T${normalizeGoogleTime(time)}`;
+}
+
+function addOneHour(time: string | null) {
+  if (!time) return "10:00";
+  const [hours = "09", minutes = "00"] = time.split(":");
+  const date = new Date(2000, 0, 1, Number(hours), Number(minutes));
+  date.setHours(date.getHours() + 1);
+  return `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
+}
+
 function mapGoogleEventToMstvEvent(event: GoogleEvent) {
   const parsedSummary = parseGoogleSummary(event.summary);
   const date = parseGoogleDate(event.start?.date ?? event.start?.dateTime) ?? new Date().toISOString().slice(0, 10);
@@ -100,6 +120,58 @@ function mapGoogleEventToMstvEvent(event: GoogleEvent) {
     end_time: event.end?.date ? null : parseGoogleTime(event.end?.dateTime),
     end_of_day_time: null,
   };
+}
+
+function mapMstvEventToGooglePayload(event: ProductionEventRow) {
+  const summary = [event.client_name, event.event_name].filter(Boolean).join(" - ");
+  const hasTimedRange = Boolean(event.start_time || event.end_time);
+
+  if (!hasTimedRange) {
+    const nextDate = new Date(`${event.date}T12:00:00`);
+    nextDate.setDate(nextDate.getDate() + 1);
+    return {
+      summary,
+      description: "Synchronisé depuis MSTV Production OS.",
+      start: { date: event.date },
+      end: { date: nextDate.toISOString().slice(0, 10) },
+    };
+  }
+
+  const startTime = event.start_time ?? event.client_arrival_time ?? "09:00";
+  const endTime = event.end_time ?? addOneHour(startTime);
+  return {
+    summary,
+    description: "Synchronisé depuis MSTV Production OS.",
+    start: {
+      dateTime: getParisDateTime(event.date, startTime),
+      timeZone: "Europe/Paris",
+    },
+    end: {
+      dateTime: getParisDateTime(event.date, endTime),
+      timeZone: "Europe/Paris",
+    },
+  };
+}
+
+function getTimestamp(value?: string | null) {
+  if (!value) return null;
+  const timestamp = Date.parse(value);
+  return Number.isFinite(timestamp) ? timestamp : null;
+}
+
+function isAfter(value?: string | null, base?: string | null) {
+  const valueTimestamp = getTimestamp(value);
+  const baseTimestamp = getTimestamp(base);
+  return valueTimestamp !== null && baseTimestamp !== null && valueTimestamp > baseTimestamp;
+}
+
+function compareTimestamps(left?: string | null, right?: string | null) {
+  const leftTimestamp = getTimestamp(left);
+  const rightTimestamp = getTimestamp(right);
+  if (leftTimestamp === null || rightTimestamp === null) return "unknown";
+  if (leftTimestamp > rightTimestamp) return "left";
+  if (rightTimestamp > leftTimestamp) return "right";
+  return "equal";
 }
 
 function getGoogleSyncWindow() {
@@ -167,6 +239,58 @@ async function fetchGoogleEventById(accessToken: string, providerCalendarId: str
   }
 
   return payload?.status === "cancelled" ? null : payload;
+}
+
+async function updateGoogleEventFromMstv(params: {
+  accessToken: string;
+  providerCalendarId: string;
+  externalEventId: string;
+  event: ProductionEventRow;
+}) {
+  const { accessToken, providerCalendarId, externalEventId, event } = params;
+  const response = await fetch(
+    `${googleCalendarApiBaseUrl}/calendars/${encodeURIComponent(providerCalendarId)}/events/${encodeURIComponent(externalEventId)}`,
+    {
+      method: "PATCH",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${accessToken}`,
+      },
+      body: JSON.stringify(mapMstvEventToGooglePayload(event)),
+    },
+  );
+  const payload = (await response.json().catch(() => null)) as (GoogleEvent & { error?: { message?: string } }) | null;
+
+  if (!response.ok) {
+    throw new GooglePullSyncError("google_api", payload?.error?.message || "Impossible de mettre à jour ce calendrier Google.");
+  }
+  if (!payload?.id) {
+    throw new GooglePullSyncError("google_api", "Google Calendar n’a pas renvoyé l’événement mis à jour.");
+  }
+
+  return payload;
+}
+
+async function deleteGoogleEventFromMstv(params: {
+  accessToken: string;
+  providerCalendarId: string;
+  externalEventId: string;
+}) {
+  const { accessToken, providerCalendarId, externalEventId } = params;
+  const response = await fetch(
+    `${googleCalendarApiBaseUrl}/calendars/${encodeURIComponent(providerCalendarId)}/events/${encodeURIComponent(externalEventId)}`,
+    {
+      method: "DELETE",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+      },
+    },
+  );
+
+  if (!response.ok && response.status !== 404 && response.status !== 410) {
+    const payload = (await response.json().catch(() => null)) as { error?: { message?: string } } | null;
+    throw new GooglePullSyncError("google_api", payload?.error?.message || "Impossible de supprimer cet événement Google.");
+  }
 }
 
 function getSafeSupabaseError(error: unknown): SafeSupabaseError {
@@ -303,6 +427,129 @@ async function markGoogleDeletedEvents(params: {
   return deleted;
 }
 
+async function markLinkedEventConflict(params: {
+  supabase: ReturnType<typeof getServiceSupabaseClient>;
+  linkId: string;
+  providerUpdatedAt: string;
+  googleEvent: GoogleEvent;
+}) {
+  const { supabase, linkId, providerUpdatedAt, googleEvent } = params;
+  const { error } = await supabase
+    .from("external_event_links")
+    .update({
+      sync_status: "conflict",
+      conflict_detected_at: new Date().toISOString(),
+      conflict_reason: "Conflit de synchronisation détecté. Vérifiez l’événement avant de continuer.",
+      last_external_updated_at: providerUpdatedAt,
+      raw_external_event: googleEvent,
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", linkId);
+
+  if (error) throwSupabaseSyncError("supabase_write", "mark_external_event_link_conflict", error);
+}
+
+async function pullGoogleEventIntoMstv(params: {
+  supabase: ReturnType<typeof getServiceSupabaseClient>;
+  linkId: string;
+  localEventId: string;
+  values: ReturnType<typeof mapGoogleEventToMstvEvent>;
+  googleEvent: GoogleEvent;
+  providerUpdatedAt: string;
+}) {
+  const { supabase, linkId, localEventId, values, googleEvent, providerUpdatedAt } = params;
+  const { data: updatedEvent, error: updateError } = await supabase
+    .from("events")
+    .update(values)
+    .eq("id", localEventId)
+    .select()
+    .single();
+
+  if (updateError) throwSupabaseSyncError("supabase_write", "update_mstv_event_from_google", updateError);
+
+  const now = new Date().toISOString();
+  const { error: linkUpdateError } = await supabase
+    .from("external_event_links")
+    .update({
+      sync_status: "synced",
+      local_updated_at: updatedEvent.updated_at,
+      last_synced_at: now,
+      last_external_updated_at: providerUpdatedAt,
+      conflict_detected_at: null,
+      conflict_reason: null,
+      last_sync_error: null,
+      raw_external_event: googleEvent,
+      updated_at: now,
+    })
+    .eq("id", linkId);
+
+  if (linkUpdateError) throwSupabaseSyncError("supabase_write", "update_external_event_link_after_pull", linkUpdateError);
+}
+
+async function pushMstvEventToGoogle(params: {
+  supabase: ReturnType<typeof getServiceSupabaseClient>;
+  accessToken: string;
+  providerCalendarId: string;
+  linkId: string;
+  externalEventId: string;
+  event: ProductionEventRow;
+}) {
+  const { supabase, accessToken, providerCalendarId, linkId, externalEventId, event } = params;
+  const googleEvent = await updateGoogleEventFromMstv({
+    accessToken,
+    providerCalendarId,
+    externalEventId,
+    event,
+  });
+  const now = new Date().toISOString();
+  const providerUpdatedAt = googleEvent.updated ?? now;
+  const { error: linkUpdateError } = await supabase
+    .from("external_event_links")
+    .update({
+      sync_status: "synced",
+      local_updated_at: event.updated_at,
+      last_synced_at: now,
+      last_external_updated_at: providerUpdatedAt,
+      conflict_detected_at: null,
+      conflict_reason: null,
+      last_sync_error: null,
+      raw_external_event: googleEvent,
+      updated_at: now,
+    })
+    .eq("id", linkId);
+
+  if (linkUpdateError) throwSupabaseSyncError("supabase_write", "update_external_event_link_after_push", linkUpdateError);
+}
+
+async function pushMstvDeletionToGoogle(params: {
+  supabase: ReturnType<typeof getServiceSupabaseClient>;
+  accessToken: string;
+  providerCalendarId: string;
+  linkId: string;
+  externalEventId: string;
+}) {
+  const { supabase, accessToken, providerCalendarId, linkId, externalEventId } = params;
+  await deleteGoogleEventFromMstv({
+    accessToken,
+    providerCalendarId,
+    externalEventId,
+  });
+
+  const now = new Date().toISOString();
+  const { error: linkUpdateError } = await supabase
+    .from("external_event_links")
+    .update({
+      sync_status: "synced",
+      deleted_locally_at: now,
+      last_synced_at: now,
+      last_sync_error: null,
+      updated_at: now,
+    })
+    .eq("id", linkId);
+
+  if (linkUpdateError) throwSupabaseSyncError("supabase_write", "mark_external_event_link_deleted_locally", linkUpdateError);
+}
+
 export async function POST(request: Request) {
   try {
     const authResult = await requireAuthenticatedUser(request);
@@ -415,52 +662,86 @@ export async function POST(request: Request) {
       }
 
       const lastSyncedAt = existingLink.last_synced_at ?? existingLink.created_at;
-      const providerChanged = providerUpdatedAt > lastSyncedAt;
-      const localChanged = localEvent.updated_at > lastSyncedAt;
+      const providerChanged = isAfter(providerUpdatedAt, lastSyncedAt);
+      const localChanged = isAfter(localEvent.updated_at, lastSyncedAt);
+
+      if (localEvent.deleted_at) {
+        if (localChanged && (!providerChanged || compareTimestamps(localEvent.updated_at, providerUpdatedAt) === "left")) {
+          await pushMstvDeletionToGoogle({
+            supabase,
+            accessToken,
+            providerCalendarId: calendar.provider_calendar_id,
+            linkId: existingLink.id,
+            externalEventId: existingLink.external_event_id,
+          });
+          deleted += 1;
+        } else if (providerChanged) {
+          await markLinkedEventConflict({
+            supabase,
+            linkId: existingLink.id,
+            providerUpdatedAt,
+            googleEvent,
+          });
+          conflicts += 1;
+        } else {
+          unchanged += 1;
+        }
+        continue;
+      }
 
       if (providerChanged && localChanged) {
-        const { error: conflictError } = await supabase
-          .from("external_event_links")
-          .update({
-            sync_status: "conflict",
-            conflict_detected_at: new Date().toISOString(),
-            conflict_reason: "Conflit de synchronisation détecté. Vérifiez l’événement avant de continuer.",
-            last_external_updated_at: providerUpdatedAt,
-            raw_external_event: googleEvent,
-            updated_at: new Date().toISOString(),
-          })
-          .eq("id", existingLink.id);
-        if (conflictError) throwSupabaseSyncError("supabase_write", "mark_external_event_link_conflict", conflictError);
-        conflicts += 1;
+        const winner = compareTimestamps(providerUpdatedAt, localEvent.updated_at);
+        if (winner === "left") {
+          await pullGoogleEventIntoMstv({
+            supabase,
+            linkId: existingLink.id,
+            localEventId: localEvent.id,
+            values,
+            googleEvent,
+            providerUpdatedAt,
+          });
+          updated += 1;
+        } else if (winner === "right") {
+          await pushMstvEventToGoogle({
+            supabase,
+            accessToken,
+            providerCalendarId: calendar.provider_calendar_id,
+            linkId: existingLink.id,
+            externalEventId: existingLink.external_event_id,
+            event: localEvent,
+          });
+          updated += 1;
+        } else {
+          await markLinkedEventConflict({
+            supabase,
+            linkId: existingLink.id,
+            providerUpdatedAt,
+            googleEvent,
+          });
+          conflicts += 1;
+        }
         continue;
       }
 
       if (providerChanged) {
-        const { data: updatedEvent, error: updateError } = await supabase
-          .from("events")
-          .update(values)
-          .eq("id", localEvent.id)
-          .select()
-          .single();
-        if (updateError) throwSupabaseSyncError("supabase_write", "update_mstv_event_from_google", updateError);
-
-        const now = new Date().toISOString();
-        const linkUpdatePayload = {
-            sync_status: "synced",
-            local_updated_at: updatedEvent.updated_at,
-            last_synced_at: now,
-            last_external_updated_at: providerUpdatedAt,
-            conflict_detected_at: null,
-            conflict_reason: null,
-            last_sync_error: null,
-            raw_external_event: googleEvent,
-            updated_at: now,
-          };
-        const { error: linkUpdateError } = await supabase
-          .from("external_event_links")
-          .update(linkUpdatePayload)
-          .eq("id", existingLink.id);
-        if (linkUpdateError) throwSupabaseSyncError("supabase_write", "update_external_event_link_after_pull", linkUpdateError);
+        await pullGoogleEventIntoMstv({
+          supabase,
+          linkId: existingLink.id,
+          localEventId: localEvent.id,
+          values,
+          googleEvent,
+          providerUpdatedAt,
+        });
+        updated += 1;
+      } else if (localChanged) {
+        await pushMstvEventToGoogle({
+          supabase,
+          accessToken,
+          providerCalendarId: calendar.provider_calendar_id,
+          linkId: existingLink.id,
+          externalEventId: existingLink.external_event_id,
+          event: localEvent,
+        });
         updated += 1;
       } else {
         unchanged += 1;
