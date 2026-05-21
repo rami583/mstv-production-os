@@ -90,6 +90,8 @@ type UserRole = "admin" | "team";
 type ExternalCalendarVisibility = "admin_only" | "team" | "private";
 type ExternalCalendarProviderType = "google" | "microsoft" | "apple_caldav" | "ics_read_only";
 type ExternalCalendarSyncCapability = "read_only" | "bidirectional";
+type ExternalCalendarRole = "business_primary" | "external_context";
+type ProductionEventRole = "production" | "external_context";
 type ExternalCalendarSyncProgress = {
   calendarId: string;
   synced: number;
@@ -287,6 +289,7 @@ type ExternalCalendar = {
   providerCalendarId: string | null;
   syncCapability: ExternalCalendarSyncCapability;
   syncEnabled: boolean;
+  calendarRole: ExternalCalendarRole;
   lastSyncStatus: string | null;
   lastSyncError: string | null;
   lastSyncFinishedAt: string | null;
@@ -335,6 +338,8 @@ type ExternalEventLink = {
   calendarProviderType: ExternalCalendarProviderType;
   calendarSyncCapability: ExternalCalendarSyncCapability;
   calendarSyncEnabled: boolean;
+  calendarRole: ExternalCalendarRole;
+  rawExternalEvent: Record<string, unknown> | null;
 };
 
 type GoogleCalendarAccount = {
@@ -359,6 +364,7 @@ type GoogleProviderCalendar = {
   externalCalendarId: string | null;
   color: string | null;
   visibility: ExternalCalendarVisibility;
+  calendarRole: ExternalCalendarRole;
 };
 
 type AppleProviderCalendar = {
@@ -368,6 +374,7 @@ type AppleProviderCalendar = {
   enabled: boolean;
   externalCalendarId: string | null;
   visibility: ExternalCalendarVisibility;
+  calendarRole: ExternalCalendarRole;
 };
 
 type ProductionEvent = {
@@ -388,6 +395,7 @@ type ProductionEvent = {
   lastQuoteImportedAt: string | null;
   importedFrom: string | null;
   externalImportId: string | null;
+  eventRole: ProductionEventRole;
   createdAt: string;
   updatedAt: string;
   options: EventOption[];
@@ -2635,6 +2643,14 @@ function normalizeExternalCalendarSyncCapability(syncCapability: string | null |
   return syncCapability === "bidirectional" ? "bidirectional" : "read_only";
 }
 
+function normalizeExternalCalendarRole(role: string | null | undefined): ExternalCalendarRole {
+  return role === "business_primary" ? "business_primary" : "external_context";
+}
+
+function normalizeProductionEventRole(role: string | null | undefined): ProductionEventRole {
+  return role === "external_context" ? "external_context" : "production";
+}
+
 function normalizeExternalCalendarIcsUrl(value: string) {
   const trimmed = value.trim();
   if (/^webcal:\/\//i.test(trimmed)) {
@@ -2852,6 +2868,7 @@ function mapEvent(row: EventQueryRow): ProductionEvent {
     lastQuoteImportedAt: row.last_quote_imported_at ?? null,
     importedFrom: row.imported_from ?? null,
     externalImportId: row.external_import_id ?? null,
+    eventRole: normalizeProductionEventRole(row.event_role),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     options,
@@ -2883,6 +2900,8 @@ function mapExternalEventLink(row: ExternalEventLinkQueryRow): ExternalEventLink
     calendarProviderType: normalizeExternalCalendarProviderType(calendar?.provider_type ?? row.provider_type),
     calendarSyncCapability: normalizeExternalCalendarSyncCapability(calendar?.sync_capability ?? "read_only"),
     calendarSyncEnabled: Boolean(calendar?.sync_enabled ?? false),
+    calendarRole: normalizeExternalCalendarRole(calendar?.calendar_role),
+    rawExternalEvent: row.raw_external_event ?? null,
   };
 }
 
@@ -2937,6 +2956,46 @@ function getProductionEventDisplay(event: ProductionEvent) {
 function getProductionEventDisplayLine(event: ProductionEvent) {
   const display = getProductionEventDisplay(event);
   return [display.title, display.subtitle].filter(Boolean).join(" - ");
+}
+
+function getEffectiveProductionEventRole(event: ProductionEvent): ProductionEventRole {
+  if (event.eventRole === "production") return "production";
+  if (event.externalLinks.some((link) => link.calendarRole === "business_primary")) return "production";
+  if (event.eventRole === "external_context") return "external_context";
+  if (isGoogleOrAppleImportedEvent(event)) return "external_context";
+  return "production";
+}
+
+function isExternalContextProductionEvent(event: ProductionEvent) {
+  return getEffectiveProductionEventRole(event) === "external_context";
+}
+
+function getStringFromUnknown(value: unknown) {
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function getExternalContextDetails(event: ProductionEvent) {
+  const raw = event.externalLinks.find((link) => link.rawExternalEvent)?.rawExternalEvent ?? null;
+  if (!raw) {
+    return { description: null as string | null, location: null as string | null, sourceName: getPrimaryExternalEventLink(event)?.calendarName ?? null };
+  }
+
+  const description =
+    getStringFromUnknown(raw.description) ??
+    getStringFromUnknown(raw.bodyPreview) ??
+    getStringFromUnknown(raw.notes) ??
+    getStringFromUnknown(raw.rawDescription);
+  const locationValue = raw.location;
+  const location =
+    getStringFromUnknown(locationValue) ??
+    (locationValue && typeof locationValue === "object" ? getStringFromUnknown((locationValue as Record<string, unknown>).displayName) : null);
+  const sourceName = getPrimaryExternalEventLink(event)?.calendarName ?? null;
+  return { description, location, sourceName };
+}
+
+function getFirstUrl(value: string | null) {
+  if (!value) return null;
+  return value.match(/https?:\/\/[^\s<>"']+/)?.[0] ?? null;
 }
 
 function getPrimaryExternalEventLink(event: ProductionEvent) {
@@ -2994,6 +3053,7 @@ function mapExternalCalendar(row: ExternalCalendarRow): ExternalCalendar {
     providerCalendarId: row.provider_calendar_id ?? null,
     syncCapability: normalizeExternalCalendarSyncCapability(row.sync_capability),
     syncEnabled: Boolean(row.sync_enabled),
+    calendarRole: normalizeExternalCalendarRole(row.calendar_role),
     lastSyncStatus: row.last_sync_status ?? null,
     lastSyncError: row.last_sync_error ?? null,
     lastSyncFinishedAt: row.last_sync_finished_at ?? null,
@@ -3475,6 +3535,7 @@ export default function Home() {
   const [activityLoading, setActivityLoading] = useState(false);
   const [activityError, setActivityError] = useState<string | null>(null);
   const [restoringActivityId, setRestoringActivityId] = useState<string | null>(null);
+  const [promotingEventId, setPromotingEventId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [isTimelineTimeEditing, setIsTimelineTimeEditing] = useState(false);
@@ -3640,6 +3701,7 @@ export default function Home() {
   );
   const chronologicalEvents = useMemo(() => [...visibleProductionEvents].sort((a, b) => eventSortValue(a) - eventSortValue(b)), [visibleProductionEvents]);
   const selectedEvent = useMemo(() => chronologicalEvents.find((item) => item.id === selectedId) ?? chronologicalEvents[0] ?? null, [chronologicalEvents, selectedId]);
+  const selectedEventIsExternalContext = selectedEvent ? isExternalContextProductionEvent(selectedEvent) : false;
   const selectedEventIndex = selectedEvent ? chronologicalEvents.findIndex((item) => item.id === selectedEvent.id) : -1;
   const hasPreviousEvent = selectedEventIndex > 0;
   const hasNextEvent = selectedEventIndex >= 0 && selectedEventIndex < chronologicalEvents.length - 1;
@@ -4839,6 +4901,7 @@ export default function Home() {
         color: input.color,
         visibility,
         provider_type: "ics_read_only",
+        calendar_role: "external_context",
         sync_capability: "read_only",
         sync_enabled: true,
         created_by_profile_id: profile.id,
@@ -4902,6 +4965,7 @@ export default function Home() {
         color: input.color,
         visibility,
         provider_type: calendar.providerType,
+        calendar_role: calendar.calendarRole ?? "external_context",
         sync_capability: calendar.syncCapability,
         sync_enabled: input.syncEnabled ?? calendar.syncEnabled,
       })
@@ -6014,6 +6078,10 @@ export default function Home() {
 
     const normalizedInput = normalizeEventTimeInput(input);
     const eventId = createLocalId();
+    const selectedExternalCalendar = normalizedInput.syncExternalCalendarId
+      ? externalCalendars.find((calendar) => calendar.id === normalizedInput.syncExternalCalendarId) ?? null
+      : null;
+    const newEventRole: ProductionEventRole = selectedExternalCalendar?.calendarRole === "external_context" ? "external_context" : "production";
     const eventInsertPayload: Database["public"]["Tables"]["events"]["Insert"] = {
       id: eventId,
       client_name: normalizedInput.clientName,
@@ -6023,6 +6091,7 @@ export default function Home() {
       start_time: normalizedInput.startTime || null,
       end_time: normalizedInput.endTime || null,
       end_of_day_time: normalizedInput.endOfDayTime || null,
+      event_role: newEventRole,
       quote_reference: normalizedInput.quoteReference?.trim() || null,
       quote_version: normalizedInput.quoteVersion?.trim() || null,
       source_quote_text: normalizedInput.sourceQuoteText?.trim() || null,
@@ -6086,6 +6155,7 @@ export default function Home() {
         lastQuoteImportedAt: eventInsertPayload.last_quote_imported_at ?? null,
         importedFrom: null,
         externalImportId: null,
+        eventRole: newEventRole,
         createdAt,
         updatedAt: createdAt,
         options: offlineOptions,
@@ -6478,6 +6548,7 @@ export default function Home() {
       lastQuoteImportedAt: data.last_quote_imported_at ?? null,
       importedFrom: data.imported_from ?? null,
       externalImportId: data.external_import_id ?? null,
+      eventRole: normalizeProductionEventRole(data.event_role),
       updatedAt: data.updated_at,
     };
 
@@ -7208,6 +7279,74 @@ export default function Home() {
           await reloadData(event.id, { silent: true });
         }
       }
+    }
+  }
+
+  async function promoteEventToProduction(event: ProductionEvent) {
+    assertCanManageEvents();
+    if (!supabase) {
+      throw new Error("Configuration Supabase manquante.");
+    }
+
+    setPromotingEventId(event.id);
+    try {
+      const updatedAt = new Date().toISOString();
+      const updatePayload: Database["public"]["Tables"]["events"]["Update"] = { event_role: "production" };
+
+      if (!online) {
+        setEvents((current) => current.map((item) => (item.id === event.id ? { ...item, eventRole: "production", updatedAt } : item)));
+        await enqueuePendingSyncAction({
+          actionType: "event_update",
+          entityType: "event",
+          entityId: event.id,
+          payload: {
+            values: updatePayload,
+            activity: {
+              eventId: event.id,
+              actionType: "event_role_changed",
+              entityType: "event",
+              entityId: event.id,
+              description: "Événement transformé en production MSTV",
+              previousValue: { eventRole: event.eventRole },
+              newValue: { eventRole: "production" },
+            },
+          },
+        });
+        return;
+      }
+
+      const { data, error: updateError } = await supabase
+        .from("events")
+        .update(updatePayload)
+        .eq("id", event.id)
+        .select()
+        .single();
+
+      if (updateError) throw updateError;
+
+      setEvents((current) =>
+        current.map((item) =>
+          item.id === event.id
+            ? {
+                ...item,
+                eventRole: normalizeProductionEventRole(data.event_role),
+                updatedAt: data.updated_at,
+              }
+            : item,
+        ),
+      );
+
+      await logEventActivity({
+        eventId: event.id,
+        actionType: "event_role_changed",
+        entityType: "event",
+        entityId: event.id,
+        description: "Événement transformé en production MSTV",
+        previousValue: { eventRole: event.eventRole },
+        newValue: { eventRole: "production" },
+      });
+    } finally {
+      setPromotingEventId(null);
     }
   }
 
@@ -9220,7 +9359,7 @@ export default function Home() {
           }}
           onImportNativeMstvCalendar={openNativeMstvIcsImport}
           onSearch={() => setSearchOpen(true)}
-          canOpenHistory={headerPermissions.canManageEvents && screen === "detail" && Boolean(selectedEvent)}
+          canOpenHistory={headerPermissions.canManageEvents && screen === "detail" && Boolean(selectedEvent) && !selectedEventIsExternalContext}
           onOpenHistory={openHistory}
           canOpenTrash={headerCanOpenTrash}
           onOpenTrash={() => {
@@ -9238,7 +9377,7 @@ export default function Home() {
           canCreateEvent={headerPermissions.canManageEvents}
           canImportQuote={headerPermissions.canManageEvents}
           canImportNativeMstvCalendar={headerPermissions.canManageEvents}
-          canDuplicateEvent={headerPermissions.canManageEvents && screen === "detail" && Boolean(selectedEvent)}
+          canDuplicateEvent={headerPermissions.canManageEvents && screen === "detail" && Boolean(selectedEvent) && !selectedEventIsExternalContext}
           onDuplicateEvent={() => {
             if (selectedEvent && !selectedEvent.deletedAt) {
               setDuplicateDatePickerEvent(selectedEvent);
@@ -9289,46 +9428,65 @@ export default function Home() {
           )}
 
           {!loading && screen === "detail" && selectedEvent && (
-            <ProductionDetail
-              event={selectedEvent}
-              previousEvent={chronologicalEvents[selectedEventIndex - 1] ?? null}
-              nextEvent={chronologicalEvents[selectedEventIndex + 1] ?? null}
-              hasPrevious={hasPreviousEvent}
-              hasNext={hasNextEvent}
-              goPrevious={() => navigateEvent(-1)}
-              goNext={() => navigateEvent(1)}
-              onEditEvent={() => {
-                if (!permissions.canManageEvents) return;
-                setEditingEvent(selectedEvent);
-                setEditingReturnScreen("detail");
-                setCreateModalOpen(true);
-              }}
-              onUpdateEventTime={updateEventTime}
-              onToggleOption={toggleOption}
-              onChangeOptionCompletedBy={updateOptionCompletedBy}
-              onCreateOption={createEventOption}
-              onDeleteOption={deleteEventOption}
-              onRenameOption={renameEventOption}
-              onCreateOptionItem={createEventOptionItem}
-              onUpdateOptionItem={updateEventOptionItem}
-              onDeleteOptionItem={deleteEventOptionItem}
-              onCreateLink={createEventLink}
-              onDeleteLink={deleteEventLink}
-              onRenameLink={renameEventLink}
-              onSaveLinkEntries={syncEventLinkEntries}
-              onCreateDocumentGroup={createEventDocumentGroup}
-              onDeleteDocumentGroup={deleteEventDocumentGroup}
-              onRenameDocumentGroup={renameEventDocumentGroup}
-              onUploadDocument={uploadEventDocument}
-              onDeleteDocumentFile={deleteEventDocument}
-              onOpenDocument={openEventDocument}
-              onDownloadDocument={downloadEventDocument}
-              onTimelineTimeEditStart={startTimelineTimeEditing}
-              onTimelineTimeEditEnd={endTimelineTimeEditing}
-              onEventDateSwipeTransitionChange={setEventDateSwipeTransition}
-              permissions={permissions}
-              profile={profile}
-            />
+            isExternalContextProductionEvent(selectedEvent) ? (
+              <ExternalContextEventDetail
+                event={selectedEvent}
+                hasPrevious={hasPreviousEvent}
+                hasNext={hasNextEvent}
+                goPrevious={() => navigateEvent(-1)}
+                goNext={() => navigateEvent(1)}
+                onEditEvent={() => {
+                  if (!permissions.canManageEvents) return;
+                  setEditingEvent(selectedEvent);
+                  setEditingReturnScreen("detail");
+                  setCreateModalOpen(true);
+                }}
+                onPromote={() => promoteEventToProduction(selectedEvent)}
+                promoting={promotingEventId === selectedEvent.id}
+                permissions={permissions}
+              />
+            ) : (
+              <ProductionDetail
+                event={selectedEvent}
+                previousEvent={chronologicalEvents[selectedEventIndex - 1] ?? null}
+                nextEvent={chronologicalEvents[selectedEventIndex + 1] ?? null}
+                hasPrevious={hasPreviousEvent}
+                hasNext={hasNextEvent}
+                goPrevious={() => navigateEvent(-1)}
+                goNext={() => navigateEvent(1)}
+                onEditEvent={() => {
+                  if (!permissions.canManageEvents) return;
+                  setEditingEvent(selectedEvent);
+                  setEditingReturnScreen("detail");
+                  setCreateModalOpen(true);
+                }}
+                onUpdateEventTime={updateEventTime}
+                onToggleOption={toggleOption}
+                onChangeOptionCompletedBy={updateOptionCompletedBy}
+                onCreateOption={createEventOption}
+                onDeleteOption={deleteEventOption}
+                onRenameOption={renameEventOption}
+                onCreateOptionItem={createEventOptionItem}
+                onUpdateOptionItem={updateEventOptionItem}
+                onDeleteOptionItem={deleteEventOptionItem}
+                onCreateLink={createEventLink}
+                onDeleteLink={deleteEventLink}
+                onRenameLink={renameEventLink}
+                onSaveLinkEntries={syncEventLinkEntries}
+                onCreateDocumentGroup={createEventDocumentGroup}
+                onDeleteDocumentGroup={deleteEventDocumentGroup}
+                onRenameDocumentGroup={renameEventDocumentGroup}
+                onUploadDocument={uploadEventDocument}
+                onDeleteDocumentFile={deleteEventDocument}
+                onOpenDocument={openEventDocument}
+                onDownloadDocument={downloadEventDocument}
+                onTimelineTimeEditStart={startTimelineTimeEditing}
+                onTimelineTimeEditEnd={endTimelineTimeEditing}
+                onEventDateSwipeTransitionChange={setEventDateSwipeTransition}
+                permissions={permissions}
+                profile={profile}
+              />
+            )
           )}
 
           {!loading && screen === "detail" && !selectedEvent && (
@@ -11451,6 +11609,115 @@ function SwipeableCalendarEventRow({
   );
 }
 
+function ExternalContextEventDetail({
+  event,
+  hasPrevious,
+  hasNext,
+  goPrevious,
+  goNext,
+  onEditEvent,
+  onPromote,
+  promoting,
+  permissions,
+}: {
+  event: ProductionEvent;
+  hasPrevious: boolean;
+  hasNext: boolean;
+  goPrevious: () => void;
+  goNext: () => void;
+  onEditEvent: () => void;
+  onPromote: () => Promise<void>;
+  promoting: boolean;
+  permissions: AppPermissions;
+}) {
+  const display = getProductionEventDisplay(event);
+  const details = getExternalContextDetails(event);
+  const timeRange = formatTimeRange(event.startTime, event.endTime) || "Journée";
+  const meetingUrl = getFirstUrl(details.description);
+  const externalLink = getPrimaryExternalEventLink(event);
+  const externalTone = getExternalCalendarTone(externalLink?.calendarColor ?? null);
+
+  return (
+    <section className="flex min-h-0 w-full flex-1 flex-col gap-5 overflow-hidden">
+      <Card className="premium-surface shrink-0 p-5 sm:p-8">
+        <div className="flex items-start justify-between gap-4">
+          <div className="min-w-0 flex-1">
+            <div className="mb-3 flex flex-wrap items-center gap-2">
+              <span className={cn("inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-semibold ring-1 ring-stone-200", externalTone.bg, externalTone.meta)} style={externalTone.bgStyle}>
+                <ExternalCalendarColorDot color={externalLink?.calendarColor ?? null} className="h-2.5 w-2.5" />
+                {details.sourceName ?? "Calendrier externe"}
+              </span>
+              <span className="rounded-full bg-stone-100 px-2.5 py-1 text-xs font-semibold text-stone-500 ring-1 ring-stone-200">
+                Agenda externe
+              </span>
+            </div>
+            <h1 className="text-3xl font-semibold leading-tight text-stone-950 sm:text-5xl">{display.title}</h1>
+            {display.subtitle && <p className="mt-2 text-base font-medium text-stone-500">{display.subtitle}</p>}
+          </div>
+          <div className="hidden items-center gap-2 sm:flex">
+            {permissions.canManageEvents && (
+              <button type="button" onClick={onEditEvent} className="rounded-full border border-stone-200 bg-white px-3 py-2 text-sm font-semibold text-stone-600 transition hover:bg-stone-50">
+                Modifier
+              </button>
+            )}
+            <button onClick={goPrevious} disabled={!hasPrevious} className={calendarArrowClassName} aria-label="Événement précédent">
+              ←
+            </button>
+            <button onClick={goNext} disabled={!hasNext} className={calendarArrowClassName} aria-label="Événement suivant">
+              →
+            </button>
+          </div>
+        </div>
+      </Card>
+
+      <div className="no-scrollbar min-h-0 flex-1 overflow-y-auto overscroll-contain pb-6">
+        <Card className="premium-surface space-y-4 p-5 sm:p-6">
+          <div className="grid gap-3 sm:grid-cols-2">
+            <div className="rounded-2xl bg-stone-50 px-4 py-3">
+              <p className="text-xs font-semibold uppercase text-stone-400">Date</p>
+              <p className="mt-1 text-base font-semibold text-stone-900">{formatFullDate(event.date)}</p>
+            </div>
+            <div className="rounded-2xl bg-stone-50 px-4 py-3">
+              <p className="text-xs font-semibold uppercase text-stone-400">Horaire</p>
+              <p className="mt-1 text-base font-semibold text-stone-900">{timeRange}</p>
+            </div>
+          </div>
+
+          {details.location && (
+            <div className="rounded-2xl border border-stone-200 bg-white px-4 py-3">
+              <p className="text-xs font-semibold uppercase text-stone-400">Lieu</p>
+              <p className="mt-1 whitespace-pre-wrap break-words text-base font-medium text-stone-700">{details.location}</p>
+            </div>
+          )}
+
+          {details.description && (
+            <div className="rounded-2xl border border-stone-200 bg-white px-4 py-3">
+              <p className="text-xs font-semibold uppercase text-stone-400">Description</p>
+              <p className="mt-1 max-h-64 overflow-y-auto whitespace-pre-wrap break-words text-base font-medium text-stone-700">{details.description}</p>
+              {meetingUrl && (
+                <a href={meetingUrl} target="_blank" rel="noreferrer" className="mt-3 inline-flex rounded-full bg-stone-950 px-3 py-1.5 text-sm font-semibold text-white">
+                  Ouvrir le lien
+                </a>
+              )}
+            </div>
+          )}
+
+          {permissions.canManageEvents && (
+            <button
+              type="button"
+              onClick={() => void onPromote()}
+              disabled={promoting}
+              className="w-full rounded-2xl bg-[#bb2720] px-4 py-3 text-base font-semibold text-white transition hover:bg-[#a9231d] disabled:bg-stone-300"
+            >
+              {promoting ? "Transformation..." : "Transformer en production MSTV"}
+            </button>
+          )}
+        </Card>
+      </div>
+    </section>
+  );
+}
+
 function ProductionDetail({
   event,
   previousEvent,
@@ -11542,7 +11809,7 @@ function ProductionDetail({
   const [eventSwipeIncomingEvent, setEventSwipeIncomingEvent] = useState<ProductionEvent | null>(null);
   const [isEventSwipeDragging, setIsEventSwipeDragging] = useState(false);
   const [eventSwipeAnimating, setEventSwipeAnimating] = useState(false);
-  const googleLinks = getEventGoogleLinks(event);
+  const writableExternalLinks = getEventWritableExternalLinks(event);
   const eventDisplay = getProductionEventDisplay(event);
 
   function publishEventDateSwipeTransition({
@@ -12031,9 +12298,9 @@ function ProductionDetail({
                 Modifier
               </button>
             )}
-            {googleLinks.length > 0 && (
+            {writableExternalLinks.length > 0 && (
               <div className="mt-3 flex flex-wrap items-center gap-2">
-                {googleLinks.map((link) => (
+                {writableExternalLinks.map((link) => (
                   <span key={link.id} className="inline-flex max-w-full items-center gap-1.5 rounded-full bg-white px-2.5 py-1 text-xs font-semibold text-stone-600 ring-1 ring-stone-200">
                     <ExternalCalendarColorDot color={link.calendarColor} className="h-2.5 w-2.5" />
                     <span className="truncate">{link.calendarName}</span>

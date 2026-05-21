@@ -26,6 +26,7 @@ export type Database = {
           last_quote_imported_at: string | null;
           imported_from: string | null;
           external_import_id: string | null;
+          event_role: "production" | "external_context";
           created_at: string;
           updated_at: string;
         };
@@ -47,6 +48,7 @@ export type Database = {
           last_quote_imported_at?: string | null;
           imported_from?: string | null;
           external_import_id?: string | null;
+          event_role?: "production" | "external_context";
           created_at?: string;
           updated_at?: string;
         };
@@ -323,6 +325,7 @@ export type Database = {
           provider_type: string;
           provider_account_id: string | null;
           provider_calendar_id: string | null;
+          calendar_role: "business_primary" | "external_context";
           sync_capability: string;
           sync_enabled: boolean;
           last_sync_started_at: string | null;
@@ -343,6 +346,7 @@ export type Database = {
           provider_type?: string;
           provider_account_id?: string | null;
           provider_calendar_id?: string | null;
+          calendar_role?: "business_primary" | "external_context";
           sync_capability?: string;
           sync_enabled?: boolean;
           last_sync_started_at?: string | null;

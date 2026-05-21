@@ -473,6 +473,7 @@ export async function materializeAppleCalendars(
       provider_type: "apple_caldav",
       provider_account_id: input.account.id,
       provider_calendar_id: calendar.providerCalendarId,
+      calendar_role: calendar.name === "Mon Studio TV" ? "business_primary" : "external_context",
       sync_capability: "bidirectional",
       sync_enabled: true,
       last_sync_status: "idle",

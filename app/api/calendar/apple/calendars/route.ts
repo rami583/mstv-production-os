@@ -28,7 +28,7 @@ async function findStoredAppleCalendar(
   if (input.calendarId) {
     const { data, error } = await supabase
       .from("external_calendars")
-      .select("id, provider_account_id, provider_calendar_id, sync_enabled, visibility, color")
+      .select("id, provider_account_id, provider_calendar_id, sync_enabled, visibility, color, calendar_role")
       .eq("id", input.calendarId)
       .eq("provider_account_id", input.accountId)
       .eq("provider_type", "apple_caldav")
@@ -41,7 +41,7 @@ async function findStoredAppleCalendar(
 
   const { data: candidates, error: candidatesError } = await supabase
     .from("external_calendars")
-    .select("id, provider_account_id, provider_calendar_id, sync_enabled, visibility, color")
+    .select("id, provider_account_id, provider_calendar_id, sync_enabled, visibility, color, calendar_role")
     .eq("provider_account_id", input.accountId)
     .eq("provider_type", "apple_caldav")
     .eq("created_by_profile_id", input.userId);
@@ -243,7 +243,7 @@ export async function POST(request: Request) {
 
     const { data: storedCalendars, error: storedCalendarsError } = await supabase
       .from("external_calendars")
-      .select("id, provider_account_id, provider_calendar_id, sync_enabled, visibility, color")
+      .select("id, provider_account_id, provider_calendar_id, sync_enabled, visibility, color, calendar_role")
       .eq("provider_type", "apple_caldav")
       .eq("created_by_profile_id", authResult.user.id);
 
@@ -274,7 +274,7 @@ export async function POST(request: Request) {
 
         const { data: refreshedStoredCalendars, error: refreshedStoredCalendarsError } = await supabase
           .from("external_calendars")
-          .select("id, provider_account_id, provider_calendar_id, sync_enabled, visibility, color")
+          .select("id, provider_account_id, provider_calendar_id, sync_enabled, visibility, color, calendar_role")
           .eq("provider_account_id", account.id)
           .eq("provider_type", "apple_caldav")
           .eq("created_by_profile_id", authResult.user.id);
@@ -295,6 +295,7 @@ export async function POST(request: Request) {
             enabled: Boolean(stored?.sync_enabled ?? true),
             externalCalendarId: stored?.id ?? null,
             visibility: stored?.visibility ?? "private",
+            calendarRole: stored?.calendar_role ?? (calendar.name === "Mon Studio TV" ? "business_primary" : "external_context"),
           };
         });
       } catch (calendarError) {

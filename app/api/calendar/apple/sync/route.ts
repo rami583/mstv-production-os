@@ -448,6 +448,7 @@ export async function POST(request: Request) {
             ...values,
             imported_from: "apple_caldav",
             external_import_id: appleEvent.externalEventId,
+            event_role: calendar.calendar_role === "business_primary" ? "production" : "external_context",
           })
           .select()
           .single();

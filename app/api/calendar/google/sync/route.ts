@@ -674,6 +674,7 @@ export async function POST(request: Request) {
             ...values,
             imported_from: "google_calendar",
             external_import_id: googleEvent.id,
+            event_role: calendar.calendar_role === "business_primary" ? "production" : "external_context",
           })
           .select()
           .single();

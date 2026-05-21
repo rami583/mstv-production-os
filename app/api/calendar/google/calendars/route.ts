@@ -42,7 +42,7 @@ async function findStoredGoogleCalendar(
   if (input.calendarId) {
     const { data, error } = await supabase
       .from("external_calendars")
-      .select("id, provider_account_id, provider_calendar_id, sync_enabled, visibility, color")
+      .select("id, provider_account_id, provider_calendar_id, sync_enabled, visibility, color, calendar_role")
       .eq("id", input.calendarId)
       .eq("provider_account_id", input.accountId)
       .eq("provider_type", "google")
@@ -55,7 +55,7 @@ async function findStoredGoogleCalendar(
 
   let query = supabase
     .from("external_calendars")
-    .select("id, provider_account_id, provider_calendar_id, sync_enabled, visibility, color")
+    .select("id, provider_account_id, provider_calendar_id, sync_enabled, visibility, color, calendar_role")
     .eq("provider_account_id", input.accountId)
     .eq("provider_calendar_id", input.providerCalendarId)
     .eq("provider_type", "google")
@@ -130,6 +130,7 @@ async function materializeWritableGoogleCalendar(
       provider_type: "google",
       provider_account_id: input.account.id,
       provider_calendar_id: input.providerCalendarId,
+      calendar_role: "external_context",
       sync_capability: "bidirectional",
       sync_enabled: true,
       last_sync_status: "idle",
@@ -138,7 +139,7 @@ async function materializeWritableGoogleCalendar(
       created_by_name: input.account.display_name ?? input.account.provider_account_email ?? input.account.provider_email,
       created_at: now,
     })
-    .select("id, provider_account_id, provider_calendar_id, sync_enabled, visibility, color")
+    .select("id, provider_account_id, provider_calendar_id, sync_enabled, visibility, color, calendar_role")
     .single();
 
   if (error) throw error;
@@ -173,7 +174,7 @@ async function listGoogleCalendars(request: Request) {
 
     const { data: enabledCalendars, error: calendarsError } = await supabase
       .from("external_calendars")
-      .select("id, provider_account_id, provider_calendar_id, sync_enabled, visibility, color")
+      .select("id, provider_account_id, provider_calendar_id, sync_enabled, visibility, color, calendar_role")
       .eq("provider_type", "google")
       .eq("created_by_profile_id", authResult.user.id);
 
@@ -195,6 +196,7 @@ async function listGoogleCalendars(request: Request) {
       externalCalendarId: string | null;
       color: string | null;
       visibility: string | null;
+      calendarRole: string | null;
     }>> = {};
 
     for (const account of accounts ?? []) {
@@ -238,6 +240,7 @@ async function listGoogleCalendars(request: Request) {
             externalCalendarId: enabledCalendar?.id ?? null,
             color: enabledCalendar?.color ?? calendar.backgroundColor ?? null,
             visibility: enabledCalendar?.visibility ?? "private",
+            calendarRole: enabledCalendar?.calendar_role ?? "external_context",
           });
         }
         calendarsByAccountId[account.id] = safeCalendars;
@@ -421,6 +424,7 @@ export async function POST(request: Request) {
           provider_type: "google",
           provider_account_id: account.id,
           provider_calendar_id: providerCalendarId,
+          calendar_role: "external_context",
           sync_capability: "bidirectional",
           sync_enabled: true,
           last_sync_status: "idle",
