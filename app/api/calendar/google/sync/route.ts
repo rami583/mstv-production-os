@@ -101,44 +101,6 @@ function mapGoogleEventToMstvEvent(event: GoogleEvent) {
   };
 }
 
-function getGoogleEventDiagnostic(event: GoogleEvent) {
-  return {
-    id: event.id,
-    summary: event.summary ?? null,
-    start: event.start ?? null,
-    end: event.end ?? null,
-    updated: event.updated ?? null,
-  };
-}
-
-function getMstvPayloadDiagnostics(values: ReturnType<typeof mapGoogleEventToMstvEvent>) {
-  return {
-    payload: values,
-    requiredFields: {
-      client_name: {
-        present: Boolean(values.client_name),
-        value: values.client_name,
-      },
-      event_name: {
-        present: Boolean(values.event_name),
-        value: values.event_name,
-      },
-      date: {
-        present: Boolean(values.date),
-        value: values.date,
-        looksLikeDate: /^\d{4}-\d{2}-\d{2}$/.test(values.date),
-      },
-    },
-    timeFields: {
-      client_arrival_time: values.client_arrival_time,
-      start_time: values.start_time,
-      end_time: values.end_time,
-      end_of_day_time: values.end_of_day_time,
-    },
-    nulls: Object.fromEntries(Object.entries(values).map(([key, value]) => [key, value === null])),
-  };
-}
-
 async function fetchGoogleEvents(accessToken: string, providerCalendarId: string) {
   const events: GoogleEvent[] = [];
   let pageToken: string | undefined;
@@ -164,12 +126,6 @@ async function fetchGoogleEvents(accessToken: string, providerCalendarId: string
       },
     });
     const payload = (await response.json().catch(() => null)) as { items?: GoogleEvent[]; nextPageToken?: string; error?: { message?: string } } | null;
-    console.info("Google pull sync API page response", {
-      status: response.status,
-      ok: response.ok,
-      itemCount: payload?.items?.length ?? 0,
-      hasNextPage: Boolean(payload?.nextPageToken),
-    });
 
     if (!response.ok) {
       throw new GooglePullSyncError("google_api", payload?.error?.message || "Impossible de lire ce calendrier Google.");
@@ -179,12 +135,6 @@ async function fetchGoogleEvents(accessToken: string, providerCalendarId: string
     pageToken = payload?.nextPageToken;
   } while (pageToken);
 
-  console.info("Google pull sync events fetched", {
-    providerCalendarIdPresent: Boolean(providerCalendarId),
-    eventCount: events.length,
-    timeMin: timeMin.toISOString(),
-    timeMax: timeMax.toISOString(),
-  });
   return events;
 }
 
@@ -255,9 +205,6 @@ export async function POST(request: Request) {
 
     const body = (await request.json().catch(() => null)) as { externalCalendarId?: string } | null;
     const externalCalendarId = body?.externalCalendarId?.trim();
-    console.info("Google pull sync route reached", {
-      externalCalendarIdPresent: Boolean(externalCalendarId),
-    });
     if (!externalCalendarId) {
       return googleJsonResponse({ error: "Calendrier Google manquant." }, { status: 400 });
     }
@@ -276,13 +223,6 @@ export async function POST(request: Request) {
     if (!calendar?.provider_account_id || !calendar.provider_calendar_id) {
       return googleJsonResponse({ error: "Calendrier Google introuvable." }, { status: 404 });
     }
-    console.info("Google pull sync calendar loaded", {
-      externalCalendarId: calendar.id,
-      providerType: calendar.provider_type,
-      syncCapability: calendar.sync_capability,
-      syncEnabled: calendar.sync_enabled,
-      providerCalendarIdPresent: Boolean(calendar.provider_calendar_id),
-    });
 
     const { error: startSyncError } = await supabase
       .from("external_calendars")
@@ -297,10 +237,6 @@ export async function POST(request: Request) {
     let accessToken: string;
     try {
       const account = await getOwnedGoogleAccount(supabase, calendar.provider_account_id, authResult.user.id);
-      console.info("Google pull sync account loaded", {
-        accountId: account.id,
-        encryptedTokenFound: Boolean(account.refresh_token_encrypted),
-      });
       accessToken = await getFreshGoogleAccessToken(supabase, account);
     } catch (authError) {
       console.error("Google pull sync auth/token step failed", {
@@ -329,28 +265,6 @@ export async function POST(request: Request) {
       const values = mapGoogleEventToMstvEvent(googleEvent);
 
       if (!existingLink) {
-        console.info("Google pull sync pre-insert events diagnostics", {
-          stage: "supabase_insert",
-          table: "events",
-          calendarId: calendar.id,
-          providerCalendarId: calendar.provider_calendar_id,
-          userId: authResult.user.id,
-          googleEvent: getGoogleEventDiagnostic(googleEvent),
-          mstvPayload: getMstvPayloadDiagnostics(values),
-          checks: {
-            hasRequiredClientName: Boolean(values.client_name),
-            hasRequiredEventName: Boolean(values.event_name),
-            hasRequiredDate: Boolean(values.date),
-            dateFormat: values.date,
-            startAt: values.start_time,
-            endAt: values.end_time,
-          },
-        });
-        console.info("Google pull sync creating missing MSTV event", {
-          externalCalendarId: calendar.id,
-          googleEventIdPresent: Boolean(googleEvent.id),
-          googleEventUpdatedAt: providerUpdatedAt,
-        });
         const { data: insertedEvent, error: insertError } = await supabase
           .from("events")
           .insert(values)
@@ -374,33 +288,8 @@ export async function POST(request: Request) {
           last_external_updated_at: providerUpdatedAt,
           raw_external_event: googleEvent,
         };
-        console.info("Google pull sync pre-insert external_event_links diagnostics", {
-          stage: "supabase_insert",
-          table: "external_event_links",
-          calendarId: calendar.id,
-          userId: authResult.user.id,
-          googleEvent: getGoogleEventDiagnostic(googleEvent),
-          linkPayload: {
-            ...linkInsertPayload,
-            raw_external_event: getGoogleEventDiagnostic(googleEvent),
-          },
-          checks: {
-            eventIdPresent: Boolean(linkInsertPayload.event_id),
-            externalCalendarIdPresent: Boolean(linkInsertPayload.external_calendar_id),
-            providerType: linkInsertPayload.provider_type,
-            providerCalendarIdPresent: Boolean(linkInsertPayload.provider_calendar_id),
-            externalEventIdPresent: Boolean(linkInsertPayload.external_event_id),
-            syncStatus: linkInsertPayload.sync_status,
-            lastProviderUpdatedAt: linkInsertPayload.last_external_updated_at,
-          },
-        });
         const { error: linkInsertError } = await supabase.from("external_event_links").insert(linkInsertPayload);
         if (linkInsertError) throwSupabaseSyncError("supabase_write", "insert_external_event_link", linkInsertError);
-        console.info("Google pull sync created MSTV event and link", {
-          eventId: insertedEvent.id,
-          externalCalendarId: calendar.id,
-          googleEventIdPresent: Boolean(googleEvent.id),
-        });
         created += 1;
         continue;
       }
@@ -422,13 +311,6 @@ export async function POST(request: Request) {
       const localChanged = localEvent.updated_at > lastSyncedAt;
 
       if (providerChanged && localChanged) {
-        console.info("Google pull sync conflict detected", {
-          eventId: localEvent.id,
-          linkId: existingLink.id,
-          providerUpdatedAt,
-          localUpdatedAt: localEvent.updated_at,
-          lastSyncedAt,
-        });
         const { error: conflictError } = await supabase
           .from("external_event_links")
           .update({
@@ -446,29 +328,6 @@ export async function POST(request: Request) {
       }
 
       if (providerChanged) {
-        console.info("Google pull sync pre-update events diagnostics", {
-          stage: "supabase_update",
-          table: "events",
-          calendarId: calendar.id,
-          userId: authResult.user.id,
-          eventId: localEvent.id,
-          googleEvent: getGoogleEventDiagnostic(googleEvent),
-          mstvPayload: getMstvPayloadDiagnostics(values),
-          checks: {
-            hasRequiredClientName: Boolean(values.client_name),
-            hasRequiredEventName: Boolean(values.event_name),
-            hasRequiredDate: Boolean(values.date),
-            dateFormat: values.date,
-            startAt: values.start_time,
-            endAt: values.end_time,
-          },
-        });
-        console.info("Google pull sync updating MSTV event from Google", {
-          eventId: localEvent.id,
-          linkId: existingLink.id,
-          providerUpdatedAt,
-          lastSyncedAt,
-        });
         const { data: updatedEvent, error: updateError } = await supabase
           .from("events")
           .update(values)
@@ -489,32 +348,11 @@ export async function POST(request: Request) {
             raw_external_event: googleEvent,
             updated_at: now,
           };
-        console.info("Google pull sync pre-update external_event_links diagnostics", {
-          stage: "supabase_update",
-          table: "external_event_links",
-          calendarId: calendar.id,
-          userId: authResult.user.id,
-          linkId: existingLink.id,
-          googleEvent: getGoogleEventDiagnostic(googleEvent),
-          linkPayload: {
-            ...linkUpdatePayload,
-            raw_external_event: getGoogleEventDiagnostic(googleEvent),
-          },
-          checks: {
-            syncStatus: linkUpdatePayload.sync_status,
-            lastProviderUpdatedAt: linkUpdatePayload.last_external_updated_at,
-            localUpdatedAt: linkUpdatePayload.local_updated_at,
-          },
-        });
         const { error: linkUpdateError } = await supabase
           .from("external_event_links")
           .update(linkUpdatePayload)
           .eq("id", existingLink.id);
         if (linkUpdateError) throwSupabaseSyncError("supabase_write", "update_external_event_link_after_pull", linkUpdateError);
-        console.info("Google pull sync updated MSTV event and link", {
-          eventId: updatedEvent.id,
-          linkId: existingLink.id,
-        });
         updated += 1;
       } else {
         unchanged += 1;
@@ -532,14 +370,6 @@ export async function POST(request: Request) {
       .eq("id", calendar.id);
     if (finishSyncError) throwSupabaseSyncError("supabase_write", "mark_calendar_sync_finished", finishSyncError);
 
-    console.info("Google pull sync completed", {
-      externalCalendarId: calendar.id,
-      total: googleEvents.length,
-      created,
-      updated,
-      unchanged,
-      conflicts,
-    });
     return googleJsonResponse({
       synced: googleEvents.length,
       total: googleEvents.length,
