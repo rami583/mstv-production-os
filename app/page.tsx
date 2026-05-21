@@ -103,6 +103,21 @@ type ExternalCalendarSyncResult = {
   unchanged?: number;
   conflicts?: number;
 };
+type GooglePullSyncErrorPayload = {
+  success?: boolean;
+  stage?: string | null;
+  message?: string | null;
+  error?:
+    | string
+    | {
+        message?: string | null;
+        code?: string | null;
+        details?: string | null;
+        hint?: string | null;
+      }
+    | null;
+};
+type GooglePullSyncApiResponse = Partial<ExternalCalendarSyncResult> & GooglePullSyncErrorPayload;
 
 const EXTERNAL_CALENDAR_UPSERT_BATCH_SIZE = 250;
 const EXTERNAL_CALENDAR_FETCH_PAGE_SIZE = 1000;
@@ -715,6 +730,38 @@ function getUserFacingErrorMessage(error: unknown, fallback = "Une erreur est su
 
   if (looksFrench && !looksTechnical) return rawMessage;
   return fallback;
+}
+
+function getGooglePullSyncErrorDetails(payload: GooglePullSyncErrorPayload | null) {
+  const errorObject = payload && typeof payload.error === "object" && payload.error !== null ? payload.error : null;
+
+  return {
+    stage: payload?.stage ?? null,
+    message: errorObject?.message ?? (typeof payload?.error === "string" ? payload.error : null),
+    code: errorObject?.code ?? null,
+    details: errorObject?.details ?? null,
+    hint: errorObject?.hint ?? null,
+  };
+}
+
+function formatGooglePullSyncDiagnostic(payload: GooglePullSyncErrorPayload | null) {
+  const details = getGooglePullSyncErrorDetails(payload);
+  const stage = details.stage ?? "étape inconnue";
+  const code = details.code ?? "sans code";
+  const message = details.message ?? "erreur inconnue";
+
+  return `Détail technique : [${stage}] [${code}] ${message}`;
+}
+
+function getGooglePullSyncFailureMessage(payload: GooglePullSyncErrorPayload | null, fallback: string) {
+  const userMessage = payload?.message?.trim() || fallback;
+  return `${userMessage}\n${formatGooglePullSyncDiagnostic(payload)}`;
+}
+
+function getGooglePullSyncVisibleErrorMessage(error: unknown, fallback: string) {
+  const rawMessage = getRawErrorMessage(error).trim();
+  if (rawMessage.includes("Détail technique :")) return rawMessage;
+  return getUserFacingErrorMessage(error, fallback);
 }
 
 function openPendingSyncDb() {
@@ -4377,9 +4424,19 @@ export default function Home() {
           },
           body: JSON.stringify({ externalCalendarId: calendar.id }),
         });
-        const syncPayload = (await response.json().catch(() => null)) as (ExternalCalendarSyncResult & { error?: string }) | null;
-        if (!response.ok) {
-          throw new Error(syncPayload?.error ?? "Impossible de synchroniser Google Calendar.");
+        const syncPayload = (await response.json().catch(() => null)) as GooglePullSyncApiResponse | null;
+        if (!response.ok || syncPayload?.success === false) {
+          const diagnostic = getGooglePullSyncErrorDetails(syncPayload);
+          console.error("Google pull sync failed response", {
+            status: response.status,
+            payload: syncPayload,
+            stage: diagnostic.stage,
+            errorMessage: diagnostic.message,
+            errorCode: diagnostic.code,
+            errorDetails: diagnostic.details,
+            errorHint: diagnostic.hint,
+          });
+          throw new Error(getGooglePullSyncFailureMessage(syncPayload, "Impossible de synchroniser Google Calendar."));
         }
         await refreshExternalCalendarSettings();
         await reloadData(selectedId, { silent: true });
@@ -8809,7 +8866,7 @@ export default function Home() {
                 throw syncError;
               }
               console.error("External calendar sync failed", syncError);
-              setExternalCalendarSettingsError(getUserFacingErrorMessage(syncError, "Impossible de synchroniser ce calendrier."));
+              setExternalCalendarSettingsError(getGooglePullSyncVisibleErrorMessage(syncError, "Impossible de synchroniser ce calendrier."));
               void createNotification(
                 {
                   type: "external_calendar_sync_failed",
@@ -14445,7 +14502,7 @@ function ExternalCalendarsListView({
     } catch (syncError) {
       setGoogleSyncErrorByCalendarId((current) => ({
         ...current,
-        [key]: getUserFacingErrorMessage(syncError, "Impossible de synchroniser Google Calendar."),
+        [key]: getGooglePullSyncVisibleErrorMessage(syncError, "Impossible de synchroniser Google Calendar."),
       }));
     }
   }
@@ -14541,7 +14598,7 @@ function ExternalCalendarsListView({
                         </div>
                       </div>
                       {syncSummary && <p className="mt-1.5 text-xs font-semibold text-emerald-600">{syncSummary}</p>}
-                      {syncError && <p className="mt-1.5 text-xs font-semibold text-rose-600">{syncError}</p>}
+                      {syncError && <p className="mt-1.5 whitespace-pre-line text-xs font-semibold text-rose-600">{syncError}</p>}
                     </div>
                   );
                 })}
@@ -14748,7 +14805,7 @@ function ExternalCalendarSettingsDetail({
         setSyncSummary(`${result.synced.toLocaleString("fr-FR")} événement${result.synced > 1 ? "s" : ""} synchronisé${result.synced > 1 ? "s" : ""}.`);
       }
     } catch (syncError) {
-      setRowError(getUserFacingErrorMessage(syncError, "Impossible de synchroniser ce calendrier."));
+      setRowError(getGooglePullSyncVisibleErrorMessage(syncError, "Impossible de synchroniser ce calendrier."));
     } finally {
       setSaving(false);
     }
@@ -14808,7 +14865,7 @@ function ExternalCalendarSettingsDetail({
             <option value="private">Privé</option>
           </select>
         </div>
-        {rowError && <p className="text-sm font-semibold text-rose-600">{rowError}</p>}
+        {rowError && <p className="whitespace-pre-line text-sm font-semibold text-rose-600">{rowError}</p>}
         {syncProgress && (
           <p className="text-sm font-semibold text-indigo-600">
             Synchronisation... {syncProgress.synced.toLocaleString("fr-FR")} / {syncProgress.total.toLocaleString("fr-FR")}
