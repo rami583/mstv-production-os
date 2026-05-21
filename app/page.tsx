@@ -1026,7 +1026,14 @@ const cachedProfileKeyPrefix = "mstv.cachedProfile.";
 const cachedProfileMetaKeyPrefix = "mstv.cachedProfileMeta.";
 const cachedAppDataKeyPrefix = "mstv.cachedAppData.";
 const cachedNotificationsKeyPrefix = "mstv.cachedNotifications.";
-const importantNotificationTypes = new Set(["event_created", "event_date_changed", "event_time_changed", "event_deleted"]);
+const importantNotificationTypes = new Set([
+  "event_created",
+  "event_date_changed",
+  "event_time_changed",
+  "event_deleted",
+  "google_calendar_sync_success",
+  "google_calendar_sync_failed",
+]);
 const modalBackdropClassName = "fixed inset-0 z-40 flex bg-black/35";
 const elevatedModalBackdropClassName = "fixed inset-0 z-[60] flex bg-black/35";
 const notificationLayerClassName = "fixed inset-0 z-[80] flex bg-black/35";
@@ -4228,7 +4235,23 @@ export default function Home() {
   }
 
   async function syncGoogleEventAction(action: "create" | "update" | "delete", eventId: string, externalCalendarId?: string | null) {
-    if (!authSession || !online) return;
+    if (!authSession) {
+      throw new Error(sessionExpiredMessage);
+    }
+    if (!online) {
+      throw new Error("La synchronisation Google nécessite une connexion.");
+    }
+
+    const selectedCalendar = externalCalendarId ? externalCalendars.find((calendar) => calendar.id === externalCalendarId) ?? null : null;
+    console.info("Google event sync client route call", {
+      action,
+      eventId,
+      selectedExternalCalendarId: externalCalendarId ?? null,
+      selectedCalendarFound: Boolean(selectedCalendar),
+      selectedCalendarProviderType: selectedCalendar?.providerType ?? null,
+      selectedCalendarSyncCapability: selectedCalendar?.syncCapability ?? null,
+      selectedCalendarSyncEnabled: selectedCalendar?.syncEnabled ?? null,
+    });
 
     const accessToken = await getServerApiAccessToken(authSession.access_token);
     const response = await fetch(getAppApiUrl("/api/calendar/google/events", "Synchronisation Google Calendar momentanément indisponible."), {
@@ -4239,11 +4262,21 @@ export default function Home() {
       },
       body: JSON.stringify({ action, eventId, externalCalendarId }),
     });
-    const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+    const payload = (await response.json().catch(() => null)) as { error?: string; externalEventId?: string; synced?: number } | null;
+    console.info("Google event sync client response", {
+      action,
+      eventId,
+      ok: response.ok,
+      status: response.status,
+      googleEventIdReturned: Boolean(payload?.externalEventId),
+      syncedCount: payload?.synced ?? null,
+    });
 
     if (!response.ok) {
       throw new Error(payload?.error ?? "Synchronisation Google Calendar impossible.");
     }
+
+    return payload;
   }
 
   async function markGoogleEventLinksDeletedLocally(eventId: string) {
@@ -5350,12 +5383,17 @@ export default function Home() {
       .single();
 
     if (eventError) {
+      console.error("MSTV event insert failed before Google sync", getDebugError(eventError));
       if (isNetworkOrUnavailableError(eventError)) {
         await queueOfflineEventCreate();
         return;
       }
       throw eventError;
     }
+    console.info("MSTV event insert succeeded before Google sync", {
+      eventId: event.id,
+      selectedSyncExternalCalendarId: normalizedInput.syncExternalCalendarId ?? null,
+    });
 
     let insertedOptions: EventOptionRow[] = [];
 
@@ -5429,9 +5467,31 @@ export default function Home() {
 
     if (normalizedInput.syncExternalCalendarId) {
       try {
+        console.info("Google create sync requested after MSTV event insert", {
+          eventId: event.id,
+          selectedSyncExternalCalendarId: normalizedInput.syncExternalCalendarId,
+        });
         await syncGoogleEventAction("create", event.id, normalizedInput.syncExternalCalendarId);
+        await createNotification(
+          {
+            type: "google_calendar_sync_success",
+            title: "Événement synchronisé avec Google Calendar.",
+            body: `${normalizedInput.clientName} - ${normalizedInput.eventName}`,
+            relatedEventId: event.id,
+          },
+          { persist: false },
+        );
       } catch (googleSyncError) {
         console.error("Google Calendar event create failed", getDebugError(googleSyncError));
+        await createNotification(
+          {
+            type: "google_calendar_sync_failed",
+            title: "Synchronisation Google échouée",
+            body: "L’événement MSTV a été enregistré, mais la synchronisation Google a échoué.",
+            relatedEventId: event.id,
+          },
+          { persist: false },
+        );
         setError(getUserFacingErrorMessage(googleSyncError, "L’événement MSTV a été enregistré, mais la synchronisation Google a échoué."));
       }
     }
@@ -5625,7 +5685,15 @@ export default function Home() {
       .select()
       .single();
 
-    if (updateError) throw updateError;
+    if (updateError) {
+      console.error("MSTV event update failed before Google sync", getDebugError(updateError));
+      throw updateError;
+    }
+    console.info("MSTV event update succeeded before Google sync", {
+      eventId: event.id,
+      selectedSyncExternalCalendarId: normalizedInput.syncExternalCalendarId ?? null,
+      linkedGoogleEventFound: getEventGoogleLinks(event).length > 0,
+    });
 
     const updatedEvent: ProductionEvent = {
       ...event,
@@ -5700,17 +5768,49 @@ export default function Home() {
       );
     }
 
-    try {
-      if (normalizedInput.syncExternalCalendarId) {
-        await syncGoogleEventAction("create", updatedEvent.id, normalizedInput.syncExternalCalendarId);
-      } else {
-        await syncGoogleEventAction("update", updatedEvent.id);
+    const linkedGoogleEventCount = getEventGoogleLinks(event).length;
+    if (normalizedInput.syncExternalCalendarId || linkedGoogleEventCount > 0) {
+      try {
+        let syncPayload: { error?: string; externalEventId?: string; synced?: number } | null | undefined;
+        if (normalizedInput.syncExternalCalendarId) {
+        console.info("Google create/link sync requested for existing MSTV event", {
+          eventId: updatedEvent.id,
+          selectedSyncExternalCalendarId: normalizedInput.syncExternalCalendarId,
+        });
+        syncPayload = await syncGoogleEventAction("create", updatedEvent.id, normalizedInput.syncExternalCalendarId);
+        } else {
+        console.info("Google update sync requested for linked MSTV event", {
+          eventId: updatedEvent.id,
+          linkedGoogleEventFound: linkedGoogleEventCount > 0,
+        });
+        syncPayload = await syncGoogleEventAction("update", updatedEvent.id);
+        }
+        if (syncPayload?.externalEventId || (syncPayload?.synced ?? 0) > 0) {
+          await createNotification(
+            {
+              type: "google_calendar_sync_success",
+              title: "Événement synchronisé avec Google Calendar.",
+              body: `${updatedEvent.clientName} - ${updatedEvent.eventName}`,
+              relatedEventId: updatedEvent.id,
+            },
+            { persist: false },
+          );
+        }
+        await reloadData(updatedEvent.id, { silent: true });
+      } catch (googleSyncError) {
+        console.error("Google Calendar event update failed", getDebugError(googleSyncError));
+        await createNotification(
+          {
+            type: "google_calendar_sync_failed",
+            title: "Synchronisation Google échouée",
+            body: "L’événement MSTV a été enregistré, mais la synchronisation Google a échoué.",
+            relatedEventId: updatedEvent.id,
+          },
+          { persist: false },
+        );
+        setError(getUserFacingErrorMessage(googleSyncError, "L’événement MSTV a été enregistré, mais la synchronisation Google a échoué."));
+        await reloadData(updatedEvent.id, { silent: true });
       }
-      await reloadData(updatedEvent.id, { silent: true });
-    } catch (googleSyncError) {
-      console.error("Google Calendar event update failed", getDebugError(googleSyncError));
-      setError(getUserFacingErrorMessage(googleSyncError, "L’événement MSTV a été enregistré, mais la synchronisation Google a échoué."));
-      await reloadData(updatedEvent.id, { silent: true });
     }
   }
 
@@ -6150,13 +6250,35 @@ export default function Home() {
         },
         { dedupe: true },
       );
-      try {
-        await syncGoogleEventAction("update", event.id);
-      } catch (googleSyncError) {
-        console.error("Google Calendar time update failed", getDebugError(googleSyncError));
-        setError(getUserFacingErrorMessage(googleSyncError, "L’événement MSTV a été enregistré, mais la synchronisation Google a échoué."));
-      } finally {
-        await reloadData(event.id, { silent: true });
+      if (getEventGoogleLinks(event).length > 0) {
+        try {
+          const syncPayload = await syncGoogleEventAction("update", event.id);
+          if ((syncPayload?.synced ?? 0) > 0) {
+            await createNotification(
+              {
+                type: "google_calendar_sync_success",
+                title: "Événement synchronisé avec Google Calendar.",
+                body: `${event.clientName} - ${event.eventName}`,
+                relatedEventId: event.id,
+              },
+              { persist: false },
+            );
+          }
+        } catch (googleSyncError) {
+          console.error("Google Calendar time update failed", getDebugError(googleSyncError));
+          await createNotification(
+            {
+              type: "google_calendar_sync_failed",
+              title: "Synchronisation Google échouée",
+              body: "L’événement MSTV a été enregistré, mais la synchronisation Google a échoué.",
+              relatedEventId: event.id,
+            },
+            { persist: false },
+          );
+          setError(getUserFacingErrorMessage(googleSyncError, "L’événement MSTV a été enregistré, mais la synchronisation Google a échoué."));
+        } finally {
+          await reloadData(event.id, { silent: true });
+        }
       }
     }
   }
@@ -6289,13 +6411,35 @@ export default function Home() {
         },
         { dedupe: true },
       );
-      try {
-        await syncGoogleEventAction("update", event.id);
-      } catch (googleSyncError) {
-        console.error("Google Calendar date update failed", getDebugError(googleSyncError));
-        setError(getUserFacingErrorMessage(googleSyncError, "L’événement MSTV a été enregistré, mais la synchronisation Google a échoué."));
-      } finally {
-        await reloadData(event.id, { silent: true });
+      if (getEventGoogleLinks(event).length > 0) {
+        try {
+          const syncPayload = await syncGoogleEventAction("update", event.id);
+          if ((syncPayload?.synced ?? 0) > 0) {
+            await createNotification(
+              {
+                type: "google_calendar_sync_success",
+                title: "Événement synchronisé avec Google Calendar.",
+                body: `${event.clientName} - ${event.eventName}`,
+                relatedEventId: event.id,
+              },
+              { persist: false },
+            );
+          }
+        } catch (googleSyncError) {
+          console.error("Google Calendar date update failed", getDebugError(googleSyncError));
+          await createNotification(
+            {
+              type: "google_calendar_sync_failed",
+              title: "Synchronisation Google échouée",
+              body: "L’événement MSTV a été enregistré, mais la synchronisation Google a échoué.",
+              relatedEventId: event.id,
+            },
+            { persist: false },
+          );
+          setError(getUserFacingErrorMessage(googleSyncError, "L’événement MSTV a été enregistré, mais la synchronisation Google a échoué."));
+        } finally {
+          await reloadData(event.id, { silent: true });
+        }
       }
     }
   }
@@ -7979,12 +8123,39 @@ export default function Home() {
       { dedupe: true },
     );
 
-    if (getEventGoogleLinks(eventToDelete).length > 0) {
+    const googleLinksToDelete = getEventGoogleLinks(eventToDelete);
+    console.info("Event trash Google sync decision", {
+      eventId,
+      linkedGoogleEventFound: googleLinksToDelete.length > 0,
+      linkCount: googleLinksToDelete.length,
+      deleteGoogleEvent,
+    });
+    if (googleLinksToDelete.length > 0) {
       if (deleteGoogleEvent) {
         try {
-          await syncGoogleEventAction("delete", eventId);
+          const syncPayload = await syncGoogleEventAction("delete", eventId);
+          if ((syncPayload?.synced ?? 0) > 0) {
+            await createNotification(
+              {
+                type: "google_calendar_sync_success",
+                title: "Événement synchronisé avec Google Calendar.",
+                body: `${eventToDelete.clientName} - ${eventToDelete.eventName}`,
+                relatedEventId: eventId,
+              },
+              { persist: false },
+            );
+          }
         } catch (googleSyncError) {
           console.error("Google Calendar event delete failed", getDebugError(googleSyncError));
+          await createNotification(
+            {
+              type: "google_calendar_sync_failed",
+              title: "Synchronisation Google échouée",
+              body: "L’événement MSTV a été enregistré, mais la synchronisation Google a échoué.",
+              relatedEventId: eventId,
+            },
+            { persist: false },
+          );
           setError(getUserFacingErrorMessage(googleSyncError, "L’événement MSTV a été placé dans la corbeille, mais la suppression Google a échoué."));
         }
       } else {
@@ -12849,6 +13020,17 @@ function CreateEventModal({
 
     try {
       const normalizedForm = normalizeEventTimeInput(form);
+      const selectedDestination = normalizedForm.syncExternalCalendarId
+        ? syncCalendars.find((calendar) => calendar.id === normalizedForm.syncExternalCalendarId) ?? null
+        : null;
+      console.info("Create/edit event modal destination selected", {
+        isEditing,
+        selectedDestinationValue: normalizedForm.syncExternalCalendarId ?? "mstv_only",
+        selectedGoogleCalendarId: selectedDestination?.id ?? null,
+        selectedCalendarProviderType: selectedDestination?.providerType ?? null,
+        selectedCalendarSyncCapability: selectedDestination?.syncCapability ?? null,
+        selectedCalendarSyncEnabled: selectedDestination?.syncEnabled ?? null,
+      });
       setForm(normalizedForm);
       await onSubmit(normalizedForm);
     } catch (createError) {

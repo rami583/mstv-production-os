@@ -22,8 +22,14 @@ export function OPTIONS() {
   });
 }
 
+function normalizeGoogleTime(time: string | null) {
+  if (!time) return "09:00:00";
+  const [hours = "09", minutes = "00", seconds = "00"] = time.split(":");
+  return `${hours.padStart(2, "0")}:${minutes.padStart(2, "0")}:${seconds.padStart(2, "0")}`;
+}
+
 function getParisDateTime(date: string, time: string | null) {
-  return `${date}T${time || "09:00"}:00`;
+  return `${date}T${normalizeGoogleTime(time)}`;
 }
 
 function addOneHour(time: string | null) {
@@ -51,8 +57,7 @@ function toGoogleEventPayload(event: ProductionEventRow) {
 
   const startTime = event.start_time ?? event.client_arrival_time ?? "09:00";
   const endTime = event.end_time ?? addOneHour(startTime);
-
-  return {
+  const payload = {
     summary,
     description: "Synchronisé depuis MSTV Production OS.",
     start: {
@@ -64,11 +69,25 @@ function toGoogleEventPayload(event: ProductionEventRow) {
       timeZone: "Europe/Paris",
     },
   };
+
+  console.info("Google event payload prepared", {
+    summary,
+    date: event.date,
+    startDateTime: payload.start.dateTime,
+    endDateTime: payload.end.dateTime,
+  });
+
+  return payload;
 }
 
 async function fetchJson<T>(url: string, init: RequestInit) {
   const response = await fetch(url, init);
   const payload = (await response.json().catch(() => null)) as T & { error?: { message?: string } } | null;
+  console.info("Google Calendar API response", {
+    method: init.method ?? "GET",
+    status: response.status,
+    ok: response.ok,
+  });
   if (!response.ok) {
     throw new Error(payload?.error?.message || "Synchronisation Google Calendar impossible.");
   }
@@ -133,6 +152,13 @@ async function getGoogleAccessForCalendar(supabase: ReturnType<typeof getService
 
 async function createGoogleEvent(supabase: ReturnType<typeof getServiceSupabaseClient>, event: ProductionEventRow, calendar: ExternalCalendarRow, userId: string) {
   const { accessToken, providerCalendarId } = await getGoogleAccessForCalendar(supabase, calendar, userId);
+  console.info("Google event create started", {
+    eventId: event.id,
+    externalCalendarId: calendar.id,
+    providerCalendarIdPresent: Boolean(providerCalendarId),
+    calendarProviderType: calendar.provider_type,
+    calendarSyncCapability: calendar.sync_capability,
+  });
   const googleEvent = await fetchJson<{ id: string; iCalUID?: string; updated?: string }>(
     `${googleCalendarApiBaseUrl}/calendars/${encodeURIComponent(providerCalendarId)}/events`,
     {
@@ -144,6 +170,11 @@ async function createGoogleEvent(supabase: ReturnType<typeof getServiceSupabaseC
       body: JSON.stringify(toGoogleEventPayload(event)),
     },
   );
+  console.info("Google event create API succeeded", {
+    eventId: event.id,
+    googleEventIdReturned: Boolean(googleEvent.id),
+    googleEventUidReturned: Boolean(googleEvent.iCalUID),
+  });
 
   const now = new Date().toISOString();
   const linkPayload = {
@@ -171,7 +202,11 @@ async function createGoogleEvent(supabase: ReturnType<typeof getServiceSupabaseC
 
   if (existingLink?.id) {
     const { error } = await supabase.from("external_event_links").update(linkPayload).eq("id", existingLink.id);
-    if (error) throw error;
+    if (error) {
+      console.error("Google external_event_links update failed", { eventId: event.id, externalCalendarId: calendar.id, message: error.message, code: error.code });
+      throw error;
+    }
+    console.info("Google external_event_links update succeeded", { eventId: event.id, linkId: existingLink.id });
   } else {
     const { error } = await supabase.from("external_event_links").insert({
       ...linkPayload,
@@ -179,13 +214,23 @@ async function createGoogleEvent(supabase: ReturnType<typeof getServiceSupabaseC
       external_calendar_id: calendar.id,
       created_at: now,
     });
-    if (error) throw error;
+    if (error) {
+      console.error("Google external_event_links insert failed", { eventId: event.id, externalCalendarId: calendar.id, message: error.message, code: error.code });
+      throw error;
+    }
+    console.info("Google external_event_links insert succeeded", { eventId: event.id, externalCalendarId: calendar.id });
   }
   return googleEvent;
 }
 
 async function updateGoogleEvent(supabase: ReturnType<typeof getServiceSupabaseClient>, event: ProductionEventRow, link: ExternalEventLinkRow, calendar: ExternalCalendarRow, userId: string) {
   const { accessToken, providerCalendarId } = await getGoogleAccessForCalendar(supabase, calendar, userId);
+  console.info("Google event update started", {
+    eventId: event.id,
+    linkId: link.id,
+    externalEventIdPresent: Boolean(link.external_event_id),
+    externalCalendarId: calendar.id,
+  });
   let googleEvent: { id: string; iCalUID?: string; updated?: string };
   try {
     googleEvent = await fetchJson<{ id: string; iCalUID?: string; updated?: string }>(
@@ -225,18 +270,29 @@ async function updateGoogleEvent(supabase: ReturnType<typeof getServiceSupabaseC
     })
     .eq("id", link.id);
 
-  if (error) throw error;
+  if (error) {
+    console.error("Google sync_status update failed after event update", { eventId: event.id, linkId: link.id, message: error.message, code: error.code });
+    throw error;
+  }
+  console.info("Google event update succeeded", { eventId: event.id, linkId: link.id, googleEventIdReturned: Boolean(googleEvent.id) });
   return googleEvent;
 }
 
 async function deleteGoogleEvent(supabase: ReturnType<typeof getServiceSupabaseClient>, link: ExternalEventLinkRow, calendar: ExternalCalendarRow, userId: string) {
   const { accessToken, providerCalendarId } = await getGoogleAccessForCalendar(supabase, calendar, userId);
+  console.info("Google event delete started", {
+    linkId: link.id,
+    eventId: link.event_id,
+    externalEventIdPresent: Boolean(link.external_event_id),
+    externalCalendarId: calendar.id,
+  });
   const response = await fetch(`${googleCalendarApiBaseUrl}/calendars/${encodeURIComponent(providerCalendarId)}/events/${encodeURIComponent(link.external_event_id)}`, {
     method: "DELETE",
     headers: {
       Authorization: `Bearer ${accessToken}`,
     },
   });
+  console.info("Google event delete API response", { status: response.status, ok: response.ok, linkId: link.id });
 
   if (!response.ok && response.status !== 404 && response.status !== 410) {
     const payload = (await response.json().catch(() => null)) as { error?: { message?: string } } | null;
@@ -264,7 +320,11 @@ async function deleteGoogleEvent(supabase: ReturnType<typeof getServiceSupabaseC
     })
     .eq("id", link.id);
 
-  if (error) throw error;
+  if (error) {
+    console.error("Google sync_status update failed after event delete", { linkId: link.id, message: error.message, code: error.code });
+    throw error;
+  }
+  console.info("Google event delete succeeded", { linkId: link.id, eventId: link.event_id });
 }
 
 export async function POST(request: Request) {
@@ -280,12 +340,24 @@ export async function POST(request: Request) {
 
     const action = body?.action;
     const eventId = body?.eventId?.trim();
+    console.info("Google event sync route reached", {
+      action,
+      eventIdPresent: Boolean(eventId),
+      externalCalendarIdPresent: Boolean(body?.externalCalendarId),
+    });
     if (!action || !eventId) {
       return googleJsonResponse({ error: "Action Google Calendar incomplète." }, { status: 400 });
     }
 
     const supabase = getServiceSupabaseClient();
     const event = await getEvent(supabase, eventId);
+    console.info("Google event sync MSTV event loaded", {
+      action,
+      eventId,
+      eventDate: event.date,
+      hasStartTime: Boolean(event.start_time),
+      hasEndTime: Boolean(event.end_time),
+    });
 
     if (action === "create") {
       const externalCalendarId = body.externalCalendarId?.trim();
@@ -293,11 +365,25 @@ export async function POST(request: Request) {
         return googleJsonResponse({ error: "Calendrier Google manquant." }, { status: 400 });
       }
       const calendar = await getOwnedGoogleCalendar(supabase, externalCalendarId, authResult.user.id);
+      console.info("Google event sync selected calendar loaded", {
+        eventId,
+        externalCalendarId: calendar.id,
+        providerType: calendar.provider_type,
+        syncCapability: calendar.sync_capability,
+        syncEnabled: calendar.sync_enabled,
+        providerCalendarIdPresent: Boolean(calendar.provider_calendar_id),
+      });
       const googleEvent = await createGoogleEvent(supabase, event, calendar, authResult.user.id);
       return googleJsonResponse({ ok: true, externalEventId: googleEvent.id });
     }
 
     const links = await getGoogleLinks(supabase, eventId, authResult.user.id);
+    console.info("Google event sync linked events lookup complete", {
+      action,
+      eventId,
+      linkedGoogleEventFound: links.length > 0,
+      linkCount: links.length,
+    });
     if (links.length === 0) {
       return googleJsonResponse({ ok: true, synced: 0 });
     }
