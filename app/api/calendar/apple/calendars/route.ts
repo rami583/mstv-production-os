@@ -5,6 +5,7 @@ import {
   getServiceSupabaseClient,
   listAppleCalDavCalendars,
   materializeAppleCalendars,
+  normalizeCalDavCalendarKey,
   requireAuthenticatedUser,
   toSafeAppleAccount,
   type AppleCalDavCalendar,
@@ -17,10 +18,6 @@ export function OPTIONS() {
     status: 204,
     headers: appleCorsHeaders,
   });
-}
-
-function normalizeProviderCalendarKey(value: string | null | undefined) {
-  return (value ?? "").trim().replace(/\/+$/, "");
 }
 
 async function findStoredAppleCalendar(
@@ -49,8 +46,8 @@ async function findStoredAppleCalendar(
     .eq("created_by_profile_id", input.userId);
 
   if (candidatesError) throw candidatesError;
-  const providerCalendarKey = normalizeProviderCalendarKey(input.providerCalendarId);
-  return (candidates ?? []).find((calendar) => normalizeProviderCalendarKey(calendar.provider_calendar_id) === providerCalendarKey) ?? null;
+  const providerCalendarKey = normalizeCalDavCalendarKey(input.providerCalendarId);
+  return (candidates ?? []).find((calendar) => normalizeCalDavCalendarKey(calendar.provider_calendar_id) === providerCalendarKey) ?? null;
 }
 
 async function refetchStoredAppleCalendar(
@@ -80,9 +77,9 @@ async function getMatchingStoredAppleCalendarIds(
     .eq("created_by_profile_id", input.userId);
 
   if (error) throw error;
-  const providerCalendarKey = normalizeProviderCalendarKey(input.providerCalendarId);
+  const providerCalendarKey = normalizeCalDavCalendarKey(input.providerCalendarId);
   const ids = (data ?? [])
-    .filter((calendar) => normalizeProviderCalendarKey(calendar.provider_calendar_id) === providerCalendarKey)
+    .filter((calendar) => normalizeCalDavCalendarKey(calendar.provider_calendar_id) === providerCalendarKey)
     .map((calendar) => calendar.id);
   if (input.primaryCalendarId && !ids.includes(input.primaryCalendarId)) ids.unshift(input.primaryCalendarId);
   return Array.from(new Set(ids));
@@ -129,25 +126,23 @@ export async function POST(request: Request) {
           userId: authResult.user.id,
           primaryCalendarId: calendar.id,
         });
-        const { data, error } = await supabase
+        const { error } = await supabase
           .from("external_calendars")
           .update({
             sync_enabled: false,
             last_sync_status: "idle",
             last_sync_error: null,
           })
-          .in("id", matchingCalendarIds)
-          .select("id, sync_enabled, color")
-          .eq("id", calendar.id)
-          .single();
+          .in("id", matchingCalendarIds);
 
         if (error) throw error;
-        const refetchedCalendar = await refetchStoredAppleCalendar(supabase, data.id);
+        const refetchedCalendar = await refetchStoredAppleCalendar(supabase, calendar.id);
         console.info("Apple calendar local sync disabled", {
-          externalCalendarId: data.id,
+          externalCalendarId: calendar.id,
+          matchingCalendarCount: matchingCalendarIds.length,
           syncEnabled: refetchedCalendar.sync_enabled,
         });
-        return appleJsonResponse({ ok: true, enabled: false, calendarId: data.id, calendar: refetchedCalendar });
+        return appleJsonResponse({ ok: true, enabled: false, calendarId: calendar.id, calendar: refetchedCalendar });
       }
 
       const visibility = body.visibility === "admin_only" || body.visibility === "team" ? body.visibility : "private";
@@ -157,7 +152,7 @@ export async function POST(request: Request) {
         userId: authResult.user.id,
         primaryCalendarId: calendar.id,
       });
-      const { data, error } = await supabase
+      const { error } = await supabase
         .from("external_calendars")
         .update({
           color: body.color ?? calendar.color ?? "blue",
@@ -165,19 +160,24 @@ export async function POST(request: Request) {
           sync_enabled: typeof body.enabled === "boolean" ? body.enabled : calendar.sync_enabled,
           last_sync_error: null,
         })
-        .in("id", matchingCalendarIds)
-        .select("id, sync_enabled, color, visibility")
-        .eq("id", calendar.id)
-        .single();
+        .in("id", matchingCalendarIds);
 
       if (error) throw error;
-      const refetchedCalendar = await refetchStoredAppleCalendar(supabase, data.id);
+      const refetchedCalendar = await refetchStoredAppleCalendar(supabase, calendar.id);
       console.info("Apple calendar local settings updated", {
-        externalCalendarId: data.id,
+        externalCalendarId: calendar.id,
+        matchingCalendarCount: matchingCalendarIds.length,
         syncEnabled: refetchedCalendar.sync_enabled,
         color: refetchedCalendar.color,
       });
-      return appleJsonResponse({ ok: true, calendarId: data.id, enabled: data.sync_enabled, color: data.color, visibility: data.visibility, calendar: refetchedCalendar });
+      return appleJsonResponse({
+        ok: true,
+        calendarId: calendar.id,
+        enabled: refetchedCalendar.sync_enabled,
+        color: refetchedCalendar.color,
+        visibility: refetchedCalendar.visibility,
+        calendar: refetchedCalendar,
+      });
     }
 
     const { data: accounts, error: accountsError } = await supabase
@@ -200,7 +200,7 @@ export async function POST(request: Request) {
     const storedByProviderId = new Map(
       (storedCalendars ?? [])
         .filter((calendar) => calendar.provider_account_id && calendar.provider_calendar_id)
-        .map((calendar) => [`${calendar.provider_account_id}:${normalizeProviderCalendarKey(calendar.provider_calendar_id)}`, calendar]),
+        .map((calendar) => [`${calendar.provider_account_id}:${normalizeCalDavCalendarKey(calendar.provider_calendar_id)}`, calendar]),
     );
 
     const calendarsByAccountId: Record<string, AppleCalDavCalendar[]> = {};
@@ -230,12 +230,12 @@ export async function POST(request: Request) {
         if (refreshedStoredCalendarsError) throw refreshedStoredCalendarsError;
         for (const storedCalendar of refreshedStoredCalendars ?? []) {
           if (storedCalendar.provider_account_id && storedCalendar.provider_calendar_id) {
-            storedByProviderId.set(`${storedCalendar.provider_account_id}:${normalizeProviderCalendarKey(storedCalendar.provider_calendar_id)}`, storedCalendar);
+            storedByProviderId.set(`${storedCalendar.provider_account_id}:${normalizeCalDavCalendarKey(storedCalendar.provider_calendar_id)}`, storedCalendar);
           }
         }
 
         calendarsByAccountId[account.id] = calendars.map((calendar) => {
-          const stored = storedByProviderId.get(`${account.id}:${normalizeProviderCalendarKey(calendar.providerCalendarId)}`);
+          const stored = storedByProviderId.get(`${account.id}:${normalizeCalDavCalendarKey(calendar.providerCalendarId)}`);
           return {
             providerCalendarId: calendar.providerCalendarId,
             name: calendar.name,

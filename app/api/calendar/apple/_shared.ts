@@ -68,6 +68,19 @@ export function joinCalDavUrl(baseUrl: string, pathOrUrl: string) {
   return new URL(pathOrUrl, baseUrl).toString();
 }
 
+export function normalizeCalDavCalendarKey(value: string | null | undefined) {
+  const trimmed = (value ?? "").trim();
+  if (!trimmed) return "";
+  if (/^https?:\/\//i.test(trimmed) || trimmed.startsWith("/")) {
+    try {
+      return new URL(trimmed, appleCalDavBaseUrl).pathname.replace(/\/+$/, "");
+    } catch {
+      return trimmed.replace(/\/+$/, "");
+    }
+  }
+  return trimmed.replace(/\/+$/, "");
+}
+
 function getBasicAuthHeader(appleId: string, appPassword: string) {
   return `Basic ${Buffer.from(`${appleId}:${appPassword}`, "utf8").toString("base64")}`;
 }
@@ -226,18 +239,60 @@ export async function materializeAppleCalendars(
 ) {
   const { data: existingCalendars, error: existingError } = await supabase
     .from("external_calendars")
-    .select("id, provider_account_id, provider_calendar_id, sync_enabled, visibility, color")
+    .select("id, name, provider_account_id, provider_calendar_id, sync_enabled, visibility, color, created_at")
     .eq("provider_account_id", input.account.id)
     .eq("provider_type", "apple_caldav")
     .eq("created_by_profile_id", input.userId);
 
   if (existingError) throw existingError;
 
-  const existingByProviderId = new Map((existingCalendars ?? []).map((calendar) => [calendar.provider_calendar_id, calendar]));
+  const existingByProviderId = new Map<string, NonNullable<typeof existingCalendars>[number][]>();
+  for (const calendar of existingCalendars ?? []) {
+    const key = normalizeCalDavCalendarKey(calendar.provider_calendar_id);
+    existingByProviderId.set(key, [...(existingByProviderId.get(key) ?? []), calendar]);
+  }
   const now = new Date().toISOString();
 
   for (const calendar of input.calendars) {
-    if (existingByProviderId.has(calendar.providerCalendarId)) continue;
+    const providerKey = normalizeCalDavCalendarKey(calendar.providerCalendarId);
+    const existingGroup = existingByProviderId.get(providerKey) ?? [];
+    if (existingGroup.length > 0) {
+      const exactCalendar = existingGroup.find((item) => item.provider_calendar_id === calendar.providerCalendarId);
+      const existingCalendar = exactCalendar
+        ?? existingGroup.find((item) => item.sync_enabled)
+        ?? existingGroup[0];
+      const duplicateIds = existingGroup.filter((item) => item.id !== existingCalendar.id).map((item) => item.id);
+      const groupWasDisabled = existingGroup.some((item) => !item.sync_enabled);
+      if (duplicateIds.length > 0) {
+        const { error } = await supabase
+          .from("external_calendars")
+          .update({
+            sync_enabled: false,
+            last_sync_status: "idle",
+            last_sync_error: null,
+          })
+          .in("id", duplicateIds);
+        if (error) throw error;
+        console.info("Apple duplicate calendar rows disabled", {
+          accountId: input.account.id,
+          canonicalCalendarId: existingCalendar.id,
+          disabledDuplicateCount: duplicateIds.length,
+        });
+      }
+      if (existingCalendar.provider_calendar_id !== calendar.providerCalendarId || existingCalendar.name !== calendar.name || groupWasDisabled) {
+        const { error } = await supabase
+          .from("external_calendars")
+          .update({
+            name: calendar.name || existingCalendar.name,
+            provider_calendar_id: calendar.providerCalendarId,
+            sync_enabled: groupWasDisabled ? false : existingCalendar.sync_enabled,
+            last_sync_error: null,
+          })
+          .eq("id", existingCalendar.id);
+        if (error) throw error;
+      }
+      continue;
+    }
 
     const { error } = await supabase.from("external_calendars").insert({
       name: calendar.name || "Apple Calendar",

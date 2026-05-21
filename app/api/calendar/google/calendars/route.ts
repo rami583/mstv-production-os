@@ -317,25 +317,23 @@ export async function POST(request: Request) {
         primaryCalendarId: existingCalendar.id,
       });
 
-      const { data, error } = await supabase
+      const { error } = await supabase
         .from("external_calendars")
         .update({
           sync_enabled: false,
           last_sync_status: "idle",
           last_sync_error: null,
         })
-        .in("id", matchingCalendarIds)
-        .select("id, sync_enabled, color")
-        .eq("id", existingCalendar.id)
-        .single();
+        .in("id", matchingCalendarIds);
 
       if (error) throw error;
-      const refetchedCalendar = await refetchStoredGoogleCalendar(supabase, data.id);
+      const refetchedCalendar = await refetchStoredGoogleCalendar(supabase, existingCalendar.id);
       console.info("Google calendar local sync disabled", {
-        externalCalendarId: data.id,
+        externalCalendarId: existingCalendar.id,
+        matchingCalendarCount: matchingCalendarIds.length,
         syncEnabled: refetchedCalendar.sync_enabled,
       });
-      return googleJsonResponse({ ok: true, enabled: false, calendarId: data.id, calendar: refetchedCalendar });
+      return googleJsonResponse({ ok: true, enabled: false, calendarId: existingCalendar.id, calendar: refetchedCalendar });
     }
 
     if (body.action === "update_settings") {
@@ -350,7 +348,7 @@ export async function POST(request: Request) {
         userId: authResult.user.id,
         primaryCalendarId: existingCalendar.id,
       });
-      const { data, error } = await supabase
+      const { error } = await supabase
         .from("external_calendars")
         .update({
           color: body.color ?? existingCalendar.color ?? "blue",
@@ -358,19 +356,24 @@ export async function POST(request: Request) {
           sync_enabled: typeof body.enabled === "boolean" ? body.enabled : existingCalendar.sync_enabled,
           last_sync_error: null,
         })
-        .in("id", matchingCalendarIds)
-        .select("id, sync_enabled, color, visibility")
-        .eq("id", existingCalendar.id)
-        .single();
+        .in("id", matchingCalendarIds);
 
       if (error) throw error;
-      const refetchedCalendar = await refetchStoredGoogleCalendar(supabase, data.id);
+      const refetchedCalendar = await refetchStoredGoogleCalendar(supabase, existingCalendar.id);
       console.info("Google calendar local settings updated", {
-        externalCalendarId: data.id,
+        externalCalendarId: existingCalendar.id,
+        matchingCalendarCount: matchingCalendarIds.length,
         syncEnabled: refetchedCalendar.sync_enabled,
         color: refetchedCalendar.color,
       });
-      return googleJsonResponse({ ok: true, calendarId: data.id, enabled: data.sync_enabled, color: data.color, visibility: data.visibility, calendar: refetchedCalendar });
+      return googleJsonResponse({
+        ok: true,
+        calendarId: existingCalendar.id,
+        enabled: refetchedCalendar.sync_enabled,
+        color: refetchedCalendar.color,
+        visibility: refetchedCalendar.visibility,
+        calendar: refetchedCalendar,
+      });
     }
 
     if (!body?.enabled) {

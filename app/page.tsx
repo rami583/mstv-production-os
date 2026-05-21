@@ -330,6 +330,7 @@ type ExternalEventLink = {
   lastSyncError: string | null;
   calendarName: string;
   calendarColor: string | null;
+  calendarProviderAccountId: string | null;
   calendarProviderType: ExternalCalendarProviderType;
   calendarSyncCapability: ExternalCalendarSyncCapability;
   calendarSyncEnabled: boolean;
@@ -2572,7 +2573,25 @@ function normalizeExternalCalendarIcsUrl(value: string) {
 }
 
 function normalizeProviderCalendarKey(value: string | null | undefined) {
-  return (value ?? "").trim().replace(/\/+$/, "");
+  const trimmed = (value ?? "").trim();
+  if (!trimmed) return "";
+  if (/^https?:\/\//i.test(trimmed) || trimmed.startsWith("/")) {
+    try {
+      return new URL(trimmed, "https://caldav.icloud.com").pathname.replace(/\/+$/, "");
+    } catch {
+      return trimmed.replace(/\/+$/, "");
+    }
+  }
+  return trimmed.replace(/\/+$/, "");
+}
+
+function getExternalCalendarProviderKey(input: {
+  providerType: ExternalCalendarProviderType | null | undefined;
+  providerAccountId: string | null | undefined;
+  providerCalendarId: string | null | undefined;
+}) {
+  if (!input.providerType || !input.providerAccountId || !input.providerCalendarId) return null;
+  return `${input.providerType}:${input.providerAccountId}:${normalizeProviderCalendarKey(input.providerCalendarId)}`;
 }
 
 function getExternalCalendarVisibilityLabel(visibility: ExternalCalendarVisibility) {
@@ -2793,6 +2812,7 @@ function mapExternalEventLink(row: ExternalEventLinkQueryRow): ExternalEventLink
     lastSyncError: row.last_sync_error,
     calendarName: calendar?.name ?? "Calendrier externe",
     calendarColor: calendar?.color ?? null,
+    calendarProviderAccountId: calendar?.provider_account_id ?? null,
     calendarProviderType: normalizeExternalCalendarProviderType(calendar?.provider_type ?? row.provider_type),
     calendarSyncCapability: normalizeExternalCalendarSyncCapability(calendar?.sync_capability ?? "read_only"),
     calendarSyncEnabled: Boolean(calendar?.sync_enabled ?? true),
@@ -2801,6 +2821,10 @@ function mapExternalEventLink(row: ExternalEventLinkQueryRow): ExternalEventLink
 
 function getEventGoogleLinks(event: ProductionEvent) {
   return event.externalLinks.filter((link) => link.providerType === "google" && link.calendarSyncCapability === "bidirectional");
+}
+
+function getPrimaryExternalEventLink(event: ProductionEvent) {
+  return event.externalLinks.find((link) => link.calendarSyncEnabled && Boolean(link.calendarColor)) ?? null;
 }
 
 function getExternalSyncStatusLabel(status: string | null) {
@@ -3430,6 +3454,23 @@ export default function Home() {
     () => new Map(externalCalendars.map((calendar) => [calendar.id, calendar.syncEnabled])),
     [externalCalendars],
   );
+  const externalCalendarProviderStateByKey = useMemo(() => {
+    const stateByKey = new Map<string, { enabled: boolean; color: string | null }>();
+    for (const calendar of externalCalendars) {
+      const key = getExternalCalendarProviderKey({
+        providerType: calendar.providerType,
+        providerAccountId: calendar.providerAccountId,
+        providerCalendarId: calendar.providerCalendarId,
+      });
+      if (!key) continue;
+      const existingState = stateByKey.get(key);
+      stateByKey.set(key, {
+        enabled: (existingState?.enabled ?? true) && calendar.syncEnabled,
+        color: calendar.color ?? existingState?.color ?? null,
+      });
+    }
+    return stateByKey;
+  }, [externalCalendars]);
   const visibleExternalCalendarEvents = useMemo(
     () =>
       externalCalendarEvents.filter((event) =>
@@ -3443,10 +3484,18 @@ export default function Home() {
   );
   const visibleProductionEvents = useMemo(
     () =>
-      events.filter((event) =>
-        event.externalLinks.every((link) => externalCalendarEnabledById.get(link.externalCalendarId) ?? link.calendarSyncEnabled),
-      ),
-    [events, externalCalendarEnabledById],
+      events.filter((event) => event.externalLinks.every((link) => {
+        const exactEnabled = externalCalendarEnabledById.get(link.externalCalendarId);
+        const providerKey = getExternalCalendarProviderKey({
+          providerType: link.calendarProviderType ?? link.providerType,
+          providerAccountId: link.calendarProviderAccountId,
+          providerCalendarId: link.providerCalendarId,
+        });
+        const providerEnabled = providerKey ? externalCalendarProviderStateByKey.get(providerKey)?.enabled : undefined;
+        if (providerEnabled === false) return false;
+        return exactEnabled ?? providerEnabled ?? link.calendarSyncEnabled;
+      })),
+    [events, externalCalendarEnabledById, externalCalendarProviderStateByKey],
   );
   const writableGoogleCalendars = useMemo(
     () =>
@@ -4216,6 +4265,7 @@ export default function Home() {
                 ...link,
                 calendarName: mappedCalendar.name,
                 calendarColor: mappedCalendar.color,
+                calendarProviderAccountId: mappedCalendar.providerAccountId,
                 calendarProviderType: mappedCalendar.providerType,
                 calendarSyncCapability: mappedCalendar.syncCapability,
                 calendarSyncEnabled: mappedCalendar.syncEnabled,
@@ -10708,7 +10758,14 @@ function CalendarMonthGrid({
             const tone = getExternalCalendarTone(event.calendarColor);
             return { key: `external-${event.id}`, className: tone.dot, style: tone.dotStyle };
           }),
-          ...dayEvents.slice(0, 4).map((event) => ({ key: event.id, className: "bg-[#bb2720]" })),
+          ...dayEvents.slice(0, 4).map((event) => {
+            const externalLink = getPrimaryExternalEventLink(event);
+            if (externalLink?.calendarColor) {
+              const tone = getExternalCalendarTone(externalLink.calendarColor);
+              return { key: event.id, className: tone.dot, style: tone.dotStyle };
+            }
+            return { key: event.id, className: "bg-[#bb2720]" };
+          }),
         ].filter(Boolean).slice(0, 4) as { key: string; className: string; style?: React.CSSProperties }[];
 
         return (
@@ -10938,6 +10995,8 @@ function SwipeableCalendarEventRow({
   const duplicateActionVisible = canDuplicate && visibleOffset > 1;
   const stableRowWidthRef = useRef(0);
   const timeRange = formatTimeRange(event.startTime, event.endTime);
+  const externalLink = getPrimaryExternalEventLink(event);
+  const externalTone = getExternalCalendarTone(externalLink?.calendarColor ?? null);
 
   function handlePointerDown(pointerEvent: ReactPointerEvent<HTMLDivElement>) {
     if (!canSwipe) return;
@@ -11097,7 +11156,7 @@ function SwipeableCalendarEventRow({
           isDragging ? "transition-none" : "transition-transform duration-200 ease-out",
         )}
       >
-        <span className="h-full min-h-14 rounded-full bg-[#bb2720]" />
+        <span style={externalTone.stripeStyle} className={cn("h-full min-h-14 rounded-full", externalLink?.calendarColor ? externalTone.stripe : "bg-[#bb2720]")} />
         <span className="min-w-0">
           <span className="block text-base font-semibold leading-snug text-stone-950">{event.clientName}</span>
           <span className="block truncate text-base font-medium text-stone-500">{event.eventName}</span>
