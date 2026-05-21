@@ -14563,7 +14563,6 @@ function ExternalCalendarsSheet({
               <h2 className="text-base font-semibold text-stone-950">
                 {view === "add" ? "Ajouter un calendrier" : view === "detail" ? selectedCalendar?.name ?? "Calendrier" : "Calendriers externes"}
               </h2>
-              <p className="mt-1 text-base font-medium text-stone-500">Fournisseurs connectés et calendriers synchronisés.</p>
             </div>
           </div>
           <button type="button" onClick={onClose} className="rounded-full border border-stone-200 bg-white px-3 py-1.5 text-base font-semibold text-stone-600 transition hover:bg-stone-50">
@@ -14877,8 +14876,7 @@ function ExternalCalendarsListView({
       <div className="space-y-3">
         <div className="flex items-start justify-between gap-3">
           <div>
-            <h3 className="text-base font-semibold text-stone-950">Comptes connectés</h3>
-            <p className="mt-1 text-sm font-semibold text-stone-400">Chaque compte affiche ses calendriers en dessous.</p>
+            <h3 className="text-sm font-semibold text-stone-400">Comptes connectés</h3>
           </div>
           <div className="flex shrink-0 flex-col gap-1.5 sm:flex-row">
             <button
@@ -14975,7 +14973,7 @@ function ExternalCalendarsListView({
                 <div key={account.id} className="rounded-2xl border border-stone-200 bg-white px-3 py-3">
               <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0">
-                      <div className="truncate text-sm font-semibold text-stone-950">Google — {account.email || account.displayName || "Compte Google"}</div>
+                      <div className="truncate text-sm font-semibold text-stone-950">{account.email || account.displayName || "Compte Google"}</div>
                   <div className="mt-0.5 flex flex-wrap items-center gap-1.5 text-xs font-semibold">
                     <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-emerald-700 ring-1 ring-emerald-200">Bidirectionnel</span>
                     <span className="rounded-full bg-white px-2 py-0.5 text-stone-500 ring-1 ring-stone-200">{account.connectionStatus === "connected" ? "Connecté" : account.connectionStatus === "disconnected" ? "Déconnecté" : "Erreur"}</span>
@@ -15095,7 +15093,7 @@ function ExternalCalendarsListView({
               {appleAccounts.map((account) => (
                 <div key={account.id} className="rounded-2xl border border-stone-200 bg-white px-3 py-3">
               <div className="min-w-0">
-                    <div className="truncate text-sm font-semibold text-stone-950">Apple — {account.email || account.displayName || "Compte Apple"}</div>
+                    <div className="truncate text-sm font-semibold text-stone-950">{account.email || account.displayName || "Compte Apple"}</div>
                 <div className="mt-0.5 flex flex-wrap items-center gap-1.5 text-xs font-semibold">
                   <span className="rounded-full bg-white px-2 py-0.5 text-stone-500 ring-1 ring-stone-200">Lecture seule</span>
                   <span className="rounded-full bg-white px-2 py-0.5 text-stone-500 ring-1 ring-stone-200">{account.connectionStatus === "connected" ? "Connecté" : account.connectionStatus === "disconnected" ? "Déconnecté" : "Erreur"}</span>
@@ -15292,7 +15290,7 @@ function ExternalCalendarsListView({
           onClick={onAdd}
           className="mt-3 flex w-full items-center justify-center rounded-2xl border border-dashed border-stone-300 bg-white px-4 py-3 text-base font-semibold text-stone-600 transition hover:bg-stone-50"
         >
-          Ajouter un calendrier
+          Ajouter un flux ICS / Webcal
         </button>
       )}
     </div>
