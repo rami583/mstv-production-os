@@ -9505,7 +9505,6 @@ export default function Home() {
           googleCalendarsByAccountId={googleCalendarsByAccountId}
           googleLoading={googleCalendarLoading}
           connectingGoogle={connectingGoogleCalendar}
-          updatingGoogleKey={updatingGoogleCalendarKey}
           appleAccounts={appleCalendarAccounts}
           appleCalendarsByAccountId={appleCalendarsByAccountId}
           appleLoading={appleCalendarLoading}
@@ -14884,7 +14883,6 @@ function ExternalCalendarsSheet({
   googleCalendarsByAccountId,
   googleLoading,
   connectingGoogle,
-  updatingGoogleKey,
   appleAccounts,
   appleCalendarsByAccountId,
   appleLoading,
@@ -14911,7 +14909,6 @@ function ExternalCalendarsSheet({
   googleCalendarsByAccountId: Record<string, GoogleProviderCalendar[]>;
   googleLoading: boolean;
   connectingGoogle: boolean;
-  updatingGoogleKey: string | null;
   appleAccounts: AppleCalendarAccount[];
   appleCalendarsByAccountId: Record<string, AppleProviderCalendar[]>;
   appleLoading: boolean;
@@ -14943,7 +14940,6 @@ function ExternalCalendarsSheet({
   const [localError, setLocalError] = useState<string | null>(null);
   const selectedCalendar = selectedCalendarId ? calendars.find((calendar) => calendar.id === selectedCalendarId) ?? null : null;
   const selectedCalendarEvents = selectedCalendar ? events.filter((event) => event.externalCalendarId === selectedCalendar.id) : [];
-  const canCreateExternalCalendar = Boolean(profile?.id);
   const isMobileFormView = view === "add" || view === "detail";
 
   useEffect(() => {
@@ -15052,14 +15048,12 @@ function ExternalCalendarsSheet({
           {view === "list" && (
             <ExternalCalendarsListView
               calendars={calendars}
-              events={events}
               permissions={permissions}
               profile={profile}
               googleAccounts={googleAccounts}
               googleCalendarsByAccountId={googleCalendarsByAccountId}
               googleLoading={googleLoading}
               connectingGoogle={connectingGoogle}
-              updatingGoogleKey={updatingGoogleKey}
               appleAccounts={appleAccounts}
               appleCalendarsByAccountId={appleCalendarsByAccountId}
               appleLoading={appleLoading}
@@ -15067,19 +15061,12 @@ function ExternalCalendarsSheet({
               loading={loading}
               error={error}
               syncingCalendarId={syncingCalendarId}
-              canCreate={canCreateExternalCalendar}
               onConnectGoogle={onConnectGoogle}
               onDisconnectGoogle={onDisconnectGoogle}
               onConnectApple={onConnectApple}
               onDisconnectApple={onDisconnectApple}
               onUpdate={onUpdate}
-              onDelete={onDelete}
               onSync={onSync}
-              onAdd={() => {
-                setLocalError(null);
-                setDraft({ name: "", icsUrl: "", color: "", visibility: defaultVisibility });
-                setView("add");
-              }}
             />
           )}
 
@@ -15121,27 +15108,14 @@ function ExternalCalendarColorDot({ color, className }: { color: string | null; 
   return <span style={tone.dotStyle} className={cn("h-3.5 w-3.5 shrink-0 rounded-full", tone.dot, className)} />;
 }
 
-function getExternalCalendarStatusLine(events: ExternalCalendarEvent[]) {
-  const latestSync = events
-    .map((event) => event.lastSyncedAt)
-    .filter(Boolean)
-    .sort()
-    .at(-1);
-
-  if (!latestSync) return "Jamais synchronisé";
-  return `${events.length} événement${events.length > 1 ? "s" : ""} · Synchro ${formatHistoryTimestamp(latestSync)}`;
-}
-
 function ExternalCalendarsListView({
   calendars,
-  events,
   permissions,
   profile,
   googleAccounts,
   googleCalendarsByAccountId,
   googleLoading,
   connectingGoogle,
-  updatingGoogleKey,
   appleAccounts,
   appleCalendarsByAccountId,
   appleLoading,
@@ -15149,25 +15123,20 @@ function ExternalCalendarsListView({
   loading,
   error,
   syncingCalendarId,
-  canCreate,
   onConnectGoogle,
   onDisconnectGoogle,
   onConnectApple,
   onDisconnectApple,
   onUpdate,
-  onDelete,
   onSync,
-  onAdd,
 }: {
   calendars: ExternalCalendar[];
-  events: ExternalCalendarEvent[];
   permissions: AppPermissions;
   profile: UserProfile | null;
   googleAccounts: GoogleCalendarAccount[];
   googleCalendarsByAccountId: Record<string, GoogleProviderCalendar[]>;
   googleLoading: boolean;
   connectingGoogle: boolean;
-  updatingGoogleKey: string | null;
   appleAccounts: AppleCalendarAccount[];
   appleCalendarsByAccountId: Record<string, AppleProviderCalendar[]>;
   appleLoading: boolean;
@@ -15175,19 +15144,14 @@ function ExternalCalendarsListView({
   loading: boolean;
   error: string | null;
   syncingCalendarId: string | null;
-  canCreate: boolean;
   onConnectGoogle: () => Promise<void>;
   onDisconnectGoogle: (account: GoogleCalendarAccount) => Promise<void>;
   onConnectApple: (input: { appleId: string; appPassword: string }) => Promise<void>;
   onDisconnectApple: (account: AppleCalendarAccount) => Promise<void>;
   onUpdate: (calendar: ExternalCalendar, input: { name: string; icsUrl: string; color: string; visibility: ExternalCalendarVisibility; syncEnabled?: boolean }) => Promise<void>;
-  onDelete: (calendar: ExternalCalendar) => Promise<void>;
   onSync: (calendar: ExternalCalendar) => Promise<ExternalCalendarSyncResult>;
-  onAdd: () => void;
 }) {
   const [googleSyncErrorByCalendarId, setGoogleSyncErrorByCalendarId] = useState<Record<string, string>>({});
-  const [appleSyncErrorByCalendarId, setAppleSyncErrorByCalendarId] = useState<Record<string, string>>({});
-  const [icsSyncErrorByCalendarId, setIcsSyncErrorByCalendarId] = useState<Record<string, string>>({});
   const [appleConnectOpen, setAppleConnectOpen] = useState(false);
   const [appleDraft, setAppleDraft] = useState({ appleId: "", appPassword: "" });
   const [appleConnectError, setAppleConnectError] = useState<string | null>(null);
@@ -15241,47 +15205,6 @@ function ExternalCalendarsListView({
     }
   }
 
-  async function handleApplePullSync(providerCalendar: AppleProviderCalendar) {
-    const calendar = calendars.find((item) => item.id === providerCalendar.externalCalendarId)
-      ?? calendars.find((item) => item.providerType === "apple_caldav" && item.providerCalendarId === providerCalendar.providerCalendarId)
-      ?? null;
-    const key = providerCalendar.externalCalendarId ?? providerCalendar.providerCalendarId;
-
-    setAppleSyncErrorByCalendarId((current) => ({ ...current, [key]: "" }));
-
-    if (!calendar) {
-      setAppleSyncErrorByCalendarId((current) => ({
-        ...current,
-        [key]: "Calendrier Apple indisponible dans MSTV. Rouvrez ce panneau ou reconnectez Apple Calendar.",
-      }));
-      return;
-    }
-
-    try {
-      await onSync(calendar);
-    } catch (syncError) {
-      setAppleSyncErrorByCalendarId((current) => ({
-        ...current,
-        [key]: getUserFacingErrorMessage(syncError, "Impossible de synchroniser Apple Calendar."),
-      }));
-    }
-  }
-
-  async function handleIcsPullSync(calendar: ExternalCalendar) {
-    setIcsSyncErrorByCalendarId((current) => ({ ...current, [calendar.id]: "" }));
-
-    try {
-      await onSync(calendar);
-    } catch (syncError) {
-      setIcsSyncErrorByCalendarId((current) => ({
-        ...current,
-        [calendar.id]: getUserFacingErrorMessage(syncError, "Impossible de synchroniser ce calendrier."),
-      }));
-    }
-  }
-
-  const icsCalendars = calendars.filter((calendar) => calendar.providerType === "ics_read_only");
-
   function handleProviderButtonClick(provider: "google" | "apple") {
     if (provider === "google") {
       if (googleConnected) {
@@ -15317,14 +15240,6 @@ function ExternalCalendarsListView({
     } finally {
       setDisconnectingProvider(null);
     }
-  }
-
-  function getCalendarStatusLine(calendar: ExternalCalendar | null) {
-    if (!calendar) return "";
-    if (calendar.lastSyncFinishedAt) return `Dernière synchro ${formatHistoryTimestamp(calendar.lastSyncFinishedAt)}`;
-    const calendarEvents = events.filter((event) => event.externalCalendarId === calendar.id);
-    if (calendarEvents.length > 0) return getExternalCalendarStatusLine(calendarEvents);
-    return "";
   }
 
   function getGoogleStoredCalendar(providerCalendar: GoogleProviderCalendar) {
@@ -15367,18 +15282,6 @@ function ExternalCalendarsListView({
     }
   }
 
-  async function deleteStoredCalendar(calendar: ExternalCalendar) {
-    setCalendarActionErrorById((current) => ({ ...current, [calendar.id]: "" }));
-    try {
-      await onDelete(calendar);
-    } catch (deleteError) {
-      setCalendarActionErrorById((current) => ({
-        ...current,
-        [calendar.id]: getUserFacingErrorMessage(deleteError, "Impossible de supprimer ce calendrier."),
-      }));
-    }
-  }
-
   function ActivationToggle({ enabled, disabled, onToggle }: { enabled: boolean; disabled: boolean; onToggle: () => void }) {
     return (
       <button
@@ -15392,7 +15295,7 @@ function ExternalCalendarsListView({
             : "bg-white text-stone-400 ring-stone-200 hover:bg-stone-50",
         )}
       >
-        {enabled ? "Activé" : "Désactivé"}
+        {enabled ? "Désactiver" : "Activer"}
       </button>
     );
   }
@@ -15517,7 +15420,6 @@ function ExternalCalendarsListView({
                                     }}
                                   />
                                 </div>
-                                <div className="mt-1 text-xs font-semibold text-stone-400">{getCalendarStatusLine(storedCalendar)}</div>
                               </div>
                           </div>
                             <div className="flex shrink-0 flex-wrap items-center gap-1.5" onClick={(event) => event.stopPropagation()}>
@@ -15598,12 +15500,8 @@ function ExternalCalendarsListView({
                 {getVisibleAppleProviderCalendars(account.id).map((calendar) => {
                       const storedCalendar = getAppleStoredCalendar(calendar);
                       const canManageStored = storedCalendar ? canManageExternalCalendar(permissions, profile, storedCalendar) : false;
-                  const syncKey = calendar.externalCalendarId ?? calendar.providerCalendarId;
                       const appleEnabled = storedCalendar?.syncEnabled ?? calendar.enabled;
                   const canToggleStored = Boolean(storedCalendar && canManageStored);
-                  const isPullSyncing = Boolean(calendar.externalCalendarId) && syncingCalendarId === calendar.externalCalendarId;
-                  const canPullSync = appleEnabled && Boolean(calendar.externalCalendarId);
-                  const syncError = appleSyncErrorByCalendarId[syncKey];
                   return (
                         <div
                           key={calendar.providerCalendarId}
@@ -15626,19 +15524,8 @@ function ExternalCalendarsListView({
                                     }}
                                   />
                                 </div>
-                                <div className="mt-1 text-xs font-semibold text-stone-400">{getCalendarStatusLine(storedCalendar)}</div>
                           </div>
                         </div>
-                            <div className="flex shrink-0 flex-wrap items-center gap-1.5" onClick={(event) => event.stopPropagation()}>
-                        <button
-                          type="button"
-                          onClick={() => void handleApplePullSync(calendar)}
-                          disabled={!canPullSync || isPullSyncing}
-                          className="shrink-0 rounded-full border border-stone-200 bg-stone-50 px-2.5 py-1 text-xs font-semibold text-stone-600 transition hover:bg-stone-100 disabled:border-stone-200 disabled:bg-stone-50 disabled:text-stone-300"
-                        >
-                          {isPullSyncing ? "En cours..." : "Synchroniser depuis Apple"}
-                        </button>
-                      </div>
                           </div>
                       {storedCalendar && (
                         <div className="mt-2 grid gap-2 sm:grid-cols-[auto_1fr_auto_auto] sm:items-center">
@@ -15660,7 +15547,6 @@ function ExternalCalendarsListView({
                         </div>
                       )}
                       {storedCalendar && calendarActionErrorById[storedCalendar.id] && <p className="mt-1.5 text-xs font-semibold text-rose-600">{calendarActionErrorById[storedCalendar.id]}</p>}
-                      {syncError && <p className="mt-1.5 text-xs font-semibold text-rose-600">{syncError}</p>}
                     </div>
                   );
                 })}
@@ -15674,74 +15560,7 @@ function ExternalCalendarsListView({
             </section>
           </div>
 
-          {icsCalendars.length > 0 && (
-            <section className="space-y-2">
-              <div className="min-w-0">
-                <h4 className="text-xs font-semibold uppercase tracking-wide text-stone-400">ICS / Webcal</h4>
-              </div>
-              <div className="mt-3 space-y-1.5 border-l border-stone-200 pl-3">
-                {icsCalendars.map((calendar) => {
-                  const canManageStored = canManageExternalCalendar(permissions, profile, calendar);
-                  const isPullSyncing = syncingCalendarId === calendar.id;
-                  const syncError = icsSyncErrorByCalendarId[calendar.id];
-                  return (
-                    <div
-                      key={calendar.id}
-                      className="rounded-xl bg-stone-50 px-3 py-2 ring-1 ring-stone-200"
-                    >
-                      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-                        <div className="flex min-w-0 items-start gap-2">
-                          <ExternalCalendarColorDot color={calendar.color} className="mt-0.5" />
-                          <div className="min-w-0">
-                            <div className="truncate text-sm font-semibold text-stone-800">{calendar.name}</div>
-                            <div className="mt-1 flex flex-wrap items-center gap-1.5 text-xs font-semibold">
-                              <ActivationToggle
-                                enabled={calendar.syncEnabled}
-                                disabled={!canManageStored}
-                                onToggle={() => void updateStoredCalendar(calendar, { syncEnabled: !calendar.syncEnabled })}
-                              />
-                            </div>
-                            <div className="mt-1 text-xs font-semibold text-stone-400">{getCalendarStatusLine(calendar)}</div>
-                          </div>
-                        </div>
-                        <div className="flex shrink-0 flex-wrap items-center gap-1.5" onClick={(event) => event.stopPropagation()}>
-                          <button
-                            type="button"
-                            onClick={() => void handleIcsPullSync(calendar)}
-                            disabled={!calendar.syncEnabled || isPullSyncing}
-                            className="rounded-full border border-stone-200 bg-white px-2.5 py-1 text-xs font-semibold text-stone-600 transition hover:bg-stone-100 disabled:bg-stone-50 disabled:text-stone-300"
-                          >
-                            {isPullSyncing ? "En cours..." : "Synchroniser"}
-                          </button>
-                        </div>
-                      </div>
-                      <div className="mt-2 grid gap-2 sm:grid-cols-[auto_1fr_auto_auto] sm:items-center">
-                        <ExternalCalendarColorPalette
-                          value={calendar.color ?? "blue"}
-                          onChange={(nextColor) => void updateStoredCalendar(calendar, { color: nextColor })}
-                          disabled={!canManageStored}
-                        />
-                        <select
-                          value={calendar.visibility}
-                          onChange={(event) => void updateStoredCalendar(calendar, { visibility: event.target.value as ExternalCalendarVisibility })}
-                          disabled={!canManageStored || !permissions.canManageEvents}
-                          className="h-10 rounded-xl border border-stone-200 bg-white px-3 text-sm font-semibold text-stone-700 outline-none"
-                        >
-                          {permissions.canManageEvents && <option value="admin_only">Admin uniquement</option>}
-                          {permissions.canManageEvents && <option value="team">Toute l'équipe</option>}
-                          <option value="private">Privé</option>
-                        </select>
-                      </div>
-                      {calendarActionErrorById[calendar.id] && <p className="mt-1.5 text-xs font-semibold text-rose-600">{calendarActionErrorById[calendar.id]}</p>}
-                      {syncError && <p className="mt-1.5 text-xs font-semibold text-rose-600">{syncError}</p>}
-                    </div>
-                  );
-                })}
-              </div>
-            </section>
-          )}
-
-          {!googleConnected && !appleConnected && icsCalendars.length === 0 && !error && (
+          {!googleConnected && !appleConnected && !error && (
             <div className="rounded-2xl bg-stone-50 px-4 py-3 text-base font-medium text-stone-500">Aucun calendrier externe pour le moment.</div>
           )}
         </div>
@@ -15753,15 +15572,6 @@ function ExternalCalendarsListView({
           onClose={() => setDisconnectRequest(null)}
           onConfirm={() => void confirmProviderDisconnect()}
         />
-      )}
-      {canCreate && (
-        <button
-          type="button"
-          onClick={onAdd}
-          className="mt-3 flex w-full items-center justify-center rounded-2xl border border-dashed border-stone-300 bg-white px-4 py-3 text-base font-semibold text-stone-600 transition hover:bg-stone-50"
-        >
-          Ajouter un flux ICS / Webcal
-        </button>
       )}
     </div>
   );
@@ -15983,9 +15793,6 @@ function ExternalCalendarSettingsDetail({
           />
           <span className="rounded-full bg-indigo-50 px-2.5 py-1 text-sm font-semibold text-indigo-700">{getExternalCalendarVisibilityLabel(calendar.visibility)}</span>
         </div>
-        <p className="text-sm font-semibold text-stone-400">
-          {getExternalCalendarStatusLine(events)}
-        </p>
         <div
           className={cn(
             "rounded-2xl border px-3 py-2 text-sm font-semibold",
