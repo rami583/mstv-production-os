@@ -11,14 +11,34 @@ import {
 export const runtime = "nodejs";
 
 type SyncFailureKind = "google_auth" | "google_api" | "supabase_write" | "supabase_read" | "generic";
+type SyncFailureStage =
+  | "google_auth"
+  | "google_api"
+  | "supabase_read"
+  | "supabase_insert"
+  | "supabase_update"
+  | "supabase_upsert"
+  | "supabase_write"
+  | "unknown";
+
+type SafeSupabaseError = {
+  message: string;
+  code: string | null;
+  details: string | null;
+  hint: string | null;
+};
 
 class GooglePullSyncError extends Error {
   kind: SyncFailureKind;
+  stage: SyncFailureStage;
+  safeError: SafeSupabaseError | null;
 
-  constructor(kind: SyncFailureKind, message: string) {
+  constructor(kind: SyncFailureKind, message: string, stage: SyncFailureStage = "unknown", safeError: SafeSupabaseError | null = null) {
     super(message);
     this.name = "GooglePullSyncError";
     this.kind = kind;
+    this.stage = stage;
+    this.safeError = safeError;
   }
 }
 
@@ -81,6 +101,44 @@ function mapGoogleEventToMstvEvent(event: GoogleEvent) {
   };
 }
 
+function getGoogleEventDiagnostic(event: GoogleEvent) {
+  return {
+    id: event.id,
+    summary: event.summary ?? null,
+    start: event.start ?? null,
+    end: event.end ?? null,
+    updated: event.updated ?? null,
+  };
+}
+
+function getMstvPayloadDiagnostics(values: ReturnType<typeof mapGoogleEventToMstvEvent>) {
+  return {
+    payload: values,
+    requiredFields: {
+      client_name: {
+        present: Boolean(values.client_name),
+        value: values.client_name,
+      },
+      event_name: {
+        present: Boolean(values.event_name),
+        value: values.event_name,
+      },
+      date: {
+        present: Boolean(values.date),
+        value: values.date,
+        looksLikeDate: /^\d{4}-\d{2}-\d{2}$/.test(values.date),
+      },
+    },
+    timeFields: {
+      client_arrival_time: values.client_arrival_time,
+      start_time: values.start_time,
+      end_time: values.end_time,
+      end_of_day_time: values.end_of_day_time,
+    },
+    nulls: Object.fromEntries(Object.entries(values).map(([key, value]) => [key, value === null])),
+  };
+}
+
 async function fetchGoogleEvents(accessToken: string, providerCalendarId: string) {
   const events: GoogleEvent[] = [];
   let pageToken: string | undefined;
@@ -130,8 +188,15 @@ async function fetchGoogleEvents(accessToken: string, providerCalendarId: string
   return events;
 }
 
-function getSafeSupabaseError(error: unknown) {
-  if (!error || typeof error !== "object") return { message: String(error) };
+function getSafeSupabaseError(error: unknown): SafeSupabaseError {
+  if (!error || typeof error !== "object") {
+    return {
+      message: String(error),
+      code: null,
+      details: null,
+      hint: null,
+    };
+  }
   const maybeError = error as { message?: unknown; code?: unknown; details?: unknown; hint?: unknown };
   return {
     message: typeof maybeError.message === "string" ? maybeError.message : String(error),
@@ -143,11 +208,19 @@ function getSafeSupabaseError(error: unknown) {
 
 function throwSupabaseSyncError(kind: "supabase_read" | "supabase_write", step: string, error: unknown): never {
   const safeError = getSafeSupabaseError(error);
+  const stage: SyncFailureStage = step.startsWith("insert_")
+    ? "supabase_insert"
+    : step.startsWith("update_") || step.startsWith("mark_")
+      ? "supabase_update"
+      : kind === "supabase_read"
+        ? "supabase_read"
+        : "supabase_write";
   console.error("Google pull sync Supabase step failed", {
     step,
+    stage,
     ...safeError,
   });
-  throw new GooglePullSyncError(kind, "Google a été lu, mais MSTV n’a pas pu enregistrer les événements.");
+  throw new GooglePullSyncError(kind, "Google a été lu, mais MSTV n’a pas pu enregistrer les événements.", stage, safeError);
 }
 
 function getErrorMessage(error: unknown) {
@@ -233,7 +306,7 @@ export async function POST(request: Request) {
       console.error("Google pull sync auth/token step failed", {
         message: getErrorMessage(authError),
       });
-      throw new GooglePullSyncError("google_auth", "Autorisation Google expirée. Reconnectez Google Calendar.");
+      throw new GooglePullSyncError("google_auth", "Autorisation Google expirée. Reconnectez Google Calendar.", "google_auth");
     }
     const googleEvents = await fetchGoogleEvents(accessToken, calendar.provider_calendar_id);
 
@@ -256,6 +329,23 @@ export async function POST(request: Request) {
       const values = mapGoogleEventToMstvEvent(googleEvent);
 
       if (!existingLink) {
+        console.info("Google pull sync pre-insert events diagnostics", {
+          stage: "supabase_insert",
+          table: "events",
+          calendarId: calendar.id,
+          providerCalendarId: calendar.provider_calendar_id,
+          userId: authResult.user.id,
+          googleEvent: getGoogleEventDiagnostic(googleEvent),
+          mstvPayload: getMstvPayloadDiagnostics(values),
+          checks: {
+            hasRequiredClientName: Boolean(values.client_name),
+            hasRequiredEventName: Boolean(values.event_name),
+            hasRequiredDate: Boolean(values.date),
+            dateFormat: values.date,
+            startAt: values.start_time,
+            endAt: values.end_time,
+          },
+        });
         console.info("Google pull sync creating missing MSTV event", {
           externalCalendarId: calendar.id,
           googleEventIdPresent: Boolean(googleEvent.id),
@@ -270,7 +360,7 @@ export async function POST(request: Request) {
         if (insertError) throwSupabaseSyncError("supabase_write", "insert_mstv_event_from_google", insertError);
 
         const now = new Date().toISOString();
-        const { error: linkInsertError } = await supabase.from("external_event_links").insert({
+        const linkInsertPayload = {
           event_id: insertedEvent.id,
           external_calendar_id: calendar.id,
           provider_type: "google",
@@ -283,7 +373,28 @@ export async function POST(request: Request) {
           last_synced_at: now,
           last_external_updated_at: providerUpdatedAt,
           raw_external_event: googleEvent,
+        };
+        console.info("Google pull sync pre-insert external_event_links diagnostics", {
+          stage: "supabase_insert",
+          table: "external_event_links",
+          calendarId: calendar.id,
+          userId: authResult.user.id,
+          googleEvent: getGoogleEventDiagnostic(googleEvent),
+          linkPayload: {
+            ...linkInsertPayload,
+            raw_external_event: getGoogleEventDiagnostic(googleEvent),
+          },
+          checks: {
+            eventIdPresent: Boolean(linkInsertPayload.event_id),
+            externalCalendarIdPresent: Boolean(linkInsertPayload.external_calendar_id),
+            providerType: linkInsertPayload.provider_type,
+            providerCalendarIdPresent: Boolean(linkInsertPayload.provider_calendar_id),
+            externalEventIdPresent: Boolean(linkInsertPayload.external_event_id),
+            syncStatus: linkInsertPayload.sync_status,
+            lastProviderUpdatedAt: linkInsertPayload.last_external_updated_at,
+          },
         });
+        const { error: linkInsertError } = await supabase.from("external_event_links").insert(linkInsertPayload);
         if (linkInsertError) throwSupabaseSyncError("supabase_write", "insert_external_event_link", linkInsertError);
         console.info("Google pull sync created MSTV event and link", {
           eventId: insertedEvent.id,
@@ -335,6 +446,23 @@ export async function POST(request: Request) {
       }
 
       if (providerChanged) {
+        console.info("Google pull sync pre-update events diagnostics", {
+          stage: "supabase_update",
+          table: "events",
+          calendarId: calendar.id,
+          userId: authResult.user.id,
+          eventId: localEvent.id,
+          googleEvent: getGoogleEventDiagnostic(googleEvent),
+          mstvPayload: getMstvPayloadDiagnostics(values),
+          checks: {
+            hasRequiredClientName: Boolean(values.client_name),
+            hasRequiredEventName: Boolean(values.event_name),
+            hasRequiredDate: Boolean(values.date),
+            dateFormat: values.date,
+            startAt: values.start_time,
+            endAt: values.end_time,
+          },
+        });
         console.info("Google pull sync updating MSTV event from Google", {
           eventId: localEvent.id,
           linkId: existingLink.id,
@@ -350,9 +478,7 @@ export async function POST(request: Request) {
         if (updateError) throwSupabaseSyncError("supabase_write", "update_mstv_event_from_google", updateError);
 
         const now = new Date().toISOString();
-        const { error: linkUpdateError } = await supabase
-          .from("external_event_links")
-          .update({
+        const linkUpdatePayload = {
             sync_status: "synced",
             local_updated_at: updatedEvent.updated_at,
             last_synced_at: now,
@@ -362,7 +488,27 @@ export async function POST(request: Request) {
             last_sync_error: null,
             raw_external_event: googleEvent,
             updated_at: now,
-          })
+          };
+        console.info("Google pull sync pre-update external_event_links diagnostics", {
+          stage: "supabase_update",
+          table: "external_event_links",
+          calendarId: calendar.id,
+          userId: authResult.user.id,
+          linkId: existingLink.id,
+          googleEvent: getGoogleEventDiagnostic(googleEvent),
+          linkPayload: {
+            ...linkUpdatePayload,
+            raw_external_event: getGoogleEventDiagnostic(googleEvent),
+          },
+          checks: {
+            syncStatus: linkUpdatePayload.sync_status,
+            lastProviderUpdatedAt: linkUpdatePayload.last_external_updated_at,
+            localUpdatedAt: linkUpdatePayload.local_updated_at,
+          },
+        });
+        const { error: linkUpdateError } = await supabase
+          .from("external_event_links")
+          .update(linkUpdatePayload)
           .eq("id", existingLink.id);
         if (linkUpdateError) throwSupabaseSyncError("supabase_write", "update_external_event_link_after_pull", linkUpdateError);
         console.info("Google pull sync updated MSTV event and link", {
@@ -408,7 +554,17 @@ export async function POST(request: Request) {
       message,
       technicalMessage: getErrorMessage(error),
       kind: error instanceof GooglePullSyncError ? error.kind : "unknown",
+      stage: error instanceof GooglePullSyncError ? error.stage : "unknown",
+      error: error instanceof GooglePullSyncError ? error.safeError : null,
     });
-    return googleJsonResponse({ error: message }, { status: 500 });
+    return googleJsonResponse(
+      {
+        success: false,
+        stage: error instanceof GooglePullSyncError ? error.stage : "unknown",
+        error: error instanceof GooglePullSyncError && error.safeError ? error.safeError : { message },
+        message,
+      },
+      { status: 500 },
+    );
   }
 }
