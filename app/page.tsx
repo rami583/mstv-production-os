@@ -2815,7 +2815,7 @@ function mapExternalEventLink(row: ExternalEventLinkQueryRow): ExternalEventLink
     calendarProviderAccountId: calendar?.provider_account_id ?? null,
     calendarProviderType: normalizeExternalCalendarProviderType(calendar?.provider_type ?? row.provider_type),
     calendarSyncCapability: normalizeExternalCalendarSyncCapability(calendar?.sync_capability ?? "read_only"),
-    calendarSyncEnabled: Boolean(calendar?.sync_enabled ?? true),
+    calendarSyncEnabled: Boolean(calendar?.sync_enabled ?? false),
   };
 }
 
@@ -3321,6 +3321,7 @@ export default function Home() {
   const [appleCalendarLoading, setAppleCalendarLoading] = useState(false);
   const [connectingAppleCalendar, setConnectingAppleCalendar] = useState(false);
   const [cleaningAppleDuplicates, setCleaningAppleDuplicates] = useState(false);
+  const [diagnosingAppleDirection, setDiagnosingAppleDirection] = useState(false);
   const [googleAutoSyncStatus, setGoogleAutoSyncStatus] = useState<GoogleAutoSyncStatus>({
     state: "idle",
     lastSyncedAt: null,
@@ -4435,6 +4436,45 @@ export default function Home() {
       setExternalCalendarSettingsError(getUserFacingErrorMessage(cleanupError, "Impossible de nettoyer les doublons Apple."));
     } finally {
       setCleaningAppleDuplicates(false);
+    }
+  }
+
+  async function diagnoseAppleDirectionEvents() {
+    if (!authSession) throw new Error(sessionExpiredMessage);
+
+    setDiagnosingAppleDirection(true);
+    setExternalCalendarSettingsError(null);
+    try {
+      const accessToken = await getServerApiAccessToken(authSession.access_token);
+      const response = await fetch(getAppApiUrl("/api/calendar/apple/diagnose-direction", "Diagnostic Apple Direction momentanément indisponible."), {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${accessToken}`,
+        },
+        body: JSON.stringify({ cleanup: true }),
+      });
+      const payload = (await response.json().catch(() => null)) as {
+        error?: string;
+        directionCalendars?: unknown[];
+        events?: unknown[];
+        hiddenEventIds?: string[];
+      } | null;
+
+      if (!response.ok) {
+        throw new Error(payload?.error ?? "Impossible de diagnostiquer Direction Apple.");
+      }
+
+      console.info("Diagnostic Direction Apple", payload);
+      removeLocalStorageKey(`${cachedAppDataKeyPrefix}${authSession.user.id}`);
+      await refreshExternalCalendarSettings();
+      await refreshAppleCalendarAccounts();
+      await reloadData(selectedId, { silent: true });
+    } catch (diagnosticError) {
+      console.error("Apple Direction diagnostic failed", diagnosticError);
+      setExternalCalendarSettingsError(getUserFacingErrorMessage(diagnosticError, "Impossible de diagnostiquer Direction Apple."));
+    } finally {
+      setDiagnosingAppleDirection(false);
     }
   }
 
@@ -9308,6 +9348,7 @@ export default function Home() {
           appleLoading={appleCalendarLoading}
           connectingApple={connectingAppleCalendar}
           cleaningAppleDuplicates={cleaningAppleDuplicates}
+          diagnosingAppleDirection={diagnosingAppleDirection}
           loading={externalCalendarSettingsLoading}
           error={externalCalendarSettingsError}
           syncingCalendarId={syncingExternalCalendarId}
@@ -9320,6 +9361,7 @@ export default function Home() {
           onToggleGoogleCalendar={setGoogleCalendarSyncEnabled}
           onConnectApple={connectAppleCalendar}
           onCleanupAppleDuplicates={cleanupAppleCalendarDuplicates}
+          onDiagnoseAppleDirection={diagnoseAppleDirectionEvents}
           onDelete={async (calendar) => {
             try {
               await deleteExternalCalendar(calendar);
@@ -14689,6 +14731,7 @@ function ExternalCalendarsSheet({
   appleLoading,
   connectingApple,
   cleaningAppleDuplicates,
+  diagnosingAppleDirection,
   loading,
   error,
   syncingCalendarId,
@@ -14701,6 +14744,7 @@ function ExternalCalendarsSheet({
   onToggleGoogleCalendar,
   onConnectApple,
   onCleanupAppleDuplicates,
+  onDiagnoseAppleDirection,
   onDelete,
   onSync,
 }: {
@@ -14718,6 +14762,7 @@ function ExternalCalendarsSheet({
   appleLoading: boolean;
   connectingApple: boolean;
   cleaningAppleDuplicates: boolean;
+  diagnosingAppleDirection: boolean;
   loading: boolean;
   error: string | null;
   syncingCalendarId: string | null;
@@ -14730,6 +14775,7 @@ function ExternalCalendarsSheet({
   onToggleGoogleCalendar: (account: GoogleCalendarAccount, calendar: GoogleProviderCalendar, enabled: boolean) => Promise<void>;
   onConnectApple: (input: { appleId: string; appPassword: string }) => Promise<void>;
   onCleanupAppleDuplicates: () => Promise<void>;
+  onDiagnoseAppleDirection: () => Promise<void>;
   onDelete: (calendar: ExternalCalendar) => Promise<void>;
   onSync: (calendar: ExternalCalendar) => Promise<ExternalCalendarSyncResult>;
 }) {
@@ -14868,6 +14914,7 @@ function ExternalCalendarsSheet({
               appleLoading={appleLoading}
               connectingApple={connectingApple}
               cleaningAppleDuplicates={cleaningAppleDuplicates}
+              diagnosingAppleDirection={diagnosingAppleDirection}
               loading={loading}
               error={error}
               syncingCalendarId={syncingCalendarId}
@@ -14876,6 +14923,7 @@ function ExternalCalendarsSheet({
               onDisconnectGoogle={onDisconnectGoogle}
               onConnectApple={onConnectApple}
               onCleanupAppleDuplicates={onCleanupAppleDuplicates}
+              onDiagnoseAppleDirection={onDiagnoseAppleDirection}
               onUpdate={onUpdate}
               onDelete={onDelete}
               onSync={onSync}
@@ -14951,6 +14999,7 @@ function ExternalCalendarsListView({
   appleLoading,
   connectingApple,
   cleaningAppleDuplicates,
+  diagnosingAppleDirection,
   loading,
   error,
   syncingCalendarId,
@@ -14959,6 +15008,7 @@ function ExternalCalendarsListView({
   onDisconnectGoogle,
   onConnectApple,
   onCleanupAppleDuplicates,
+  onDiagnoseAppleDirection,
   onUpdate,
   onDelete,
   onSync,
@@ -14978,6 +15028,7 @@ function ExternalCalendarsListView({
   appleLoading: boolean;
   connectingApple: boolean;
   cleaningAppleDuplicates: boolean;
+  diagnosingAppleDirection: boolean;
   loading: boolean;
   error: string | null;
   syncingCalendarId: string | null;
@@ -14986,6 +15037,7 @@ function ExternalCalendarsListView({
   onDisconnectGoogle: (account: GoogleCalendarAccount) => Promise<void>;
   onConnectApple: (input: { appleId: string; appPassword: string }) => Promise<void>;
   onCleanupAppleDuplicates: () => Promise<void>;
+  onDiagnoseAppleDirection: () => Promise<void>;
   onUpdate: (calendar: ExternalCalendar, input: { name: string; icsUrl: string; color: string; visibility: ExternalCalendarVisibility; syncEnabled?: boolean }) => Promise<void>;
   onDelete: (calendar: ExternalCalendar) => Promise<void>;
   onSync: (calendar: ExternalCalendar) => Promise<ExternalCalendarSyncResult>;
@@ -15380,14 +15432,24 @@ function ExternalCalendarsListView({
               <div className="flex items-center justify-between gap-3">
                 <h4 className="text-xs font-semibold uppercase tracking-wide text-stone-400">Apple</h4>
                 {appleAccounts.length > 0 && (
-                  <button
-                    type="button"
-                    onClick={() => void onCleanupAppleDuplicates()}
-                    disabled={cleaningAppleDuplicates}
-                    className="rounded-full border border-stone-200 bg-white px-2.5 py-1 text-xs font-semibold text-stone-500 transition hover:bg-stone-100 disabled:text-stone-300"
-                  >
-                    {cleaningAppleDuplicates ? "Nettoyage..." : "Nettoyer les doublons Apple"}
-                  </button>
+                  <div className="flex shrink-0 flex-wrap items-center justify-end gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => void onDiagnoseAppleDirection()}
+                      disabled={diagnosingAppleDirection}
+                      className="rounded-full border border-amber-200 bg-amber-50 px-2.5 py-1 text-xs font-semibold text-amber-800 transition hover:bg-amber-100 disabled:border-stone-200 disabled:bg-stone-50 disabled:text-stone-300"
+                    >
+                      {diagnosingAppleDirection ? "Diagnostic..." : "Diagnostiquer Direction Apple"}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => void onCleanupAppleDuplicates()}
+                      disabled={cleaningAppleDuplicates}
+                      className="rounded-full border border-stone-200 bg-white px-2.5 py-1 text-xs font-semibold text-stone-500 transition hover:bg-stone-100 disabled:text-stone-300"
+                    >
+                      {cleaningAppleDuplicates ? "Nettoyage..." : "Nettoyer les doublons Apple"}
+                    </button>
+                  </div>
                 )}
               </div>
           {appleLoading && <div className="rounded-2xl bg-stone-50 px-3 py-2 text-sm font-semibold text-stone-400">Chargement Apple Calendar...</div>}

@@ -104,7 +104,7 @@ export function normalizeCalDavCalendarKey(value: string | null | undefined) {
   return trimmed.replace(/\/+$/, "");
 }
 
-function normalizeAppleCalendarNameKey(value: string | null | undefined) {
+export function normalizeAppleCalendarNameKey(value: string | null | undefined) {
   return (value ?? "")
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "")
@@ -116,7 +116,7 @@ function normalizeAppleCalendarNameKey(value: string | null | undefined) {
     .replace(/\s+/g, " ");
 }
 
-function isDirectionCalendarName(value: string | null | undefined) {
+export function isDirectionCalendarName(value: string | null | undefined) {
   return normalizeAppleCalendarNameKey(value) === "direction";
 }
 
