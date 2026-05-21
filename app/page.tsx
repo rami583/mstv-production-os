@@ -98,6 +98,10 @@ type ExternalCalendarSyncProgress = {
 type ExternalCalendarSyncResult = {
   synced: number;
   total: number;
+  created?: number;
+  updated?: number;
+  unchanged?: number;
+  conflicts?: number;
 };
 
 const EXTERNAL_CALENDAR_UPSERT_BATCH_SIZE = 250;
@@ -4373,17 +4377,19 @@ export default function Home() {
           },
           body: JSON.stringify({ externalCalendarId: calendar.id }),
         });
-        const syncPayload = (await response.json().catch(() => null)) as (ExternalCalendarSyncResult & { error?: string; conflicts?: number }) | null;
+        const syncPayload = (await response.json().catch(() => null)) as (ExternalCalendarSyncResult & { error?: string }) | null;
         if (!response.ok) {
           throw new Error(syncPayload?.error ?? "Impossible de synchroniser Google Calendar.");
         }
-        if ((syncPayload?.conflicts ?? 0) > 0) {
-          throw new Error("Conflit de synchronisation détecté. Vérifiez l’événement avant de continuer.");
-        }
         await refreshExternalCalendarSettings();
+        await reloadData(selectedId, { silent: true });
         return {
           synced: syncPayload?.synced ?? 0,
           total: syncPayload?.total ?? 0,
+          created: syncPayload?.created ?? 0,
+          updated: syncPayload?.updated ?? 0,
+          unchanged: syncPayload?.unchanged ?? 0,
+          conflicts: syncPayload?.conflicts ?? 0,
         };
       }
 
@@ -14303,10 +14309,12 @@ function ExternalCalendarsSheet({
               updatingGoogleKey={updatingGoogleKey}
               loading={loading}
               error={error}
+              syncingCalendarId={syncingCalendarId}
               canCreate={canCreateExternalCalendar}
               onConnectGoogle={onConnectGoogle}
               onDisconnectGoogle={onDisconnectGoogle}
               onToggleGoogleCalendar={onToggleGoogleCalendar}
+              onSync={onSync}
               onSelect={(calendar) => {
                 setLocalError(null);
                 setSelectedCalendarId(calendar.id);
@@ -14380,10 +14388,12 @@ function ExternalCalendarsListView({
   updatingGoogleKey,
   loading,
   error,
+  syncingCalendarId,
   canCreate,
   onConnectGoogle,
   onDisconnectGoogle,
   onToggleGoogleCalendar,
+  onSync,
   onSelect,
   onAdd,
 }: {
@@ -14397,13 +14407,49 @@ function ExternalCalendarsListView({
   updatingGoogleKey: string | null;
   loading: boolean;
   error: string | null;
+  syncingCalendarId: string | null;
   canCreate: boolean;
   onConnectGoogle: () => Promise<void>;
   onDisconnectGoogle: (account: GoogleCalendarAccount) => Promise<void>;
   onToggleGoogleCalendar: (account: GoogleCalendarAccount, calendar: GoogleProviderCalendar, enabled: boolean) => Promise<void>;
+  onSync: (calendar: ExternalCalendar) => Promise<ExternalCalendarSyncResult>;
   onSelect: (calendar: ExternalCalendar) => void;
   onAdd: () => void;
 }) {
+  const [googleSyncSummaryByCalendarId, setGoogleSyncSummaryByCalendarId] = useState<Record<string, string>>({});
+  const [googleSyncErrorByCalendarId, setGoogleSyncErrorByCalendarId] = useState<Record<string, string>>({});
+
+  async function handleGooglePullSync(providerCalendar: GoogleProviderCalendar) {
+    const calendar = calendars.find((item) => item.id === providerCalendar.externalCalendarId)
+      ?? calendars.find((item) => item.providerType === "google" && item.providerCalendarId === providerCalendar.providerCalendarId)
+      ?? null;
+    const key = providerCalendar.externalCalendarId ?? providerCalendar.providerCalendarId;
+
+    setGoogleSyncSummaryByCalendarId((current) => ({ ...current, [key]: "" }));
+    setGoogleSyncErrorByCalendarId((current) => ({ ...current, [key]: "" }));
+
+    if (!calendar) {
+      setGoogleSyncErrorByCalendarId((current) => ({
+        ...current,
+        [key]: "Calendrier Google indisponible dans MSTV. Rouvrez ce panneau ou reconnectez Google Calendar.",
+      }));
+      return;
+    }
+
+    try {
+      const result = await onSync(calendar);
+      setGoogleSyncSummaryByCalendarId((current) => ({
+        ...current,
+        [key]: `Synchronisation Google terminée : ${result.created ?? 0} créé(s), ${result.updated ?? 0} mis à jour, ${result.conflicts ?? 0} conflit(s).`,
+      }));
+    } catch (syncError) {
+      setGoogleSyncErrorByCalendarId((current) => ({
+        ...current,
+        [key]: getUserFacingErrorMessage(syncError, "Impossible de synchroniser Google Calendar."),
+      }));
+    }
+  }
+
   if (loading) {
     return <div className="rounded-2xl bg-stone-50 px-4 py-3 text-base font-medium text-stone-500">Chargement...</div>;
   }
@@ -14453,28 +14499,49 @@ function ExternalCalendarsListView({
               <div className="mt-2 space-y-1.5">
                 {(googleCalendarsByAccountId[account.id] ?? []).map((calendar) => {
                   const updateKey = `${account.id}:${calendar.providerCalendarId}`;
+                  const syncKey = calendar.externalCalendarId ?? calendar.providerCalendarId;
+                  const isPullSyncing = Boolean(calendar.externalCalendarId) && syncingCalendarId === calendar.externalCalendarId;
+                  const canPullSync = calendar.enabled && calendar.writable && Boolean(calendar.externalCalendarId);
+                  const syncSummary = googleSyncSummaryByCalendarId[syncKey];
+                  const syncError = googleSyncErrorByCalendarId[syncKey];
                   return (
-                    <div key={calendar.providerCalendarId} className="flex items-center justify-between gap-3 rounded-xl bg-white px-3 py-2 ring-1 ring-stone-200">
-                      <div className="min-w-0">
-                        <div className="truncate text-sm font-semibold text-stone-800">{calendar.summary}</div>
-                        <div className="text-xs font-semibold text-stone-400">
-                          {calendar.primary ? "Principal · " : ""}
-                          {calendar.writable ? "Lecture/écriture" : "Lecture seule chez Google"}
+                    <div key={calendar.providerCalendarId} className="rounded-xl bg-white px-3 py-2 ring-1 ring-stone-200">
+                      <div className="flex items-center justify-between gap-3">
+                        <div className="min-w-0">
+                          <div className="truncate text-sm font-semibold text-stone-800">{calendar.summary}</div>
+                          <div className="text-xs font-semibold text-stone-400">
+                            {calendar.primary ? "Principal · " : ""}
+                            {calendar.writable ? "Lecture/écriture" : "Lecture seule chez Google"}
+                          </div>
+                        </div>
+                        <div className="flex shrink-0 items-center gap-1.5">
+                          {calendar.enabled && calendar.writable && (
+                            <button
+                              type="button"
+                              onClick={() => void handleGooglePullSync(calendar)}
+                              disabled={!canPullSync || isPullSyncing}
+                              className="rounded-full border border-blue-200 bg-blue-50 px-2.5 py-1 text-xs font-semibold text-blue-700 transition hover:bg-blue-100 disabled:border-stone-200 disabled:bg-stone-50 disabled:text-stone-300"
+                            >
+                              {isPullSyncing ? "Synchronisation..." : "Synchroniser depuis Google"}
+                            </button>
+                          )}
+                          <button
+                            type="button"
+                            onClick={() => void onToggleGoogleCalendar(account, calendar, !calendar.enabled)}
+                            disabled={!calendar.writable || updatingGoogleKey === updateKey}
+                            className={cn(
+                              "rounded-full px-2.5 py-1 text-xs font-semibold ring-1 transition disabled:bg-stone-50 disabled:text-stone-300 disabled:ring-stone-200",
+                              calendar.enabled
+                                ? "bg-emerald-50 text-emerald-700 ring-emerald-200"
+                                : "bg-white text-stone-500 ring-stone-200 hover:bg-stone-50",
+                            )}
+                          >
+                            {updatingGoogleKey === updateKey ? "..." : calendar.enabled ? "Activé" : "Activer"}
+                          </button>
                         </div>
                       </div>
-                      <button
-                        type="button"
-                        onClick={() => void onToggleGoogleCalendar(account, calendar, !calendar.enabled)}
-                        disabled={!calendar.writable || updatingGoogleKey === updateKey}
-                        className={cn(
-                          "shrink-0 rounded-full px-2.5 py-1 text-xs font-semibold ring-1 transition disabled:bg-stone-50 disabled:text-stone-300 disabled:ring-stone-200",
-                          calendar.enabled
-                            ? "bg-emerald-50 text-emerald-700 ring-emerald-200"
-                            : "bg-white text-stone-500 ring-stone-200 hover:bg-stone-50",
-                        )}
-                      >
-                        {updatingGoogleKey === updateKey ? "..." : calendar.enabled ? "Activé" : "Activer"}
-                      </button>
+                      {syncSummary && <p className="mt-1.5 text-xs font-semibold text-emerald-600">{syncSummary}</p>}
+                      {syncError && <p className="mt-1.5 text-xs font-semibold text-rose-600">{syncError}</p>}
                     </div>
                   );
                 })}
@@ -14673,7 +14740,13 @@ function ExternalCalendarSettingsDetail({
         await onUpdate(calendar, draft);
       }
       const result = await onSync({ ...calendar, ...draft });
-      setSyncSummary(`${result.synced.toLocaleString("fr-FR")} événement${result.synced > 1 ? "s" : ""} synchronisé${result.synced > 1 ? "s" : ""}.`);
+      if (calendar.providerType === "google" && calendar.syncCapability === "bidirectional") {
+        setSyncSummary(
+          `Synchronisation Google terminée : ${result.created ?? 0} créé(s), ${result.updated ?? 0} mis à jour, ${result.conflicts ?? 0} conflit(s).`,
+        );
+      } else {
+        setSyncSummary(`${result.synced.toLocaleString("fr-FR")} événement${result.synced > 1 ? "s" : ""} synchronisé${result.synced > 1 ? "s" : ""}.`);
+      }
     } catch (syncError) {
       setRowError(getUserFacingErrorMessage(syncError, "Impossible de synchroniser ce calendrier."));
     } finally {
@@ -14763,7 +14836,9 @@ function ExternalCalendarSettingsDetail({
               ? `${syncProgress.synced.toLocaleString("fr-FR")} / ${syncProgress.total.toLocaleString("fr-FR")}`
               : syncing
                 ? "Synchronisation..."
-                : "Synchroniser"}
+                : calendar.providerType === "google" && calendar.syncCapability === "bidirectional"
+                  ? "Synchroniser depuis Google"
+                  : "Synchroniser"}
           </button>
           {canManage && (
             <button

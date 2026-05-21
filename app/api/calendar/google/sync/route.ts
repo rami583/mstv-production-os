@@ -94,6 +94,12 @@ async function fetchGoogleEvents(accessToken: string, providerCalendarId: string
       },
     });
     const payload = (await response.json().catch(() => null)) as { items?: GoogleEvent[]; nextPageToken?: string; error?: { message?: string } } | null;
+    console.info("Google pull sync API page response", {
+      status: response.status,
+      ok: response.ok,
+      itemCount: payload?.items?.length ?? 0,
+      hasNextPage: Boolean(payload?.nextPageToken),
+    });
 
     if (!response.ok) {
       throw new Error(payload?.error?.message || "Impossible de lire Google Calendar.");
@@ -103,6 +109,12 @@ async function fetchGoogleEvents(accessToken: string, providerCalendarId: string
     pageToken = payload?.nextPageToken;
   } while (pageToken);
 
+  console.info("Google pull sync events fetched", {
+    providerCalendarIdPresent: Boolean(providerCalendarId),
+    eventCount: events.length,
+    timeMin: timeMin.toISOString(),
+    timeMax: timeMax.toISOString(),
+  });
   return events;
 }
 
@@ -113,6 +125,9 @@ export async function POST(request: Request) {
 
     const body = (await request.json().catch(() => null)) as { externalCalendarId?: string } | null;
     const externalCalendarId = body?.externalCalendarId?.trim();
+    console.info("Google pull sync route reached", {
+      externalCalendarIdPresent: Boolean(externalCalendarId),
+    });
     if (!externalCalendarId) {
       return googleJsonResponse({ error: "Calendrier Google manquant." }, { status: 400 });
     }
@@ -131,6 +146,13 @@ export async function POST(request: Request) {
     if (!calendar?.provider_account_id || !calendar.provider_calendar_id) {
       return googleJsonResponse({ error: "Calendrier Google introuvable." }, { status: 404 });
     }
+    console.info("Google pull sync calendar loaded", {
+      externalCalendarId: calendar.id,
+      providerType: calendar.provider_type,
+      syncCapability: calendar.sync_capability,
+      syncEnabled: calendar.sync_enabled,
+      providerCalendarIdPresent: Boolean(calendar.provider_calendar_id),
+    });
 
     await supabase
       .from("external_calendars")
@@ -163,6 +185,11 @@ export async function POST(request: Request) {
       const values = mapGoogleEventToMstvEvent(googleEvent);
 
       if (!existingLink) {
+        console.info("Google pull sync creating missing MSTV event", {
+          externalCalendarId: calendar.id,
+          googleEventIdPresent: Boolean(googleEvent.id),
+          googleEventUpdatedAt: providerUpdatedAt,
+        });
         const { data: insertedEvent, error: insertError } = await supabase
           .from("events")
           .insert(values)
@@ -187,6 +214,11 @@ export async function POST(request: Request) {
           raw_external_event: googleEvent,
         });
         if (linkInsertError) throw linkInsertError;
+        console.info("Google pull sync created MSTV event and link", {
+          eventId: insertedEvent.id,
+          externalCalendarId: calendar.id,
+          googleEventIdPresent: Boolean(googleEvent.id),
+        });
         created += 1;
         continue;
       }
@@ -208,6 +240,13 @@ export async function POST(request: Request) {
       const localChanged = localEvent.updated_at > lastSyncedAt;
 
       if (providerChanged && localChanged) {
+        console.info("Google pull sync conflict detected", {
+          eventId: localEvent.id,
+          linkId: existingLink.id,
+          providerUpdatedAt,
+          localUpdatedAt: localEvent.updated_at,
+          lastSyncedAt,
+        });
         const { error: conflictError } = await supabase
           .from("external_event_links")
           .update({
@@ -225,6 +264,12 @@ export async function POST(request: Request) {
       }
 
       if (providerChanged) {
+        console.info("Google pull sync updating MSTV event from Google", {
+          eventId: localEvent.id,
+          linkId: existingLink.id,
+          providerUpdatedAt,
+          lastSyncedAt,
+        });
         const { data: updatedEvent, error: updateError } = await supabase
           .from("events")
           .update(values)
@@ -249,6 +294,10 @@ export async function POST(request: Request) {
           })
           .eq("id", existingLink.id);
         if (linkUpdateError) throw linkUpdateError;
+        console.info("Google pull sync updated MSTV event and link", {
+          eventId: updatedEvent.id,
+          linkId: existingLink.id,
+        });
         updated += 1;
       } else {
         unchanged += 1;
@@ -265,6 +314,14 @@ export async function POST(request: Request) {
       })
       .eq("id", calendar.id);
 
+    console.info("Google pull sync completed", {
+      externalCalendarId: calendar.id,
+      total: googleEvents.length,
+      created,
+      updated,
+      unchanged,
+      conflicts,
+    });
     return googleJsonResponse({
       synced: googleEvents.length,
       total: googleEvents.length,
