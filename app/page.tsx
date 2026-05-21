@@ -102,6 +102,12 @@ type ExternalCalendarSyncResult = {
   updated?: number;
   unchanged?: number;
   conflicts?: number;
+  deleted?: number;
+};
+type GoogleAutoSyncStatus = {
+  state: "idle" | "syncing" | "error";
+  lastSyncedAt: string | null;
+  error: string | null;
 };
 type GooglePullSyncErrorPayload = {
   success?: boolean;
@@ -121,6 +127,8 @@ type GooglePullSyncApiResponse = Partial<ExternalCalendarSyncResult> & GooglePul
 
 const EXTERNAL_CALENDAR_UPSERT_BATCH_SIZE = 250;
 const EXTERNAL_CALENDAR_FETCH_PAGE_SIZE = 1000;
+const GOOGLE_AUTO_SYNC_INTERVAL_MS = 3 * 60 * 1000;
+const GOOGLE_AUTO_SYNC_MIN_GAP_MS = 45 * 1000;
 
 type EventQueryRow = EventRow & {
   event_options: EventOptionRow[] | null;
@@ -3265,6 +3273,11 @@ export default function Home() {
   const [googleCalendarLoading, setGoogleCalendarLoading] = useState(false);
   const [connectingGoogleCalendar, setConnectingGoogleCalendar] = useState(false);
   const [updatingGoogleCalendarKey, setUpdatingGoogleCalendarKey] = useState<string | null>(null);
+  const [googleAutoSyncStatus, setGoogleAutoSyncStatus] = useState<GoogleAutoSyncStatus>({
+    state: "idle",
+    lastSyncedAt: null,
+    error: null,
+  });
   const [notifications, setNotifications] = useState<AppNotification[]>([]);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [notificationsHydrated, setNotificationsHydrated] = useState(false);
@@ -3294,6 +3307,9 @@ export default function Home() {
   const timelineTimeSaveRef = useRef<(() => Promise<void>) | null>(null);
   const processingPendingActionsRef = useRef(false);
   const pendingNetworkSyncTimeoutRef = useRef<number | null>(null);
+  const googleSyncInFlightRef = useRef(false);
+  const googleAutoSyncRunningRef = useRef(false);
+  const googleAutoSyncLastStartedAtRef = useRef(0);
   const onlineRef = useRef(online);
   const processPendingSyncQueueRef = useRef<((options?: { forceOnline?: boolean }) => Promise<void>) | null>(null);
   const googleCalendarBootstrapKeyRef = useRef<string | null>(null);
@@ -4388,6 +4404,14 @@ export default function Home() {
       throw new Error("La synchronisation du calendrier nécessite une connexion.");
     }
 
+    const isGoogleBidirectionalCalendar = calendar.providerType === "google" && calendar.syncCapability === "bidirectional";
+    if (isGoogleBidirectionalCalendar && googleSyncInFlightRef.current) {
+      throw new Error("Synchronisation Google déjà en cours.");
+    }
+    if (isGoogleBidirectionalCalendar) {
+      googleSyncInFlightRef.current = true;
+    }
+
     setSyncingExternalCalendarId(calendar.id);
     setExternalCalendarSyncProgress(null);
     setExternalCalendarSettingsError(null);
@@ -4427,6 +4451,7 @@ export default function Home() {
           updated: syncPayload?.updated ?? 0,
           unchanged: syncPayload?.unchanged ?? 0,
           conflicts: syncPayload?.conflicts ?? 0,
+          deleted: syncPayload?.deleted ?? 0,
         };
       }
 
@@ -4564,10 +4589,81 @@ export default function Home() {
       }
       return { synced: rows.length, total: parsedEvents.length };
     } finally {
+      if (isGoogleBidirectionalCalendar) {
+        googleSyncInFlightRef.current = false;
+      }
       setSyncingExternalCalendarId(null);
       setExternalCalendarSyncProgress(null);
     }
   }
+
+  useEffect(() => {
+    if (typeof window === "undefined" || !hasMounted) return;
+
+    async function runAutomaticGoogleSync(source: "interval" | "online" | "visible") {
+      if (!authSession || !profile) return;
+      if (!onlineRef.current) return;
+      if (document.visibilityState !== "visible") return;
+      if (writableGoogleCalendars.length === 0) return;
+      if (googleAutoSyncRunningRef.current || googleSyncInFlightRef.current || syncingExternalCalendarId) return;
+
+      const now = Date.now();
+      if (now - googleAutoSyncLastStartedAtRef.current < GOOGLE_AUTO_SYNC_MIN_GAP_MS) return;
+
+      googleAutoSyncRunningRef.current = true;
+      googleAutoSyncLastStartedAtRef.current = now;
+      setGoogleAutoSyncStatus((current) => ({ ...current, state: "syncing", error: null }));
+
+      try {
+        for (const calendar of writableGoogleCalendars) {
+          if (!onlineRef.current || document.visibilityState !== "visible") break;
+          await syncExternalCalendar(calendar);
+        }
+        setGoogleAutoSyncStatus({
+          state: "idle",
+          lastSyncedAt: new Date().toISOString(),
+          error: null,
+        });
+      } catch (syncError) {
+        const message = getUserFacingErrorMessage(syncError, "Erreur de synchronisation Google.");
+        console.error("Automatic Google Calendar sync failed", {
+          source,
+          message,
+          technicalMessage: getRawErrorMessage(syncError),
+        });
+        setGoogleAutoSyncStatus((current) => ({
+          state: "error",
+          lastSyncedAt: current.lastSyncedAt,
+          error: message,
+        }));
+      } finally {
+        googleAutoSyncRunningRef.current = false;
+      }
+    }
+
+    const intervalId = window.setInterval(() => {
+      void runAutomaticGoogleSync("interval");
+    }, GOOGLE_AUTO_SYNC_INTERVAL_MS);
+
+    function handleOnline() {
+      void runAutomaticGoogleSync("online");
+    }
+
+    function handleVisibilityChange() {
+      if (document.visibilityState === "visible") {
+        void runAutomaticGoogleSync("visible");
+      }
+    }
+
+    window.addEventListener("online", handleOnline);
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+
+    return () => {
+      window.clearInterval(intervalId);
+      window.removeEventListener("online", handleOnline);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+    };
+  }, [authSession, hasMounted, online, profile, selectedId, syncingExternalCalendarId, writableGoogleCalendars]);
 
   async function deleteExternalCalendar(calendar: ExternalCalendar) {
     if (!supabase) throw new Error("Configuration Supabase manquante.");
@@ -8483,6 +8579,7 @@ export default function Home() {
           pendingSyncCount={pendingSyncCount}
           syncingPendingActions={syncingPendingActions}
           pendingSyncError={pendingSyncError}
+          googleAutoSyncStatus={googleAutoSyncStatus}
           notifications={notifications}
           notificationsOpen={notificationsOpen && !yearOverviewOpen}
           setNotificationsOpen={setNotificationsOpen}
@@ -8640,6 +8737,7 @@ export default function Home() {
           pendingSyncCount={pendingSyncCount}
           syncingPendingActions={syncingPendingActions}
           pendingSyncError={pendingSyncError}
+          googleAutoSyncStatus={googleAutoSyncStatus}
           notifications={notifications}
           notificationsOpen={notificationsOpen}
           setNotificationsOpen={setNotificationsOpen}
@@ -8923,6 +9021,7 @@ function AppHeader({
   pendingSyncCount,
   syncingPendingActions,
   pendingSyncError,
+  googleAutoSyncStatus,
   notifications,
   notificationsOpen,
   setNotificationsOpen,
@@ -8967,6 +9066,7 @@ function AppHeader({
   pendingSyncCount: number;
   syncingPendingActions: boolean;
   pendingSyncError: string | null;
+  googleAutoSyncStatus: GoogleAutoSyncStatus;
   notifications: AppNotification[];
   notificationsOpen: boolean;
   setNotificationsOpen: (open: boolean | ((current: boolean) => boolean)) => void;
@@ -9096,6 +9196,7 @@ function AppHeader({
             syncing={syncingPendingActions}
             error={pendingSyncError}
           />
+          <GoogleAutoSyncStatusIndicator status={googleAutoSyncStatus} />
           {screen === "calendar" && (
             <button
               onClick={goToday}
@@ -9384,6 +9485,7 @@ function YearOverviewOverlay({
   pendingSyncCount,
   syncingPendingActions,
   pendingSyncError,
+  googleAutoSyncStatus,
   notifications,
   notificationsOpen,
   setNotificationsOpen,
@@ -9419,6 +9521,7 @@ function YearOverviewOverlay({
   pendingSyncCount: number;
   syncingPendingActions: boolean;
   pendingSyncError: string | null;
+  googleAutoSyncStatus: GoogleAutoSyncStatus;
   notifications: AppNotification[];
   notificationsOpen: boolean;
   setNotificationsOpen: (open: boolean | ((current: boolean) => boolean)) => void;
@@ -9660,6 +9763,7 @@ function YearOverviewOverlay({
           pendingSyncCount={pendingSyncCount}
           syncingPendingActions={syncingPendingActions}
           pendingSyncError={pendingSyncError}
+          googleAutoSyncStatus={googleAutoSyncStatus}
           notifications={notifications}
           notificationsOpen={notificationsOpen}
           setNotificationsOpen={setNotificationsOpen}
@@ -15881,6 +15985,47 @@ function HeaderIcon({ label, icon: Icon, onClick }: { label: string; icon: Lucid
     >
       <Icon className="h-4 w-4" />
     </button>
+  );
+}
+
+function formatGoogleSyncElapsedLabel(lastSyncedAt: string) {
+  const elapsedMs = Date.now() - new Date(lastSyncedAt).getTime();
+  if (!Number.isFinite(elapsedMs) || elapsedMs < 60_000) return "Synchronisé à l’instant";
+  const elapsedMinutes = Math.max(1, Math.round(elapsedMs / 60_000));
+  if (elapsedMinutes < 60) return `Synchronisé il y a ${elapsedMinutes} min`;
+  const elapsedHours = Math.max(1, Math.round(elapsedMinutes / 60));
+  return `Synchronisé il y a ${elapsedHours} h`;
+}
+
+function GoogleAutoSyncStatusIndicator({ status }: { status: GoogleAutoSyncStatus }) {
+  const visible = status.state === "syncing" || status.state === "error" || Boolean(status.lastSyncedAt);
+  if (!visible) return null;
+
+  const label =
+    status.state === "syncing"
+      ? "Synchronisation..."
+      : status.state === "error"
+        ? "Erreur de synchronisation"
+        : status.lastSyncedAt
+          ? formatGoogleSyncElapsedLabel(status.lastSyncedAt)
+          : "";
+
+  return (
+    <div
+      className={cn(
+        "flex h-10 min-w-10 items-center justify-center rounded-full border px-2 text-sm font-semibold sm:px-3",
+        status.state === "error"
+          ? "border-rose-200 bg-rose-50 text-rose-700"
+          : status.state === "syncing"
+            ? "border-blue-200 bg-blue-50 text-blue-700"
+            : "border-emerald-200 bg-emerald-50 text-emerald-700",
+      )}
+      title={status.error ?? label}
+      aria-live="polite"
+    >
+      <span className="sm:hidden">{status.state === "error" ? "G!" : status.state === "syncing" ? "G..." : "G"}</span>
+      <span className="hidden sm:inline">{label}</span>
+    </div>
   );
 }
 
