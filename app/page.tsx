@@ -2828,87 +2828,11 @@ function getPrimaryExternalEventLink(event: ProductionEvent) {
   return event.externalLinks.find((link) => link.calendarSyncEnabled && Boolean(link.calendarColor)) ?? null;
 }
 
-function containsDirectionText(value: string | null | undefined) {
-  return normalizeLabel(value ?? "").includes("direction");
-}
-
-type DirectionRenderDebug = {
-  sourceArray: string;
-  renderedEventId: string;
-  title: string;
-  start: string | null;
-  end: string | null;
-  sourceType: string;
-  calendarIdUsedForRendering: string | null;
-  externalCalendarId: string | null;
-  externalEventLinkId: string | null;
-  providerType: string | null;
-  colorSource: string;
-  whyVisible: string;
-  externalLinks?: Array<{
-    linkId: string;
-    externalCalendarId: string;
-    providerType: string;
-    providerCalendarId: string;
-    syncEnabled: boolean;
-    calendarName: string;
-    calendarColor: string | null;
-    syncStatus: string;
-  }>;
-};
-
-function getProductionDirectionRenderDebug(event: ProductionEvent): DirectionRenderDebug | null {
-  const title = `${event.clientName} ${event.eventName}`.trim();
-  if (!containsDirectionText(title)) return null;
-
-  const primaryLink = getPrimaryExternalEventLink(event);
-  return {
-    sourceArray: "visibleProductionEvents",
-    renderedEventId: event.id,
-    title: `${event.clientName} — ${event.eventName}`,
-    start: `${event.date}${event.startTime ? ` ${event.startTime}` : ""}`,
-    end: event.endTime ? `${event.date} ${event.endTime}` : null,
-    sourceType: event.externalLinks.length > 0 ? "production_event_with_external_event_links" : "native_or_orphan_production_event",
-    calendarIdUsedForRendering: primaryLink?.externalCalendarId ?? null,
-    externalCalendarId: primaryLink?.externalCalendarId ?? null,
-    externalEventLinkId: primaryLink?.id ?? null,
-    providerType: primaryLink?.providerType ?? null,
-    colorSource: primaryLink?.calendarColor ? `external_event_link:${primaryLink.calendarColor}` : "mstv_native_red",
-    whyVisible: event.externalLinks.length > 0
-      ? "Rendu car tous les external_event_links de cet événement passent le filtre de visibilité."
-      : "Rendu car l'objet n'a aucun external_event_link: l'UI le traite comme un événement MSTV natif ou orphelin.",
-    externalLinks: event.externalLinks.map((link) => ({
-      linkId: link.id,
-      externalCalendarId: link.externalCalendarId,
-      providerType: link.providerType,
-      providerCalendarId: link.providerCalendarId,
-      syncEnabled: link.calendarSyncEnabled,
-      calendarName: link.calendarName,
-      calendarColor: link.calendarColor,
-      syncStatus: link.syncStatus,
-    })),
-  };
-}
-
-function getExternalDirectionRenderDebug(event: ExternalCalendarEvent): DirectionRenderDebug | null {
-  if (!containsDirectionText(`${event.title} ${event.calendarName}`)) return null;
-
-  return {
-    sourceArray: "visibleExternalCalendarEvents",
-    renderedEventId: event.id,
-    title: event.title,
-    start: event.startTime,
-    end: event.endTime,
-    sourceType: "external_calendar_events",
-    calendarIdUsedForRendering: event.externalCalendarId,
-    externalCalendarId: event.externalCalendarId,
-    externalEventLinkId: null,
-    providerType: event.calendarProviderType,
-    colorSource: event.calendarColor ? `external_calendars.color:${event.calendarColor}` : "external_calendar_default",
-    whyVisible: event.calendarSyncEnabled
-      ? "Rendu car external_calendar_events passe sync_enabled + règles de visibilité."
-      : "Diagnostic: l'objet est visible malgré calendarSyncEnabled=false.",
-  };
+function isLikelyStaleAppleDirectionOrphanEvent(event: ProductionEvent) {
+  return event.externalLinks.length === 0 &&
+    !event.deletedAt &&
+    normalizeLabel(event.clientName).includes("direction") &&
+    normalizeLabel(event.eventName) === "evenement apple";
 }
 
 function getExternalSyncStatusLabel(status: string | null) {
@@ -3406,7 +3330,6 @@ export default function Home() {
   const [appleCalendarLoading, setAppleCalendarLoading] = useState(false);
   const [connectingAppleCalendar, setConnectingAppleCalendar] = useState(false);
   const [cleaningAppleDuplicates, setCleaningAppleDuplicates] = useState(false);
-  const [diagnosingAppleDirection, setDiagnosingAppleDirection] = useState(false);
   const [googleAutoSyncStatus, setGoogleAutoSyncStatus] = useState<GoogleAutoSyncStatus>({
     state: "idle",
     lastSyncedAt: null,
@@ -3571,7 +3494,9 @@ export default function Home() {
   );
   const visibleProductionEvents = useMemo(
     () =>
-      events.filter((event) => event.externalLinks.every((link) => {
+      events.filter((event) => {
+        if (isLikelyStaleAppleDirectionOrphanEvent(event)) return false;
+        return event.externalLinks.every((link) => {
         const exactEnabled = externalCalendarEnabledById.get(link.externalCalendarId);
         const providerKey = getExternalCalendarProviderKey({
           providerType: link.calendarProviderType ?? link.providerType,
@@ -3581,24 +3506,10 @@ export default function Home() {
         const providerEnabled = providerKey ? externalCalendarProviderStateByKey.get(providerKey)?.enabled : undefined;
         if (providerEnabled === false) return false;
         return exactEnabled ?? providerEnabled ?? link.calendarSyncEnabled;
-      })),
+        });
+      }),
     [events, externalCalendarEnabledById, externalCalendarProviderStateByKey],
   );
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    const directionDebug = [
-      ...visibleProductionEvents.map(getProductionDirectionRenderDebug).filter((item): item is DirectionRenderDebug => Boolean(item)),
-      ...visibleExternalCalendarEvents.map(getExternalDirectionRenderDebug).filter((item): item is DirectionRenderDebug => Boolean(item)),
-    ];
-    if (directionDebug.length === 0) return;
-    console.info("MSTV visible Direction render debug", {
-      selectedDateKey,
-      visibleMonth: `${visibleMonth.getFullYear()}-${String(visibleMonth.getMonth() + 1).padStart(2, "0")}`,
-      visibleProductionEventCount: visibleProductionEvents.length,
-      visibleExternalCalendarEventCount: visibleExternalCalendarEvents.length,
-      directionDebug,
-    });
-  }, [selectedDateKey, visibleExternalCalendarEvents, visibleMonth, visibleProductionEvents]);
   const writableGoogleCalendars = useMemo(
     () =>
       externalCalendars.filter(
@@ -4537,45 +4448,6 @@ export default function Home() {
       setExternalCalendarSettingsError(getUserFacingErrorMessage(cleanupError, "Impossible de nettoyer les doublons Apple."));
     } finally {
       setCleaningAppleDuplicates(false);
-    }
-  }
-
-  async function diagnoseAppleDirectionEvents() {
-    if (!authSession) throw new Error(sessionExpiredMessage);
-
-    setDiagnosingAppleDirection(true);
-    setExternalCalendarSettingsError(null);
-    try {
-      const accessToken = await getServerApiAccessToken(authSession.access_token);
-      const response = await fetch(getAppApiUrl("/api/calendar/apple/diagnose-direction", "Diagnostic Apple Direction momentanément indisponible."), {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${accessToken}`,
-        },
-        body: JSON.stringify({ cleanup: true }),
-      });
-      const payload = (await response.json().catch(() => null)) as {
-        error?: string;
-        directionCalendars?: unknown[];
-        events?: unknown[];
-        hiddenEventIds?: string[];
-      } | null;
-
-      if (!response.ok) {
-        throw new Error(payload?.error ?? "Impossible de diagnostiquer Direction Apple.");
-      }
-
-      console.info("Diagnostic Direction Apple", payload);
-      removeLocalStorageKey(`${cachedAppDataKeyPrefix}${authSession.user.id}`);
-      await refreshExternalCalendarSettings();
-      await refreshAppleCalendarAccounts();
-      await reloadData(selectedId, { silent: true });
-    } catch (diagnosticError) {
-      console.error("Apple Direction diagnostic failed", diagnosticError);
-      setExternalCalendarSettingsError(getUserFacingErrorMessage(diagnosticError, "Impossible de diagnostiquer Direction Apple."));
-    } finally {
-      setDiagnosingAppleDirection(false);
     }
   }
 
@@ -9449,7 +9321,6 @@ export default function Home() {
           appleLoading={appleCalendarLoading}
           connectingApple={connectingAppleCalendar}
           cleaningAppleDuplicates={cleaningAppleDuplicates}
-          diagnosingAppleDirection={diagnosingAppleDirection}
           loading={externalCalendarSettingsLoading}
           error={externalCalendarSettingsError}
           syncingCalendarId={syncingExternalCalendarId}
@@ -9462,7 +9333,6 @@ export default function Home() {
           onToggleGoogleCalendar={setGoogleCalendarSyncEnabled}
           onConnectApple={connectAppleCalendar}
           onCleanupAppleDuplicates={cleanupAppleCalendarDuplicates}
-          onDiagnoseAppleDirection={diagnoseAppleDirectionEvents}
           onDelete={async (calendar) => {
             try {
               await deleteExternalCalendar(calendar);
@@ -11120,7 +10990,6 @@ function ExternalCalendarEventRow({
 }) {
   const tone = getExternalCalendarTone(event.calendarColor);
   const timeRange = formatExternalEventTimeRange(event);
-  const directionDebug = getExternalDirectionRenderDebug(event);
 
   return (
     <button
@@ -11135,24 +11004,9 @@ function ExternalCalendarEventRow({
           {event.calendarName}
           {event.location ? ` · ${event.location}` : ""}
         </span>
-        {directionDebug && <DirectionRenderDebugPanel debug={directionDebug} />}
       </span>
       {timeRange && <span className={cn("pl-2 text-right text-base font-medium", tone.meta)}>{timeRange}</span>}
     </button>
-  );
-}
-
-function DirectionRenderDebugPanel({ debug }: { debug: DirectionRenderDebug }) {
-  return (
-    <span className="mt-2 block rounded-lg border border-amber-200 bg-amber-50 px-2 py-1 text-left text-[11px] font-semibold leading-snug text-amber-900">
-      Debug Direction · source {debug.sourceArray} · id {debug.renderedEventId} · type {debug.sourceType}
-      <br />
-      calendrier {debug.calendarIdUsedForRendering ?? "aucun"} · external_calendar {debug.externalCalendarId ?? "aucun"} · lien {debug.externalEventLinkId ?? "aucun"}
-      <br />
-      provider {debug.providerType ?? "aucun"} · couleur {debug.colorSource}
-      <br />
-      visibilité: {debug.whyVisible}
-    </span>
   );
 }
 
@@ -11197,7 +11051,6 @@ function SwipeableCalendarEventRow({
   const timeRange = formatTimeRange(event.startTime, event.endTime);
   const externalLink = getPrimaryExternalEventLink(event);
   const externalTone = getExternalCalendarTone(externalLink?.calendarColor ?? null);
-  const directionDebug = getProductionDirectionRenderDebug(event);
 
   function handlePointerDown(pointerEvent: ReactPointerEvent<HTMLDivElement>) {
     if (!canSwipe) return;
@@ -11361,7 +11214,6 @@ function SwipeableCalendarEventRow({
         <span className="min-w-0">
           <span className="block text-base font-semibold leading-snug text-stone-950">{event.clientName}</span>
           <span className="block truncate text-base font-medium text-stone-500">{event.eventName}</span>
-          {directionDebug && <DirectionRenderDebugPanel debug={directionDebug} />}
         </span>
         {timeRange && <span className="pl-2 text-right text-base font-medium text-stone-500">{timeRange}</span>}
       </div>
@@ -14850,7 +14702,6 @@ function ExternalCalendarsSheet({
   appleLoading,
   connectingApple,
   cleaningAppleDuplicates,
-  diagnosingAppleDirection,
   loading,
   error,
   syncingCalendarId,
@@ -14863,7 +14714,6 @@ function ExternalCalendarsSheet({
   onToggleGoogleCalendar,
   onConnectApple,
   onCleanupAppleDuplicates,
-  onDiagnoseAppleDirection,
   onDelete,
   onSync,
 }: {
@@ -14881,7 +14731,6 @@ function ExternalCalendarsSheet({
   appleLoading: boolean;
   connectingApple: boolean;
   cleaningAppleDuplicates: boolean;
-  diagnosingAppleDirection: boolean;
   loading: boolean;
   error: string | null;
   syncingCalendarId: string | null;
@@ -14894,7 +14743,6 @@ function ExternalCalendarsSheet({
   onToggleGoogleCalendar: (account: GoogleCalendarAccount, calendar: GoogleProviderCalendar, enabled: boolean) => Promise<void>;
   onConnectApple: (input: { appleId: string; appPassword: string }) => Promise<void>;
   onCleanupAppleDuplicates: () => Promise<void>;
-  onDiagnoseAppleDirection: () => Promise<void>;
   onDelete: (calendar: ExternalCalendar) => Promise<void>;
   onSync: (calendar: ExternalCalendar) => Promise<ExternalCalendarSyncResult>;
 }) {
@@ -15033,7 +14881,6 @@ function ExternalCalendarsSheet({
               appleLoading={appleLoading}
               connectingApple={connectingApple}
               cleaningAppleDuplicates={cleaningAppleDuplicates}
-              diagnosingAppleDirection={diagnosingAppleDirection}
               loading={loading}
               error={error}
               syncingCalendarId={syncingCalendarId}
@@ -15042,7 +14889,6 @@ function ExternalCalendarsSheet({
               onDisconnectGoogle={onDisconnectGoogle}
               onConnectApple={onConnectApple}
               onCleanupAppleDuplicates={onCleanupAppleDuplicates}
-              onDiagnoseAppleDirection={onDiagnoseAppleDirection}
               onUpdate={onUpdate}
               onDelete={onDelete}
               onSync={onSync}
@@ -15118,7 +14964,6 @@ function ExternalCalendarsListView({
   appleLoading,
   connectingApple,
   cleaningAppleDuplicates,
-  diagnosingAppleDirection,
   loading,
   error,
   syncingCalendarId,
@@ -15127,7 +14972,6 @@ function ExternalCalendarsListView({
   onDisconnectGoogle,
   onConnectApple,
   onCleanupAppleDuplicates,
-  onDiagnoseAppleDirection,
   onUpdate,
   onDelete,
   onSync,
@@ -15147,7 +14991,6 @@ function ExternalCalendarsListView({
   appleLoading: boolean;
   connectingApple: boolean;
   cleaningAppleDuplicates: boolean;
-  diagnosingAppleDirection: boolean;
   loading: boolean;
   error: string | null;
   syncingCalendarId: string | null;
@@ -15156,7 +14999,6 @@ function ExternalCalendarsListView({
   onDisconnectGoogle: (account: GoogleCalendarAccount) => Promise<void>;
   onConnectApple: (input: { appleId: string; appPassword: string }) => Promise<void>;
   onCleanupAppleDuplicates: () => Promise<void>;
-  onDiagnoseAppleDirection: () => Promise<void>;
   onUpdate: (calendar: ExternalCalendar, input: { name: string; icsUrl: string; color: string; visibility: ExternalCalendarVisibility; syncEnabled?: boolean }) => Promise<void>;
   onDelete: (calendar: ExternalCalendar) => Promise<void>;
   onSync: (calendar: ExternalCalendar) => Promise<ExternalCalendarSyncResult>;
@@ -15551,24 +15393,14 @@ function ExternalCalendarsListView({
               <div className="flex items-center justify-between gap-3">
                 <h4 className="text-xs font-semibold uppercase tracking-wide text-stone-400">Apple</h4>
                 {appleAccounts.length > 0 && (
-                  <div className="flex shrink-0 flex-wrap items-center justify-end gap-1.5">
-                    <button
-                      type="button"
-                      onClick={() => void onDiagnoseAppleDirection()}
-                      disabled={diagnosingAppleDirection}
-                      className="rounded-full border border-amber-200 bg-amber-50 px-2.5 py-1 text-xs font-semibold text-amber-800 transition hover:bg-amber-100 disabled:border-stone-200 disabled:bg-stone-50 disabled:text-stone-300"
-                    >
-                      {diagnosingAppleDirection ? "Diagnostic..." : "Diagnostiquer Direction Apple"}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => void onCleanupAppleDuplicates()}
-                      disabled={cleaningAppleDuplicates}
-                      className="rounded-full border border-stone-200 bg-white px-2.5 py-1 text-xs font-semibold text-stone-500 transition hover:bg-stone-100 disabled:text-stone-300"
-                    >
-                      {cleaningAppleDuplicates ? "Nettoyage..." : "Nettoyer les doublons Apple"}
-                    </button>
-                  </div>
+                  <button
+                    type="button"
+                    onClick={() => void onCleanupAppleDuplicates()}
+                    disabled={cleaningAppleDuplicates}
+                    className="rounded-full border border-stone-200 bg-white px-2.5 py-1 text-xs font-semibold text-stone-500 transition hover:bg-stone-100 disabled:text-stone-300"
+                  >
+                    {cleaningAppleDuplicates ? "Nettoyage..." : "Nettoyer les doublons Apple"}
+                  </button>
                 )}
               </div>
           {appleLoading && <div className="rounded-2xl bg-stone-50 px-3 py-2 text-sm font-semibold text-stone-400">Chargement Apple Calendar...</div>}
