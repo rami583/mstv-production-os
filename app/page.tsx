@@ -48,6 +48,7 @@ import {
   useRef,
   useState,
   type Dispatch,
+  type KeyboardEvent as ReactKeyboardEvent,
   type PointerEvent as ReactPointerEvent,
   type SetStateAction,
   type TouchEvent as ReactTouchEvent,
@@ -14710,6 +14711,8 @@ function ExternalCalendarsListView({
   const [googleSyncErrorByCalendarId, setGoogleSyncErrorByCalendarId] = useState<Record<string, string>>({});
   const [appleSyncSummaryByCalendarId, setAppleSyncSummaryByCalendarId] = useState<Record<string, string>>({});
   const [appleSyncErrorByCalendarId, setAppleSyncErrorByCalendarId] = useState<Record<string, string>>({});
+  const [icsSyncSummaryByCalendarId, setIcsSyncSummaryByCalendarId] = useState<Record<string, string>>({});
+  const [icsSyncErrorByCalendarId, setIcsSyncErrorByCalendarId] = useState<Record<string, string>>({});
   const [appleConnectOpen, setAppleConnectOpen] = useState(false);
   const [appleDraft, setAppleDraft] = useState({ appleId: "", appPassword: "" });
   const [appleConnectError, setAppleConnectError] = useState<string | null>(null);
@@ -14792,17 +14795,77 @@ function ExternalCalendarsListView({
     }
   }
 
+  async function handleIcsPullSync(calendar: ExternalCalendar) {
+    setIcsSyncSummaryByCalendarId((current) => ({ ...current, [calendar.id]: "" }));
+    setIcsSyncErrorByCalendarId((current) => ({ ...current, [calendar.id]: "" }));
+
+    try {
+      const result = await onSync(calendar);
+      setIcsSyncSummaryByCalendarId((current) => ({
+        ...current,
+        [calendar.id]: `Synchronisation terminée : ${result.synced ?? 0} événement(s).`,
+      }));
+    } catch (syncError) {
+      setIcsSyncErrorByCalendarId((current) => ({
+        ...current,
+        [calendar.id]: getUserFacingErrorMessage(syncError, "Impossible de synchroniser ce calendrier."),
+      }));
+    }
+  }
+
+  const icsCalendars = calendars.filter((calendar) => calendar.providerType === "ics_read_only");
+
+  function getCalendarStatusLine(calendar: ExternalCalendar | null) {
+    if (!calendar) return "Non activé dans MSTV";
+    return getExternalCalendarStatusLine(events.filter((event) => event.externalCalendarId === calendar.id));
+  }
+
+  function getGoogleStoredCalendar(providerCalendar: GoogleProviderCalendar) {
+    return calendars.find((item) => item.id === providerCalendar.externalCalendarId)
+      ?? calendars.find((item) => item.providerType === "google" && item.providerCalendarId === providerCalendar.providerCalendarId)
+      ?? null;
+  }
+
+  function getAppleStoredCalendar(providerCalendar: AppleProviderCalendar) {
+    return calendars.find((item) => item.id === providerCalendar.externalCalendarId)
+      ?? calendars.find((item) => item.providerType === "apple_caldav" && item.providerCalendarId === providerCalendar.providerCalendarId)
+      ?? null;
+  }
+
+  function handleNestedCalendarKeyDown(event: ReactKeyboardEvent<HTMLDivElement>, calendar: ExternalCalendar | null) {
+    if (!calendar) return;
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      onSelect(calendar);
+    }
+  }
+
+  function CapabilityBadge({ capability }: { capability: ExternalCalendarSyncCapability }) {
+    return (
+      <span
+        className={cn(
+          "shrink-0 rounded-full px-2 py-0.5 text-xs font-semibold ring-1",
+          capability === "bidirectional"
+            ? "bg-emerald-50 text-emerald-700 ring-emerald-200"
+            : "bg-white text-stone-500 ring-stone-200",
+        )}
+      >
+        {getExternalCalendarCapabilityLabel(capability)}
+      </span>
+    );
+  }
+
   if (loading) {
     return <div className="rounded-2xl bg-stone-50 px-4 py-3 text-base font-medium text-stone-500">Chargement...</div>;
   }
 
   return (
     <div className="space-y-2">
-      <div className="mb-4 rounded-2xl border border-stone-200 bg-white px-4 py-3">
+      <div className="rounded-2xl border border-stone-200 bg-white px-4 py-3">
         <div className="flex items-start justify-between gap-3">
           <div>
-            <h3 className="text-base font-semibold text-stone-950">Comptes calendrier connectés</h3>
-            <p className="mt-1 text-sm font-semibold text-stone-400">Google Calendar est bidirectionnel. Apple Calendar arrive via CalDAV en lecture seule pour cette phase.</p>
+            <h3 className="text-base font-semibold text-stone-950">Comptes connectés</h3>
+            <p className="mt-1 text-sm font-semibold text-stone-400">Chaque compte affiche ses calendriers en dessous.</p>
           </div>
           <div className="flex shrink-0 flex-col gap-1.5 sm:flex-row">
             <button
@@ -14872,15 +14935,24 @@ function ExternalCalendarsListView({
               </div>
             </div>
           )}
+
+          <div className="rounded-2xl border border-stone-200 bg-stone-50/70 px-3 py-3">
+            <div className="mb-2 flex items-center justify-between gap-3">
+              <div>
+                <h4 className="text-sm font-semibold text-stone-950">Comptes calendrier</h4>
+                <p className="text-xs font-semibold text-stone-400">Google, Apple et autres fournisseurs connectés.</p>
+              </div>
+            </div>
           {googleLoading && <div className="rounded-2xl bg-stone-50 px-3 py-2 text-sm font-semibold text-stone-400">Chargement Google Calendar...</div>}
           {!googleLoading && googleAccounts.length === 0 && (
-            <div className="rounded-2xl bg-stone-50 px-3 py-2 text-sm font-semibold text-stone-400">Aucun compte Google connecté.</div>
+              <div className="rounded-xl bg-white px-3 py-2 text-sm font-semibold text-stone-400 ring-1 ring-stone-200">Aucun compte Google connecté.</div>
           )}
-          {googleAccounts.map((account) => (
-            <div key={account.id} className="rounded-2xl border border-stone-200 bg-stone-50 px-3 py-2">
+            <div className="mt-2 space-y-2">
+              {googleAccounts.map((account) => (
+                <div key={account.id} className="rounded-2xl border border-stone-200 bg-white px-3 py-3">
               <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0">
-                  <div className="truncate text-sm font-semibold text-stone-900">{account.displayName || account.email || "Compte Google"}</div>
+                      <div className="truncate text-sm font-semibold text-stone-950">Google — {account.email || account.displayName || "Compte Google"}</div>
                   <div className="mt-0.5 flex flex-wrap items-center gap-1.5 text-xs font-semibold">
                     <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-emerald-700 ring-1 ring-emerald-200">Bidirectionnel</span>
                     <span className="rounded-full bg-white px-2 py-0.5 text-stone-500 ring-1 ring-stone-200">{account.connectionStatus === "connected" ? "Connecté" : account.connectionStatus === "disconnected" ? "Déconnecté" : "Erreur"}</span>
@@ -14896,8 +14968,9 @@ function ExternalCalendarsListView({
                 </button>
               </div>
               {account.lastError && <div className="mt-2 text-xs font-semibold text-rose-600">{account.lastError}</div>}
-              <div className="mt-2 space-y-1.5">
+                  <div className="mt-3 space-y-1.5 border-l border-stone-200 pl-3">
                 {(googleCalendarsByAccountId[account.id] ?? []).map((calendar) => {
+                      const storedCalendar = getGoogleStoredCalendar(calendar);
                   const updateKey = `${account.id}:${calendar.providerCalendarId}`;
                   const syncKey = calendar.externalCalendarId ?? calendar.providerCalendarId;
                   const isPullSyncing = Boolean(calendar.externalCalendarId) && syncingCalendarId === calendar.externalCalendarId;
@@ -14905,16 +14978,34 @@ function ExternalCalendarsListView({
                   const syncSummary = googleSyncSummaryByCalendarId[syncKey];
                   const syncError = googleSyncErrorByCalendarId[syncKey];
                   return (
-                    <div key={calendar.providerCalendarId} className="rounded-xl bg-white px-3 py-2 ring-1 ring-stone-200">
-                      <div className="flex items-center justify-between gap-3">
-                        <div className="min-w-0">
-                          <div className="truncate text-sm font-semibold text-stone-800">{calendar.summary}</div>
-                          <div className="text-xs font-semibold text-stone-400">
-                            {calendar.primary ? "Principal · " : ""}
-                            {calendar.writable ? "Lecture/écriture" : "Lecture seule chez Google"}
+                        <div
+                          key={calendar.providerCalendarId}
+                          role={storedCalendar ? "button" : undefined}
+                          tabIndex={storedCalendar ? 0 : undefined}
+                          onClick={() => storedCalendar && onSelect(storedCalendar)}
+                          onKeyDown={(event) => handleNestedCalendarKeyDown(event, storedCalendar)}
+                          className={cn(
+                            "rounded-xl bg-stone-50 px-3 py-2 ring-1 ring-stone-200",
+                            storedCalendar && "cursor-pointer transition hover:bg-stone-100/80",
+                          )}
+                        >
+                          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                            <div className="flex min-w-0 items-start gap-2">
+                              <ExternalCalendarColorDot color={calendar.color} className="mt-0.5" />
+                              <div className="min-w-0">
+                                <div className="truncate text-sm font-semibold text-stone-800">{calendar.summary}</div>
+                                <div className="mt-1 flex flex-wrap items-center gap-1.5 text-xs font-semibold">
+                                  <span className="rounded-full bg-white px-2 py-0.5 text-stone-500 ring-1 ring-stone-200">Google</span>
+                                  <CapabilityBadge capability={calendar.writable ? "bidirectional" : "read_only"} />
+                                  <span className={cn("rounded-full px-2 py-0.5 ring-1", calendar.enabled ? "bg-emerald-50 text-emerald-700 ring-emerald-200" : "bg-white text-stone-400 ring-stone-200")}>
+                                    {calendar.enabled ? "Activé" : "Désactivé"}
+                                  </span>
+                                  {calendar.primary && <span className="rounded-full bg-white px-2 py-0.5 text-stone-500 ring-1 ring-stone-200">Principal</span>}
+                                </div>
+                                <div className="mt-1 text-xs font-semibold text-stone-400">{getCalendarStatusLine(storedCalendar)}</div>
+                              </div>
                           </div>
-                        </div>
-                        <div className="flex shrink-0 items-center gap-1.5">
+                            <div className="flex shrink-0 flex-wrap items-center gap-1.5" onClick={(event) => event.stopPropagation()}>
                           {calendar.enabled && calendar.writable && (
                             <button
                               type="button"
@@ -14945,40 +15036,65 @@ function ExternalCalendarsListView({
                     </div>
                   );
                 })}
+                    {(googleCalendarsByAccountId[account.id] ?? []).length === 0 && (
+                      <div className="rounded-xl bg-stone-50 px-3 py-2 text-sm font-semibold text-stone-400 ring-1 ring-stone-200">Aucun calendrier Google chargé.</div>
+                    )}
               </div>
             </div>
-          ))}
+              ))}
+            </div>
+
           {appleLoading && <div className="rounded-2xl bg-stone-50 px-3 py-2 text-sm font-semibold text-stone-400">Chargement Apple Calendar...</div>}
           {!appleLoading && appleAccounts.length === 0 && (
-            <div className="rounded-2xl bg-stone-50 px-3 py-2 text-sm font-semibold text-stone-400">Aucun compte Apple Calendar connecté.</div>
+              <div className="mt-2 rounded-xl bg-white px-3 py-2 text-sm font-semibold text-stone-400 ring-1 ring-stone-200">Aucun compte Apple Calendar connecté.</div>
           )}
-          {appleAccounts.map((account) => (
-            <div key={account.id} className="rounded-2xl border border-stone-200 bg-stone-50 px-3 py-2">
+            <div className="mt-2 space-y-2">
+              {appleAccounts.map((account) => (
+                <div key={account.id} className="rounded-2xl border border-stone-200 bg-white px-3 py-3">
               <div className="min-w-0">
-                <div className="truncate text-sm font-semibold text-stone-900">{account.displayName || account.email || "Compte Apple"}</div>
+                    <div className="truncate text-sm font-semibold text-stone-950">Apple — {account.email || account.displayName || "Compte Apple"}</div>
                 <div className="mt-0.5 flex flex-wrap items-center gap-1.5 text-xs font-semibold">
                   <span className="rounded-full bg-white px-2 py-0.5 text-stone-500 ring-1 ring-stone-200">Lecture seule</span>
                   <span className="rounded-full bg-white px-2 py-0.5 text-stone-500 ring-1 ring-stone-200">{account.connectionStatus === "connected" ? "Connecté" : account.connectionStatus === "disconnected" ? "Déconnecté" : "Erreur"}</span>
                 </div>
               </div>
               {account.lastError && <div className="mt-2 text-xs font-semibold text-rose-600">{account.lastError}</div>}
-              <div className="mt-2 space-y-1.5">
+                  <div className="mt-3 space-y-1.5 border-l border-stone-200 pl-3">
                 {(appleCalendarsByAccountId[account.id] ?? []).map((calendar) => {
+                      const storedCalendar = getAppleStoredCalendar(calendar);
                   const syncKey = calendar.externalCalendarId ?? calendar.providerCalendarId;
                   const isPullSyncing = Boolean(calendar.externalCalendarId) && syncingCalendarId === calendar.externalCalendarId;
                   const canPullSync = calendar.enabled && Boolean(calendar.externalCalendarId);
                   const syncSummary = appleSyncSummaryByCalendarId[syncKey];
                   const syncError = appleSyncErrorByCalendarId[syncKey];
                   return (
-                    <div key={calendar.providerCalendarId} className="rounded-xl bg-white px-3 py-2 ring-1 ring-stone-200">
-                      <div className="flex items-center justify-between gap-3">
-                        <div className="flex min-w-0 items-center gap-2">
-                          <ExternalCalendarColorDot color={calendar.color} />
+                        <div
+                          key={calendar.providerCalendarId}
+                          role={storedCalendar ? "button" : undefined}
+                          tabIndex={storedCalendar ? 0 : undefined}
+                          onClick={() => storedCalendar && onSelect(storedCalendar)}
+                          onKeyDown={(event) => handleNestedCalendarKeyDown(event, storedCalendar)}
+                          className={cn(
+                            "rounded-xl bg-stone-50 px-3 py-2 ring-1 ring-stone-200",
+                            storedCalendar && "cursor-pointer transition hover:bg-stone-100/80",
+                          )}
+                        >
+                          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                            <div className="flex min-w-0 items-start gap-2">
+                              <ExternalCalendarColorDot color={calendar.color} className="mt-0.5" />
                           <div className="min-w-0">
                             <div className="truncate text-sm font-semibold text-stone-800">{calendar.name}</div>
-                            <div className="text-xs font-semibold text-stone-400">Apple Calendar · Lecture seule</div>
+                                <div className="mt-1 flex flex-wrap items-center gap-1.5 text-xs font-semibold">
+                                  <span className="rounded-full bg-white px-2 py-0.5 text-stone-500 ring-1 ring-stone-200">Apple</span>
+                                  <CapabilityBadge capability="read_only" />
+                                  <span className={cn("rounded-full px-2 py-0.5 ring-1", calendar.enabled ? "bg-emerald-50 text-emerald-700 ring-emerald-200" : "bg-white text-stone-400 ring-stone-200")}>
+                                    {calendar.enabled ? "Activé" : "Désactivé"}
+                                  </span>
+                                </div>
+                                <div className="mt-1 text-xs font-semibold text-stone-400">{getCalendarStatusLine(storedCalendar)}</div>
                           </div>
                         </div>
+                            <div className="flex shrink-0 flex-wrap items-center gap-1.5" onClick={(event) => event.stopPropagation()}>
                         <button
                           type="button"
                           onClick={() => void handleApplePullSync(calendar)}
@@ -14988,6 +15104,70 @@ function ExternalCalendarsListView({
                           {isPullSyncing ? "Synchronisation..." : "Synchroniser depuis Apple"}
                         </button>
                       </div>
+                          </div>
+                      {syncSummary && <p className="mt-1.5 text-xs font-semibold text-emerald-600">{syncSummary}</p>}
+                      {syncError && <p className="mt-1.5 text-xs font-semibold text-rose-600">{syncError}</p>}
+                    </div>
+                  );
+                })}
+                    {(appleCalendarsByAccountId[account.id] ?? []).length === 0 && (
+                      <div className="rounded-xl bg-stone-50 px-3 py-2 text-sm font-semibold text-stone-400 ring-1 ring-stone-200">Aucun calendrier Apple chargé.</div>
+                    )}
+              </div>
+            </div>
+              ))}
+            </div>
+          </div>
+
+          {icsCalendars.length > 0 && (
+            <div className="rounded-2xl border border-stone-200 bg-stone-50/70 px-3 py-3">
+              <div className="min-w-0">
+                <div className="truncate text-sm font-semibold text-stone-950">Flux ICS</div>
+                <div className="mt-0.5 flex flex-wrap items-center gap-1.5 text-xs font-semibold">
+                  <span className="rounded-full bg-white px-2 py-0.5 text-stone-500 ring-1 ring-stone-200">Lecture seule</span>
+                  <span className="rounded-full bg-white px-2 py-0.5 text-stone-500 ring-1 ring-stone-200">Webcal / ICS</span>
+                </div>
+              </div>
+              <div className="mt-3 space-y-1.5 border-l border-stone-200 pl-3">
+                {icsCalendars.map((calendar) => {
+                  const isPullSyncing = syncingCalendarId === calendar.id;
+                  const syncSummary = icsSyncSummaryByCalendarId[calendar.id];
+                  const syncError = icsSyncErrorByCalendarId[calendar.id];
+                  return (
+                    <div
+                      key={calendar.id}
+                      role="button"
+                      tabIndex={0}
+                      onClick={() => onSelect(calendar)}
+                      onKeyDown={(event) => handleNestedCalendarKeyDown(event, calendar)}
+                      className="cursor-pointer rounded-xl bg-stone-50 px-3 py-2 ring-1 ring-stone-200 transition hover:bg-stone-100/80"
+                    >
+                      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                        <div className="flex min-w-0 items-start gap-2">
+                          <ExternalCalendarColorDot color={calendar.color} className="mt-0.5" />
+                          <div className="min-w-0">
+                            <div className="truncate text-sm font-semibold text-stone-800">{calendar.name}</div>
+                            <div className="mt-1 flex flex-wrap items-center gap-1.5 text-xs font-semibold">
+                              <span className="rounded-full bg-white px-2 py-0.5 text-stone-500 ring-1 ring-stone-200">ICS</span>
+                              <CapabilityBadge capability="read_only" />
+                              <span className={cn("rounded-full px-2 py-0.5 ring-1", calendar.syncEnabled ? "bg-emerald-50 text-emerald-700 ring-emerald-200" : "bg-white text-stone-400 ring-stone-200")}>
+                                {calendar.syncEnabled ? "Activé" : "Désactivé"}
+                              </span>
+                            </div>
+                            <div className="mt-1 text-xs font-semibold text-stone-400">{getCalendarStatusLine(calendar)}</div>
+                          </div>
+                        </div>
+                        <div className="flex shrink-0 flex-wrap items-center gap-1.5" onClick={(event) => event.stopPropagation()}>
+                          <button
+                            type="button"
+                            onClick={() => void handleIcsPullSync(calendar)}
+                            disabled={!calendar.syncEnabled || isPullSyncing}
+                            className="rounded-full border border-stone-200 bg-white px-2.5 py-1 text-xs font-semibold text-stone-600 transition hover:bg-stone-100 disabled:bg-stone-50 disabled:text-stone-300"
+                          >
+                            {isPullSyncing ? "Synchronisation..." : "Synchroniser"}
+                          </button>
+                        </div>
+                      </div>
                       {syncSummary && <p className="mt-1.5 text-xs font-semibold text-emerald-600">{syncSummary}</p>}
                       {syncError && <p className="mt-1.5 text-xs font-semibold text-rose-600">{syncError}</p>}
                     </div>
@@ -14995,47 +15175,13 @@ function ExternalCalendarsListView({
                 })}
               </div>
             </div>
-          ))}
+          )}
+
+          {googleAccounts.length === 0 && appleAccounts.length === 0 && icsCalendars.length === 0 && !error && (
+            <div className="rounded-2xl bg-stone-50 px-4 py-3 text-base font-medium text-stone-500">Aucun calendrier externe pour le moment.</div>
+          )}
         </div>
       </div>
-      {calendars.length === 0 && !error && (
-        <div className="rounded-2xl bg-stone-50 px-4 py-3 text-base font-medium text-stone-500">Aucun calendrier externe pour le moment.</div>
-      )}
-      {calendars.map((calendar) => {
-        const calendarEvents = events.filter((event) => event.externalCalendarId === calendar.id);
-        return (
-          <button
-            key={calendar.id}
-            type="button"
-            onClick={() => onSelect(calendar)}
-            className="grid w-full grid-cols-[auto_1fr_auto] items-center gap-3 rounded-2xl border border-stone-200 bg-stone-50/70 px-4 py-3 text-left transition hover:bg-stone-100/80"
-          >
-            <ExternalCalendarColorDot color={calendar.color} />
-            <span className="min-w-0">
-              <span className="flex min-w-0 items-center gap-2">
-                <span className="truncate text-base font-semibold text-stone-950">{calendar.name}</span>
-                <span className="shrink-0 rounded-full bg-white px-2 py-0.5 text-xs font-semibold text-stone-500 ring-1 ring-stone-200">
-                  {getExternalCalendarVisibilityLabel(calendar.visibility)}
-                </span>
-                <span
-                  className={cn(
-                    "shrink-0 rounded-full px-2 py-0.5 text-xs font-semibold ring-1",
-                    calendar.syncCapability === "bidirectional"
-                      ? "bg-emerald-50 text-emerald-700 ring-emerald-200"
-                      : "bg-white text-stone-500 ring-stone-200",
-                  )}
-                >
-                  {getExternalCalendarCapabilityLabel(calendar.syncCapability)}
-                </span>
-              </span>
-              <span className="mt-0.5 block truncate text-sm font-semibold text-stone-400">
-                {getExternalCalendarProviderLabel(calendar.providerType)} · {getExternalCalendarStatusLine(calendarEvents)}
-              </span>
-            </span>
-            <ChevronRight className="h-5 w-5 text-stone-300" />
-          </button>
-        );
-      })}
       {canCreate && (
         <button
           type="button"
