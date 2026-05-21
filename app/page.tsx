@@ -1031,9 +1031,9 @@ function isCachedExternalEventLinkVisible(link: ExternalEventLink, state: Cached
   });
   const providerEnabled = providerKey ? state.enabledByProviderKey.get(providerKey) : undefined;
 
-  if (providerEnabled === false) return false;
   if (exactEnabled === false) return false;
   if (exactEnabled === true) return true;
+  if (providerEnabled === false) return false;
   return providerEnabled ?? link.calendarSyncEnabled;
 }
 
@@ -3560,9 +3560,9 @@ export default function Home() {
         providerCalendarId: link.providerCalendarId,
       });
       const providerEnabled = providerKey ? externalCalendarProviderStateByKey.get(providerKey)?.enabled : undefined;
-      if (providerEnabled === false) return false;
       if (exactEnabled === false) return false;
       if (exactEnabled === true) return true;
+      if (providerEnabled === false) return false;
       return providerEnabled ?? link.calendarSyncEnabled;
     },
     [externalCalendarEnabledById, externalCalendarProviderStateByKey],
