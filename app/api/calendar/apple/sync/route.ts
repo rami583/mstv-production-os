@@ -398,7 +398,6 @@ export async function POST(request: Request) {
       .eq("id", externalCalendarId)
       .eq("created_by_profile_id", authResult.user.id)
       .eq("provider_type", "apple_caldav")
-      .eq("sync_capability", "read_only")
       .maybeSingle();
 
     if (calendarError) throwSupabaseError("load_external_calendar", calendarError);
@@ -462,7 +461,7 @@ export async function POST(request: Request) {
           provider_calendar_id: calendar.provider_calendar_id,
           external_event_id: appleEvent.externalEventId,
           external_event_uid: appleEvent.uid,
-          sync_direction: "pull",
+          sync_direction: "bidirectional",
           sync_status: "synced",
           local_updated_at: insertedEvent.updated_at,
           last_synced_at: now,

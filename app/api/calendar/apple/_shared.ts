@@ -36,6 +36,7 @@ type StoredAppleCalendarRow = {
   name: string;
   provider_account_id: string | null;
   provider_calendar_id: string | null;
+  sync_capability?: string | null;
   sync_enabled: boolean;
   visibility: string | null;
   color: string | null;
@@ -151,7 +152,7 @@ export async function cleanupAppleCalendarDuplicates(
 ): Promise<AppleCalendarDuplicateCleanupResult> {
   const { data: existingCalendars, error: existingError } = await supabase
     .from("external_calendars")
-    .select("id, name, provider_account_id, provider_calendar_id, sync_enabled, visibility, color, created_at")
+    .select("id, name, provider_account_id, provider_calendar_id, sync_capability, sync_enabled, visibility, color, created_at")
     .eq("provider_account_id", input.account.id)
     .eq("provider_type", "apple_caldav")
     .eq("created_by_profile_id", input.userId);
@@ -245,7 +246,7 @@ export async function cleanupAppleCalendarDuplicates(
   return result;
 }
 
-function getBasicAuthHeader(appleId: string, appPassword: string) {
+export function getBasicAuthHeader(appleId: string, appPassword: string) {
   return `Basic ${Buffer.from(`${appleId}:${appPassword}`, "utf8").toString("base64")}`;
 }
 
@@ -403,7 +404,7 @@ export async function materializeAppleCalendars(
 ) {
   const { data: existingCalendars, error: existingError } = await supabase
     .from("external_calendars")
-    .select("id, name, provider_account_id, provider_calendar_id, sync_enabled, visibility, color, created_at")
+    .select("id, name, provider_account_id, provider_calendar_id, sync_capability, sync_enabled, visibility, color, created_at")
     .eq("provider_account_id", input.account.id)
     .eq("provider_type", "apple_caldav")
     .eq("created_by_profile_id", input.userId);
@@ -443,12 +444,18 @@ export async function materializeAppleCalendars(
           disabledDuplicateCount: duplicateIds.length,
         });
       }
-      if (existingCalendar.provider_calendar_id !== calendar.providerCalendarId || existingCalendar.name !== calendar.name || groupWasDisabled) {
+      if (
+        existingCalendar.provider_calendar_id !== calendar.providerCalendarId ||
+        existingCalendar.name !== calendar.name ||
+        existingCalendar.sync_capability !== "bidirectional" ||
+        groupWasDisabled
+      ) {
         const { error } = await supabase
           .from("external_calendars")
           .update({
             name: calendar.name || existingCalendar.name,
             provider_calendar_id: calendar.providerCalendarId,
+            sync_capability: "bidirectional",
             sync_enabled: groupWasDisabled ? false : existingCalendar.sync_enabled,
             last_sync_error: null,
           })
@@ -466,7 +473,7 @@ export async function materializeAppleCalendars(
       provider_type: "apple_caldav",
       provider_account_id: input.account.id,
       provider_calendar_id: calendar.providerCalendarId,
-      sync_capability: "read_only",
+      sync_capability: "bidirectional",
       sync_enabled: true,
       last_sync_status: "idle",
       last_sync_error: null,
