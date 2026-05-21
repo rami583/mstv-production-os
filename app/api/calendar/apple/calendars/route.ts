@@ -91,13 +91,6 @@ export async function POST(request: Request) {
         return appleJsonResponse({ error: "Calendrier Apple introuvable dans MSTV." }, { status: 404 });
       }
 
-      console.info("Apple calendar settings action target", {
-        action: body.action,
-        requestedCalendarId: body.calendarId ?? null,
-        resolvedCalendarId: calendar.id,
-        providerCalendarId,
-      });
-
       if (body.action === "remove") {
         const { data, error } = await supabase
           .from("external_calendars")
@@ -114,10 +107,7 @@ export async function POST(request: Request) {
         const refetchedCalendar = await refetchStoredAppleCalendar(supabase, data.id);
         console.info("Apple calendar local sync disabled", {
           externalCalendarId: data.id,
-          providerCalendarId,
-          updateResponse: data,
-          refetchedSyncEnabled: refetchedCalendar.sync_enabled,
-          refetchedColor: refetchedCalendar.color,
+          syncEnabled: refetchedCalendar.sync_enabled,
         });
         return appleJsonResponse({ ok: true, enabled: false, calendarId: data.id, calendar: refetchedCalendar });
       }
@@ -139,10 +129,8 @@ export async function POST(request: Request) {
       const refetchedCalendar = await refetchStoredAppleCalendar(supabase, data.id);
       console.info("Apple calendar local settings updated", {
         externalCalendarId: data.id,
-        providerCalendarId,
-        updateResponse: data,
-        refetchedSyncEnabled: refetchedCalendar.sync_enabled,
-        refetchedColor: refetchedCalendar.color,
+        syncEnabled: refetchedCalendar.sync_enabled,
+        color: refetchedCalendar.color,
       });
       return appleJsonResponse({ ok: true, calendarId: data.id, enabled: data.sync_enabled, color: data.color, visibility: data.visibility, calendar: refetchedCalendar });
     }

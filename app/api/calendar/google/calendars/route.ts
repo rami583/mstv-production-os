@@ -278,13 +278,6 @@ export async function POST(request: Request) {
       calendarId: body.calendarId?.trim() || null,
     });
 
-    console.info("Google calendar settings action target", {
-      action: body.action,
-      requestedCalendarId: body.calendarId ?? null,
-      resolvedCalendarId: existingCalendar?.id ?? null,
-      providerCalendarId,
-    });
-
     if (body.action === "remove") {
       if (!existingCalendar?.id) {
         return googleJsonResponse({ ok: true, enabled: false });
@@ -305,10 +298,7 @@ export async function POST(request: Request) {
       const refetchedCalendar = await refetchStoredGoogleCalendar(supabase, data.id);
       console.info("Google calendar local sync disabled", {
         externalCalendarId: data.id,
-        providerCalendarId,
-        updateResponse: data,
-        refetchedSyncEnabled: refetchedCalendar.sync_enabled,
-        refetchedColor: refetchedCalendar.color,
+        syncEnabled: refetchedCalendar.sync_enabled,
       });
       return googleJsonResponse({ ok: true, enabled: false, calendarId: data.id, calendar: refetchedCalendar });
     }
@@ -335,10 +325,8 @@ export async function POST(request: Request) {
       const refetchedCalendar = await refetchStoredGoogleCalendar(supabase, data.id);
       console.info("Google calendar local settings updated", {
         externalCalendarId: data.id,
-        providerCalendarId,
-        updateResponse: data,
-        refetchedSyncEnabled: refetchedCalendar.sync_enabled,
-        refetchedColor: refetchedCalendar.color,
+        syncEnabled: refetchedCalendar.sync_enabled,
+        color: refetchedCalendar.color,
       });
       return googleJsonResponse({ ok: true, calendarId: data.id, enabled: data.sync_enabled, color: data.color, visibility: data.visibility, calendar: refetchedCalendar });
     }
