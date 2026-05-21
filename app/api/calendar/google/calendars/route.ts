@@ -44,6 +44,7 @@ async function findStoredGoogleCalendar(
     .select("id, provider_account_id, provider_calendar_id, sync_enabled, visibility, color")
     .eq("provider_account_id", input.accountId)
     .eq("provider_calendar_id", input.providerCalendarId)
+    .eq("provider_type", "google")
     .eq("created_by_profile_id", input.userId)
     .limit(1)
     .maybeSingle();
@@ -228,7 +229,7 @@ export async function POST(request: Request) {
     if ("error" in authResult) return authResult.error;
 
     const body = (await request.json().catch(() => null)) as {
-      action?: "list" | "set_enabled";
+      action?: "list" | "set_enabled" | "update_settings" | "remove";
       accountId?: string;
       providerCalendarId?: string;
       name?: string;
@@ -249,6 +250,64 @@ export async function POST(request: Request) {
 
     const supabase = getServiceSupabaseClient();
     const account = await getOwnedGoogleAccount(supabase, accountId, authResult.user.id);
+    const existingCalendar = await findStoredGoogleCalendar(supabase, {
+      accountId: account.id,
+      providerCalendarId,
+      userId: authResult.user.id,
+    });
+
+    if (body.action === "remove") {
+      if (!existingCalendar?.id) {
+        return googleJsonResponse({ ok: true, enabled: false });
+      }
+
+      const { data, error } = await supabase
+        .from("external_calendars")
+        .update({
+          sync_enabled: false,
+          last_sync_status: "idle",
+          last_sync_error: null,
+        })
+        .eq("id", existingCalendar.id)
+        .select("id, sync_enabled, color")
+        .single();
+
+      if (error) throw error;
+      console.info("Google calendar local sync disabled", {
+        externalCalendarId: data.id,
+        providerCalendarId,
+        syncEnabled: data.sync_enabled,
+      });
+      return googleJsonResponse({ ok: true, enabled: false, calendarId: data.id });
+    }
+
+    if (body.action === "update_settings") {
+      if (!existingCalendar?.id) {
+        return googleJsonResponse({ error: "Calendrier Google introuvable dans MSTV." }, { status: 404 });
+      }
+
+      const visibility = body.visibility === "admin_only" || body.visibility === "team" ? body.visibility : "private";
+      const { data, error } = await supabase
+        .from("external_calendars")
+        .update({
+          color: body.color ?? existingCalendar.color ?? "blue",
+          visibility,
+          sync_enabled: typeof body.enabled === "boolean" ? body.enabled : existingCalendar.sync_enabled,
+          last_sync_error: null,
+        })
+        .eq("id", existingCalendar.id)
+        .select("id, sync_enabled, color, visibility")
+        .single();
+
+      if (error) throw error;
+      console.info("Google calendar local settings updated", {
+        externalCalendarId: data.id,
+        providerCalendarId,
+        syncEnabled: data.sync_enabled,
+        color: data.color,
+      });
+      return googleJsonResponse({ ok: true, calendarId: data.id, enabled: data.sync_enabled, color: data.color, visibility: data.visibility });
+    }
 
     if (!body?.enabled) {
       const { error } = await supabase
@@ -266,12 +325,6 @@ export async function POST(request: Request) {
     }
 
     const visibility = body.visibility === "admin_only" || body.visibility === "team" ? body.visibility : "private";
-    const existingCalendar = await findStoredGoogleCalendar(supabase, {
-      accountId: account.id,
-      providerCalendarId,
-      userId: authResult.user.id,
-    });
-
     let calendarId: string;
     if (existingCalendar?.id) {
       const { error } = await supabase

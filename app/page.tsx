@@ -332,6 +332,7 @@ type ExternalEventLink = {
   calendarColor: string | null;
   calendarProviderType: ExternalCalendarProviderType;
   calendarSyncCapability: ExternalCalendarSyncCapability;
+  calendarSyncEnabled: boolean;
 };
 
 type GoogleCalendarAccount = {
@@ -2790,6 +2791,7 @@ function mapExternalEventLink(row: ExternalEventLinkQueryRow): ExternalEventLink
     calendarColor: calendar?.color ?? null,
     calendarProviderType: normalizeExternalCalendarProviderType(calendar?.provider_type ?? row.provider_type),
     calendarSyncCapability: normalizeExternalCalendarSyncCapability(calendar?.sync_capability ?? "read_only"),
+    calendarSyncEnabled: Boolean(calendar?.sync_enabled ?? true),
   };
 }
 
@@ -3430,6 +3432,10 @@ export default function Home() {
         }),
       ),
     [externalCalendarEvents, permissions, profile],
+  );
+  const visibleProductionEvents = useMemo(
+    () => events.filter((event) => event.externalLinks.every((link) => link.calendarSyncEnabled)),
+    [events],
   );
   const writableGoogleCalendars = useMemo(
     () =>
@@ -4473,6 +4479,37 @@ export default function Home() {
     const visibility = permissions.canManageEvents ? input.visibility : "private";
     const icsUrl = normalizeExternalCalendarIcsUrl(input.icsUrl);
 
+    if ((calendar.providerType === "google" || calendar.providerType === "apple_caldav") && calendar.providerAccountId && calendar.providerCalendarId) {
+      const accessToken = await getServerApiAccessToken(authSession?.access_token);
+      const apiPath = calendar.providerType === "google" ? "/api/calendar/google/calendars" : "/api/calendar/apple/calendars";
+      const response = await fetch(getAppApiUrl(apiPath, "Calendrier externe momentanément indisponible."), {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${accessToken}`,
+        },
+        body: JSON.stringify({
+          action: "update_settings",
+          accountId: calendar.providerAccountId,
+          providerCalendarId: calendar.providerCalendarId,
+          color: input.color,
+          visibility,
+          enabled: input.syncEnabled ?? calendar.syncEnabled,
+        }),
+      });
+      const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+      if (!response.ok) {
+        throw new Error(payload?.error ?? "Impossible de modifier ce calendrier.");
+      }
+      await refreshExternalCalendarSettings();
+      if (calendar.providerType === "google") {
+        await refreshGoogleCalendarAccounts();
+      } else {
+        await refreshAppleCalendarAccounts();
+      }
+      return;
+    }
+
     const { error: updateError } = await supabase
       .from("external_calendars")
       .update({
@@ -4801,17 +4838,25 @@ export default function Home() {
       throw new Error("Vous ne pouvez supprimer que vos calendriers.");
     }
 
-    if (calendar.providerType === "google" || calendar.providerType === "apple_caldav") {
-      const { error: disableError } = await supabase
-        .from("external_calendars")
-        .update({
-          sync_enabled: false,
-          last_sync_status: "idle",
-          last_sync_error: null,
-        })
-        .eq("id", calendar.id);
-
-      if (disableError) throw disableError;
+    if ((calendar.providerType === "google" || calendar.providerType === "apple_caldav") && calendar.providerAccountId && calendar.providerCalendarId) {
+      const accessToken = await getServerApiAccessToken(authSession?.access_token);
+      const apiPath = calendar.providerType === "google" ? "/api/calendar/google/calendars" : "/api/calendar/apple/calendars";
+      const response = await fetch(getAppApiUrl(apiPath, "Calendrier externe momentanément indisponible."), {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${accessToken}`,
+        },
+        body: JSON.stringify({
+          action: "remove",
+          accountId: calendar.providerAccountId,
+          providerCalendarId: calendar.providerCalendarId,
+        }),
+      });
+      const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+      if (!response.ok) {
+        throw new Error(payload?.error ?? "Impossible de retirer ce calendrier.");
+      }
       await refreshExternalCalendarSettings();
       if (calendar.providerType === "google") {
         await refreshGoogleCalendarAccounts();
@@ -8786,7 +8831,7 @@ export default function Home() {
 
           {!loading && screen === "calendar" && (
             <CalendarDashboard
-              events={events}
+              events={visibleProductionEvents}
               externalEvents={visibleExternalCalendarEvents}
               onOpen={openEvent}
               onOpenExternalEvent={setExternalCalendarDetail}
