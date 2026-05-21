@@ -3422,20 +3422,27 @@ export default function Home() {
   const headerPermissions = useMemo(() => getPermissionsForRole(headerProfile?.role ?? "team"), [headerProfile?.role]);
   const headerCanOpenTrash = headerPermissions.canRestoreEvents || headerPermissions.canPermanentDeleteEvents;
   const actorName = getProfileDisplayName(profile);
+  const externalCalendarEnabledById = useMemo(
+    () => new Map(externalCalendars.map((calendar) => [calendar.id, calendar.syncEnabled])),
+    [externalCalendars],
+  );
   const visibleExternalCalendarEvents = useMemo(
     () =>
       externalCalendarEvents.filter((event) =>
-        event.calendarSyncEnabled &&
+        (externalCalendarEnabledById.get(event.externalCalendarId) ?? event.calendarSyncEnabled) &&
         canViewExternalCalendar(permissions, profile, {
           visibility: event.calendarVisibility,
           createdByProfileId: event.calendarCreatedByProfileId,
         }),
       ),
-    [externalCalendarEvents, permissions, profile],
+    [externalCalendarEnabledById, externalCalendarEvents, permissions, profile],
   );
   const visibleProductionEvents = useMemo(
-    () => events.filter((event) => event.externalLinks.every((link) => link.calendarSyncEnabled)),
-    [events],
+    () =>
+      events.filter((event) =>
+        event.externalLinks.every((link) => externalCalendarEnabledById.get(link.externalCalendarId) ?? link.calendarSyncEnabled),
+      ),
+    [events, externalCalendarEnabledById],
   );
   const writableGoogleCalendars = useMemo(
     () =>
@@ -14758,7 +14765,6 @@ function ExternalCalendarsSheet({
               canCreate={canCreateExternalCalendar}
               onConnectGoogle={onConnectGoogle}
               onDisconnectGoogle={onDisconnectGoogle}
-              onToggleGoogleCalendar={onToggleGoogleCalendar}
               onConnectApple={onConnectApple}
               onUpdate={onUpdate}
               onDelete={onDelete}
@@ -14840,7 +14846,6 @@ function ExternalCalendarsListView({
   canCreate,
   onConnectGoogle,
   onDisconnectGoogle,
-  onToggleGoogleCalendar,
   onConnectApple,
   onUpdate,
   onDelete,
@@ -14866,7 +14871,6 @@ function ExternalCalendarsListView({
   canCreate: boolean;
   onConnectGoogle: () => Promise<void>;
   onDisconnectGoogle: (account: GoogleCalendarAccount) => Promise<void>;
-  onToggleGoogleCalendar: (account: GoogleCalendarAccount, calendar: GoogleProviderCalendar, enabled: boolean) => Promise<void>;
   onConnectApple: (input: { appleId: string; appPassword: string }) => Promise<void>;
   onUpdate: (calendar: ExternalCalendar, input: { name: string; icsUrl: string; color: string; visibility: ExternalCalendarVisibility; syncEnabled?: boolean }) => Promise<void>;
   onDelete: (calendar: ExternalCalendar) => Promise<void>;
@@ -14987,17 +14991,11 @@ function ExternalCalendarsListView({
   }
 
   function getVisibleGoogleProviderCalendars(accountId: string) {
-    return (googleCalendarsByAccountId[accountId] ?? []).filter((providerCalendar) => {
-      const storedCalendar = getGoogleStoredCalendar(providerCalendar);
-      return storedCalendar ? storedCalendar.syncEnabled : providerCalendar.enabled;
-    });
+    return googleCalendarsByAccountId[accountId] ?? [];
   }
 
   function getVisibleAppleProviderCalendars(accountId: string) {
-    return (appleCalendarsByAccountId[accountId] ?? []).filter((providerCalendar) => {
-      const storedCalendar = getAppleStoredCalendar(providerCalendar);
-      return storedCalendar ? storedCalendar.syncEnabled : providerCalendar.enabled;
-    });
+    return appleCalendarsByAccountId[accountId] ?? [];
   }
 
   async function updateStoredCalendar(calendar: ExternalCalendar, patch: Partial<Pick<ExternalCalendar, "color" | "visibility" | "syncEnabled">>) {
@@ -15180,7 +15178,10 @@ function ExternalCalendarsListView({
                   return (
                         <div
                           key={calendar.providerCalendarId}
-                          className="rounded-xl bg-stone-50 px-3 py-2 ring-1 ring-stone-200"
+                          className={cn(
+                            "rounded-xl px-3 py-2 ring-1 transition",
+                            googleEnabled ? "bg-stone-50 ring-stone-200" : "bg-stone-100/80 ring-stone-200 opacity-75",
+                          )}
                         >
                           <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                             <div className="flex min-w-0 items-start gap-2">
@@ -15199,7 +15200,7 @@ function ExternalCalendarsListView({
                               </div>
                           </div>
                             <div className="flex shrink-0 flex-wrap items-center gap-1.5" onClick={(event) => event.stopPropagation()}>
-                          {calendar.enabled && calendar.writable && (
+                          {googleEnabled && calendar.writable && (
                             <button
                               type="button"
                               onClick={() => void handleGooglePullSync(calendar)}
@@ -15228,21 +15229,19 @@ function ExternalCalendarsListView({
                             {permissions.canManageEvents && <option value="team">Toute l'équipe</option>}
                             <option value="private">Privé</option>
                           </select>
-                          <button
-                            type="button"
-                            onClick={() => void onToggleGoogleCalendar(account, calendar, !googleEnabled)}
-                            disabled={!calendar.writable || updatingGoogleKey === updateKey}
-                            className="rounded-full border border-stone-200 bg-white px-3 py-1.5 text-sm font-semibold text-stone-600 transition hover:bg-stone-100 disabled:text-stone-300"
-                          >
-                            {googleEnabled ? "Désactiver" : "Activer"}
-                          </button>
-                            {canManageStored && (
+                          {canManageStored && (
                             <button
                               type="button"
-                              onClick={() => void deleteStoredCalendar(storedCalendar)}
-                              className="rounded-full border border-[#bb2720]/20 bg-white px-3 py-1.5 text-sm font-semibold text-[#bb2720] transition hover:bg-[#bb2720]/[0.05]"
+                              onClick={() => void (googleEnabled ? deleteStoredCalendar(storedCalendar) : updateStoredCalendar(storedCalendar, { syncEnabled: true }))}
+                              disabled={updatingGoogleKey === updateKey}
+                              className={cn(
+                                "rounded-full border bg-white px-3 py-1.5 text-sm font-semibold transition disabled:text-stone-300",
+                                googleEnabled
+                                  ? "border-[#bb2720]/20 text-[#bb2720] hover:bg-[#bb2720]/[0.05]"
+                                  : "border-emerald-200 text-emerald-700 hover:bg-emerald-50",
+                              )}
                             >
-                              Retirer
+                              {googleEnabled ? "Retirer" : "Réactiver"}
                             </button>
                           )}
                         </div>
@@ -15290,7 +15289,10 @@ function ExternalCalendarsListView({
                   return (
                         <div
                           key={calendar.providerCalendarId}
-                          className="rounded-xl bg-stone-50 px-3 py-2 ring-1 ring-stone-200"
+                          className={cn(
+                            "rounded-xl px-3 py-2 ring-1 transition",
+                            appleEnabled ? "bg-stone-50 ring-stone-200" : "bg-stone-100/80 ring-stone-200 opacity-75",
+                          )}
                         >
                           <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                             <div className="flex min-w-0 items-start gap-2">
@@ -15335,21 +15337,18 @@ function ExternalCalendarsListView({
                             {permissions.canManageEvents && <option value="team">Toute l'équipe</option>}
                             <option value="private">Privé</option>
                           </select>
-                          <button
-                            type="button"
-                            onClick={() => void updateStoredCalendar(storedCalendar, { syncEnabled: !storedCalendar.syncEnabled })}
-                            disabled={!canManageStored}
-                            className="rounded-full border border-stone-200 bg-white px-3 py-1.5 text-sm font-semibold text-stone-600 transition hover:bg-stone-100 disabled:text-stone-300"
-                          >
-                            {storedCalendar.syncEnabled ? "Désactiver" : "Activer"}
-                          </button>
                           {canManageStored && (
                             <button
                               type="button"
-                              onClick={() => void deleteStoredCalendar(storedCalendar)}
-                              className="rounded-full border border-[#bb2720]/20 bg-white px-3 py-1.5 text-sm font-semibold text-[#bb2720] transition hover:bg-[#bb2720]/[0.05]"
+                              onClick={() => void (appleEnabled ? deleteStoredCalendar(storedCalendar) : updateStoredCalendar(storedCalendar, { syncEnabled: true }))}
+                              className={cn(
+                                "rounded-full border bg-white px-3 py-1.5 text-sm font-semibold transition disabled:text-stone-300",
+                                appleEnabled
+                                  ? "border-[#bb2720]/20 text-[#bb2720] hover:bg-[#bb2720]/[0.05]"
+                                  : "border-emerald-200 text-emerald-700 hover:bg-emerald-50",
+                              )}
                             >
-                              Retirer
+                              {appleEnabled ? "Retirer" : "Réactiver"}
                             </button>
                           )}
                         </div>
