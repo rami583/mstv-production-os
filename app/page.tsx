@@ -509,6 +509,7 @@ type PendingActivityPayload = {
 };
 
 type CachedAppData = {
+  cacheVersion?: number;
   events: ProductionEvent[];
   externalCalendars: ExternalCalendar[];
   externalCalendarEvents: ExternalCalendarEvent[];
@@ -996,13 +997,69 @@ function sanitizeExternalCalendarEventForCache(event: ExternalCalendarEvent): Ex
   };
 }
 
+type CachedExternalCalendarVisibilityState = {
+  enabledById: Map<string, boolean>;
+  enabledByProviderKey: Map<string, boolean>;
+};
+
+function getCachedExternalCalendarVisibilityState(externalCalendars: ExternalCalendar[]): CachedExternalCalendarVisibilityState {
+  const enabledById = new Map<string, boolean>();
+  const enabledByProviderKey = new Map<string, boolean>();
+
+  for (const calendar of externalCalendars) {
+    enabledById.set(calendar.id, calendar.syncEnabled);
+
+    const providerKey = getExternalCalendarProviderKey({
+      providerType: calendar.providerType,
+      providerAccountId: calendar.providerAccountId,
+      providerCalendarId: calendar.providerCalendarId,
+    });
+    if (!providerKey) continue;
+
+    enabledByProviderKey.set(providerKey, (enabledByProviderKey.get(providerKey) ?? true) && calendar.syncEnabled);
+  }
+
+  return { enabledById, enabledByProviderKey };
+}
+
+function isCachedExternalEventLinkVisible(link: ExternalEventLink, state: CachedExternalCalendarVisibilityState) {
+  const exactEnabled = state.enabledById.get(link.externalCalendarId);
+  const providerKey = getExternalCalendarProviderKey({
+    providerType: link.calendarProviderType ?? link.providerType,
+    providerAccountId: link.calendarProviderAccountId,
+    providerCalendarId: link.providerCalendarId,
+  });
+  const providerEnabled = providerKey ? state.enabledByProviderKey.get(providerKey) : undefined;
+
+  if (providerEnabled === false) return false;
+  if (exactEnabled === false) return false;
+  if (exactEnabled === true) return true;
+  return providerEnabled ?? link.calendarSyncEnabled;
+}
+
+function isCachedProductionEventVisible(event: ProductionEvent, state: CachedExternalCalendarVisibilityState) {
+  if (event.deletedAt) return false;
+  if (isLikelyStaleAppleDirectionOrphanEvent(event)) return false;
+  return event.externalLinks.every((link) => isCachedExternalEventLinkVisible(link, state));
+}
+
+function isCachedExternalCalendarEventVisible(event: ExternalCalendarEvent, state: CachedExternalCalendarVisibilityState) {
+  return state.enabledById.get(event.externalCalendarId) ?? event.calendarSyncEnabled;
+}
+
 function prepareCachedAppData(data: Omit<CachedAppData, "cachedAt">): Omit<CachedAppData, "cachedAt"> {
-  const sortedProductionEvents = [...data.events].sort((a, b) => eventSortValue(a) - eventSortValue(b));
+  const visibilityState = getCachedExternalCalendarVisibilityState(data.externalCalendars);
+  const sortedProductionEvents = data.events
+    .filter((event) => isCachedProductionEventVisible(event, visibilityState))
+    .sort((a, b) => eventSortValue(a) - eventSortValue(b));
   const recentProductionEvents = sortedProductionEvents.slice(-maxCachedProductionEvents);
-  const sortedExternalEvents = [...data.externalCalendarEvents].sort((a, b) => a.startTime.localeCompare(b.startTime));
+  const sortedExternalEvents = data.externalCalendarEvents
+    .filter((event) => isCachedExternalCalendarEventVisible(event, visibilityState))
+    .sort((a, b) => a.startTime.localeCompare(b.startTime));
   const recentExternalEvents = sortedExternalEvents.slice(-maxCachedExternalCalendarEvents);
 
   return {
+    cacheVersion: cachedAppDataVersion,
     events: recentProductionEvents.map(sanitizeEventForCache),
     externalCalendars: data.externalCalendars,
     externalCalendarEvents: recentExternalEvents.map(sanitizeExternalCalendarEventForCache),
@@ -1018,7 +1075,19 @@ function cacheAppData(userId: string, data: Omit<CachedAppData, "cachedAt">) {
 }
 
 function getCachedAppData(userId: string) {
-  return getLocalStorageJson<CachedAppData>(`${cachedAppDataKeyPrefix}${userId}`);
+  const key = `${cachedAppDataKeyPrefix}${userId}`;
+  const cachedData = getLocalStorageJson<CachedAppData>(key);
+  if (!cachedData) return null;
+
+  if (cachedData.cacheVersion !== cachedAppDataVersion) {
+    removeLocalStorageKey(key);
+    return null;
+  }
+
+  return {
+    ...prepareCachedAppData(cachedData),
+    cachedAt: cachedData.cachedAt,
+  } satisfies CachedAppData;
 }
 
 function cacheNotifications(userId: string, notifications: AppNotification[]) {
@@ -1080,6 +1149,7 @@ const cachedProfileKeyPrefix = "mstv.cachedProfile.";
 const cachedProfileMetaKeyPrefix = "mstv.cachedProfileMeta.";
 const cachedAppDataKeyPrefix = "mstv.cachedAppData.";
 const cachedNotificationsKeyPrefix = "mstv.cachedNotifications.";
+const cachedAppDataVersion = 2;
 const importantNotificationTypes = new Set([
   "event_created",
   "event_date_changed",
