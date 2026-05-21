@@ -343,6 +343,8 @@ type GoogleCalendarAccount = {
   lastError: string | null;
 };
 
+type AppleCalendarAccount = GoogleCalendarAccount;
+
 type GoogleProviderCalendar = {
   providerCalendarId: string;
   summary: string;
@@ -352,6 +354,15 @@ type GoogleProviderCalendar = {
   enabled: boolean;
   externalCalendarId: string | null;
   color: string | null;
+  visibility: ExternalCalendarVisibility;
+};
+
+type AppleProviderCalendar = {
+  providerCalendarId: string;
+  name: string;
+  color: string | null;
+  enabled: boolean;
+  externalCalendarId: string | null;
   visibility: ExternalCalendarVisibility;
 };
 
@@ -3273,6 +3284,10 @@ export default function Home() {
   const [googleCalendarLoading, setGoogleCalendarLoading] = useState(false);
   const [connectingGoogleCalendar, setConnectingGoogleCalendar] = useState(false);
   const [updatingGoogleCalendarKey, setUpdatingGoogleCalendarKey] = useState<string | null>(null);
+  const [appleCalendarAccounts, setAppleCalendarAccounts] = useState<AppleCalendarAccount[]>([]);
+  const [appleCalendarsByAccountId, setAppleCalendarsByAccountId] = useState<Record<string, AppleProviderCalendar[]>>({});
+  const [appleCalendarLoading, setAppleCalendarLoading] = useState(false);
+  const [connectingAppleCalendar, setConnectingAppleCalendar] = useState(false);
   const [googleAutoSyncStatus, setGoogleAutoSyncStatus] = useState<GoogleAutoSyncStatus>({
     state: "idle",
     lastSyncedAt: null,
@@ -3313,6 +3328,7 @@ export default function Home() {
   const onlineRef = useRef(online);
   const processPendingSyncQueueRef = useRef<((options?: { forceOnline?: boolean }) => Promise<void>) | null>(null);
   const googleCalendarBootstrapKeyRef = useRef<string | null>(null);
+  const appleCalendarBootstrapKeyRef = useRef<string | null>(null);
   const todayKey = formatDateKey(today);
 
   function schedulePendingSyncReplay(source: "browser" | "capacitor" | "state" | "enqueue") {
@@ -3887,6 +3903,7 @@ export default function Home() {
     if (!externalCalendarSettingsOpen) return;
     void refreshExternalCalendarSettings();
     void refreshGoogleCalendarAccounts();
+    void refreshAppleCalendarAccounts();
   }, [externalCalendarSettingsOpen]);
 
   useEffect(() => {
@@ -3895,6 +3912,14 @@ export default function Home() {
 
     googleCalendarBootstrapKeyRef.current = authSession.user.id;
     void refreshGoogleCalendarAccounts();
+  }, [authSession?.user.id, online, profile?.id]);
+
+  useEffect(() => {
+    if (!authSession?.user.id || !profile || !online) return;
+    if (appleCalendarBootstrapKeyRef.current === authSession.user.id) return;
+
+    appleCalendarBootstrapKeyRef.current = authSession.user.id;
+    void refreshAppleCalendarAccounts();
   }, [authSession?.user.id, online, profile?.id]);
 
   useEffect(() => {
@@ -4182,6 +4207,70 @@ export default function Home() {
       setExternalCalendarSettingsError(getUserFacingErrorMessage(googleError, "Impossible de charger Google Calendar."));
     } finally {
       setGoogleCalendarLoading(false);
+    }
+  }
+
+  async function refreshAppleCalendarAccounts() {
+    if (!authSession || !online) return;
+
+    setAppleCalendarLoading(true);
+    try {
+      const accessToken = await getServerApiAccessToken(authSession.access_token);
+      const response = await fetch(getAppApiUrl("/api/calendar/apple/calendars", "Apple Calendar momentanément indisponible."), {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${accessToken}`,
+        },
+        body: JSON.stringify({ action: "list" }),
+      });
+      const payload = (await response.json().catch(() => null)) as {
+        accounts?: AppleCalendarAccount[];
+        calendarsByAccountId?: Record<string, AppleProviderCalendar[]>;
+        error?: string;
+      } | null;
+
+      if (!response.ok) {
+        throw new Error(payload?.error ?? "Impossible de charger Apple Calendar.");
+      }
+
+      setAppleCalendarAccounts(payload?.accounts ?? []);
+      setAppleCalendarsByAccountId(payload?.calendarsByAccountId ?? {});
+      void refreshExternalCalendarSettings();
+    } catch (appleError) {
+      setExternalCalendarSettingsError(getUserFacingErrorMessage(appleError, "Impossible de charger Apple Calendar."));
+    } finally {
+      setAppleCalendarLoading(false);
+    }
+  }
+
+  async function connectAppleCalendar(input: { appleId: string; appPassword: string }) {
+    if (!authSession) throw new Error(sessionExpiredMessage);
+
+    setConnectingAppleCalendar(true);
+    setExternalCalendarSettingsError(null);
+    try {
+      const accessToken = await getServerApiAccessToken(authSession.access_token);
+      const response = await fetch(getAppApiUrl("/api/calendar/apple/connect", "Connexion Apple Calendar momentanément indisponible."), {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${accessToken}`,
+        },
+        body: JSON.stringify(input),
+      });
+      const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+
+      if (!response.ok) {
+        throw new Error(payload?.error ?? "Impossible de connecter Apple Calendar.");
+      }
+
+      await refreshAppleCalendarAccounts();
+      await refreshExternalCalendarSettings();
+    } catch (connectError) {
+      setExternalCalendarSettingsError(getUserFacingErrorMessage(connectError, "Impossible de connecter Apple Calendar."));
+    } finally {
+      setConnectingAppleCalendar(false);
     }
   }
 
@@ -8917,6 +9006,10 @@ export default function Home() {
           googleLoading={googleCalendarLoading}
           connectingGoogle={connectingGoogleCalendar}
           updatingGoogleKey={updatingGoogleCalendarKey}
+          appleAccounts={appleCalendarAccounts}
+          appleCalendarsByAccountId={appleCalendarsByAccountId}
+          appleLoading={appleCalendarLoading}
+          connectingApple={connectingAppleCalendar}
           loading={externalCalendarSettingsLoading}
           error={externalCalendarSettingsError}
           syncingCalendarId={syncingExternalCalendarId}
@@ -8927,6 +9020,7 @@ export default function Home() {
           onConnectGoogle={connectGoogleCalendar}
           onDisconnectGoogle={disconnectGoogleCalendar}
           onToggleGoogleCalendar={setGoogleCalendarSyncEnabled}
+          onConnectApple={connectAppleCalendar}
           onDelete={async (calendar) => {
             try {
               await deleteExternalCalendar(calendar);
@@ -14283,6 +14377,10 @@ function ExternalCalendarsSheet({
   googleLoading,
   connectingGoogle,
   updatingGoogleKey,
+  appleAccounts,
+  appleCalendarsByAccountId,
+  appleLoading,
+  connectingApple,
   loading,
   error,
   syncingCalendarId,
@@ -14293,6 +14391,7 @@ function ExternalCalendarsSheet({
   onConnectGoogle,
   onDisconnectGoogle,
   onToggleGoogleCalendar,
+  onConnectApple,
   onDelete,
   onSync,
 }: {
@@ -14305,6 +14404,10 @@ function ExternalCalendarsSheet({
   googleLoading: boolean;
   connectingGoogle: boolean;
   updatingGoogleKey: string | null;
+  appleAccounts: AppleCalendarAccount[];
+  appleCalendarsByAccountId: Record<string, AppleProviderCalendar[]>;
+  appleLoading: boolean;
+  connectingApple: boolean;
   loading: boolean;
   error: string | null;
   syncingCalendarId: string | null;
@@ -14315,6 +14418,7 @@ function ExternalCalendarsSheet({
   onConnectGoogle: () => Promise<void>;
   onDisconnectGoogle: (account: GoogleCalendarAccount) => Promise<void>;
   onToggleGoogleCalendar: (account: GoogleCalendarAccount, calendar: GoogleProviderCalendar, enabled: boolean) => Promise<void>;
+  onConnectApple: (input: { appleId: string; appPassword: string }) => Promise<void>;
   onDelete: (calendar: ExternalCalendar) => Promise<void>;
   onSync: (calendar: ExternalCalendar) => Promise<ExternalCalendarSyncResult>;
 }) {
@@ -14448,6 +14552,10 @@ function ExternalCalendarsSheet({
               googleLoading={googleLoading}
               connectingGoogle={connectingGoogle}
               updatingGoogleKey={updatingGoogleKey}
+              appleAccounts={appleAccounts}
+              appleCalendarsByAccountId={appleCalendarsByAccountId}
+              appleLoading={appleLoading}
+              connectingApple={connectingApple}
               loading={loading}
               error={error}
               syncingCalendarId={syncingCalendarId}
@@ -14455,6 +14563,7 @@ function ExternalCalendarsSheet({
               onConnectGoogle={onConnectGoogle}
               onDisconnectGoogle={onDisconnectGoogle}
               onToggleGoogleCalendar={onToggleGoogleCalendar}
+              onConnectApple={onConnectApple}
               onSync={onSync}
               onSelect={(calendar) => {
                 setLocalError(null);
@@ -14527,6 +14636,10 @@ function ExternalCalendarsListView({
   googleLoading,
   connectingGoogle,
   updatingGoogleKey,
+  appleAccounts,
+  appleCalendarsByAccountId,
+  appleLoading,
+  connectingApple,
   loading,
   error,
   syncingCalendarId,
@@ -14534,6 +14647,7 @@ function ExternalCalendarsListView({
   onConnectGoogle,
   onDisconnectGoogle,
   onToggleGoogleCalendar,
+  onConnectApple,
   onSync,
   onSelect,
   onAdd,
@@ -14546,6 +14660,10 @@ function ExternalCalendarsListView({
   googleLoading: boolean;
   connectingGoogle: boolean;
   updatingGoogleKey: string | null;
+  appleAccounts: AppleCalendarAccount[];
+  appleCalendarsByAccountId: Record<string, AppleProviderCalendar[]>;
+  appleLoading: boolean;
+  connectingApple: boolean;
   loading: boolean;
   error: string | null;
   syncingCalendarId: string | null;
@@ -14553,12 +14671,32 @@ function ExternalCalendarsListView({
   onConnectGoogle: () => Promise<void>;
   onDisconnectGoogle: (account: GoogleCalendarAccount) => Promise<void>;
   onToggleGoogleCalendar: (account: GoogleCalendarAccount, calendar: GoogleProviderCalendar, enabled: boolean) => Promise<void>;
+  onConnectApple: (input: { appleId: string; appPassword: string }) => Promise<void>;
   onSync: (calendar: ExternalCalendar) => Promise<ExternalCalendarSyncResult>;
   onSelect: (calendar: ExternalCalendar) => void;
   onAdd: () => void;
 }) {
   const [googleSyncSummaryByCalendarId, setGoogleSyncSummaryByCalendarId] = useState<Record<string, string>>({});
   const [googleSyncErrorByCalendarId, setGoogleSyncErrorByCalendarId] = useState<Record<string, string>>({});
+  const [appleConnectOpen, setAppleConnectOpen] = useState(false);
+  const [appleDraft, setAppleDraft] = useState({ appleId: "", appPassword: "" });
+  const [appleConnectError, setAppleConnectError] = useState<string | null>(null);
+
+  async function handleAppleConnect() {
+    setAppleConnectError(null);
+    if (!appleDraft.appleId.trim() || !appleDraft.appPassword.trim()) {
+      setAppleConnectError("Adresse Apple et mot de passe d’app obligatoires.");
+      return;
+    }
+
+    try {
+      await onConnectApple(appleDraft);
+      setAppleDraft({ appleId: "", appPassword: "" });
+      setAppleConnectOpen(false);
+    } catch (connectError) {
+      setAppleConnectError(getUserFacingErrorMessage(connectError, "Impossible de connecter Apple Calendar."));
+    }
+  }
 
   async function handleGooglePullSync(providerCalendar: GoogleProviderCalendar) {
     const calendar = calendars.find((item) => item.id === providerCalendar.externalCalendarId)
@@ -14601,18 +14739,76 @@ function ExternalCalendarsListView({
         <div className="flex items-start justify-between gap-3">
           <div>
             <h3 className="text-base font-semibold text-stone-950">Comptes calendrier connectés</h3>
-            <p className="mt-1 text-sm font-semibold text-stone-400">Google Calendar est connecté en OAuth côté serveur. Outlook et Apple CalDAV viendront ensuite.</p>
+            <p className="mt-1 text-sm font-semibold text-stone-400">Google Calendar est bidirectionnel. Apple Calendar arrive via CalDAV en lecture seule pour cette phase.</p>
           </div>
-          <button
-            type="button"
-            onClick={() => void onConnectGoogle()}
-            disabled={connectingGoogle}
-            className="shrink-0 rounded-full bg-stone-950 px-3 py-1.5 text-sm font-semibold text-white transition hover:bg-stone-800 disabled:bg-stone-300"
-          >
-            {connectingGoogle ? "Connexion..." : "Connecter Google Calendar"}
-          </button>
+          <div className="flex shrink-0 flex-col gap-1.5 sm:flex-row">
+            <button
+              type="button"
+              onClick={() => void onConnectGoogle()}
+              disabled={connectingGoogle}
+              className="rounded-full bg-stone-950 px-3 py-1.5 text-sm font-semibold text-white transition hover:bg-stone-800 disabled:bg-stone-300"
+            >
+              {connectingGoogle ? "Connexion..." : "Connecter Google Calendar"}
+            </button>
+            <button
+              type="button"
+              onClick={() => setAppleConnectOpen((current) => !current)}
+              disabled={connectingApple}
+              className="rounded-full border border-stone-200 bg-white px-3 py-1.5 text-sm font-semibold text-stone-700 transition hover:bg-stone-50 disabled:text-stone-300"
+            >
+              {connectingApple ? "Connexion..." : "Connecter Apple Calendar"}
+            </button>
+          </div>
         </div>
         <div className="mt-3 space-y-2">
+          {appleConnectOpen && (
+            <div className="rounded-2xl border border-stone-200 bg-stone-50 px-3 py-3">
+              <div className="grid gap-2">
+                <label className="grid gap-1">
+                  <span className="text-xs font-semibold uppercase text-stone-400">Adresse Apple / iCloud</span>
+                  <input
+                    value={appleDraft.appleId}
+                    onChange={(event) => setAppleDraft((current) => ({ ...current, appleId: event.target.value }))}
+                    className="h-10 rounded-xl border border-stone-200 bg-white px-3 text-base font-semibold text-stone-800 outline-none"
+                    inputMode="email"
+                    autoComplete="username"
+                  />
+                </label>
+                <label className="grid gap-1">
+                  <span className="text-xs font-semibold uppercase text-stone-400">Mot de passe d’app Apple</span>
+                  <input
+                    value={appleDraft.appPassword}
+                    onChange={(event) => setAppleDraft((current) => ({ ...current, appPassword: event.target.value }))}
+                    className="h-10 rounded-xl border border-stone-200 bg-white px-3 text-base font-semibold text-stone-800 outline-none"
+                    type="password"
+                    autoComplete="current-password"
+                  />
+                </label>
+                <p className="text-xs font-semibold text-stone-500">Apple nécessite un mot de passe d’app généré depuis votre compte Apple. N’utilisez pas votre mot de passe principal.</p>
+                {appleConnectError && <p className="text-xs font-semibold text-rose-600">{appleConnectError}</p>}
+                <div className="flex justify-end gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setAppleConnectError(null);
+                      setAppleConnectOpen(false);
+                    }}
+                    className="rounded-full border border-stone-200 bg-white px-3 py-1.5 text-sm font-semibold text-stone-500 transition hover:bg-stone-100"
+                  >
+                    Annuler
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void handleAppleConnect()}
+                    disabled={connectingApple}
+                    className="rounded-full bg-stone-950 px-3 py-1.5 text-sm font-semibold text-white transition hover:bg-stone-800 disabled:bg-stone-300"
+                  >
+                    {connectingApple ? "Connexion..." : "Connecter"}
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
           {googleLoading && <div className="rounded-2xl bg-stone-50 px-3 py-2 text-sm font-semibold text-stone-400">Chargement Google Calendar...</div>}
           {!googleLoading && googleAccounts.length === 0 && (
             <div className="rounded-2xl bg-stone-50 px-3 py-2 text-sm font-semibold text-stone-400">Aucun compte Google connecté.</div>
@@ -14686,6 +14882,35 @@ function ExternalCalendarsListView({
                     </div>
                   );
                 })}
+              </div>
+            </div>
+          ))}
+          {appleLoading && <div className="rounded-2xl bg-stone-50 px-3 py-2 text-sm font-semibold text-stone-400">Chargement Apple Calendar...</div>}
+          {!appleLoading && appleAccounts.length === 0 && (
+            <div className="rounded-2xl bg-stone-50 px-3 py-2 text-sm font-semibold text-stone-400">Aucun compte Apple Calendar connecté.</div>
+          )}
+          {appleAccounts.map((account) => (
+            <div key={account.id} className="rounded-2xl border border-stone-200 bg-stone-50 px-3 py-2">
+              <div className="min-w-0">
+                <div className="truncate text-sm font-semibold text-stone-900">{account.displayName || account.email || "Compte Apple"}</div>
+                <div className="mt-0.5 flex flex-wrap items-center gap-1.5 text-xs font-semibold">
+                  <span className="rounded-full bg-white px-2 py-0.5 text-stone-500 ring-1 ring-stone-200">Lecture seule</span>
+                  <span className="rounded-full bg-white px-2 py-0.5 text-stone-500 ring-1 ring-stone-200">{account.connectionStatus === "connected" ? "Connecté" : account.connectionStatus === "disconnected" ? "Déconnecté" : "Erreur"}</span>
+                </div>
+              </div>
+              {account.lastError && <div className="mt-2 text-xs font-semibold text-rose-600">{account.lastError}</div>}
+              <div className="mt-2 space-y-1.5">
+                {(appleCalendarsByAccountId[account.id] ?? []).map((calendar) => (
+                  <div key={calendar.providerCalendarId} className="rounded-xl bg-white px-3 py-2 ring-1 ring-stone-200">
+                    <div className="flex items-center gap-2">
+                      <ExternalCalendarColorDot color={calendar.color} />
+                      <div className="min-w-0">
+                        <div className="truncate text-sm font-semibold text-stone-800">{calendar.name}</div>
+                        <div className="text-xs font-semibold text-stone-400">Apple Calendar · Lecture seule</div>
+                      </div>
+                    </div>
+                  </div>
+                ))}
               </div>
             </div>
           ))}
