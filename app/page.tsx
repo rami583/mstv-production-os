@@ -15092,6 +15092,9 @@ function ExternalCalendarsListView({
   const [appleDraft, setAppleDraft] = useState({ appleId: "", appPassword: "" });
   const [appleConnectError, setAppleConnectError] = useState<string | null>(null);
   const [calendarActionErrorById, setCalendarActionErrorById] = useState<Record<string, string>>({});
+  const [environmentDiagnostic, setEnvironmentDiagnostic] = useState<Record<string, unknown> | null>(null);
+  const [environmentDiagnosticLoading, setEnvironmentDiagnosticLoading] = useState(false);
+  const [environmentDiagnosticError, setEnvironmentDiagnosticError] = useState<string | null>(null);
   const googleConnected = googleAccounts.some((account) => account.connectionStatus === "connected");
   const appleConnected = appleAccounts.some((account) => account.connectionStatus === "connected");
 
@@ -15173,6 +15176,31 @@ function ExternalCalendarsListView({
         ...current,
         [calendar.id]: getUserFacingErrorMessage(syncError, "Impossible de synchroniser ce calendrier."),
       }));
+    }
+  }
+
+  async function handleEnvironmentDiagnostic() {
+    setEnvironmentDiagnosticLoading(true);
+    setEnvironmentDiagnosticError(null);
+    try {
+      const accessToken = await getCurrentSupabaseAccessToken();
+      const response = await fetch(getAppApiUrl("/api/debug/environment", "Diagnostic environnement indisponible."), {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+        },
+      });
+      const payload = (await response.json().catch(() => null)) as Record<string, unknown> | null;
+      if (!response.ok) {
+        throw new Error(typeof payload?.error === "string" ? payload.error : "Impossible de charger le diagnostic environnement.");
+      }
+      console.info("Diagnostic environnement MSTV", payload);
+      setEnvironmentDiagnostic(payload);
+    } catch (diagnosticError) {
+      console.error("Environment diagnostic failed", diagnosticError);
+      setEnvironmentDiagnosticError(getUserFacingErrorMessage(diagnosticError, "Impossible de charger le diagnostic environnement."));
+    } finally {
+      setEnvironmentDiagnosticLoading(false);
     }
   }
 
@@ -15265,6 +15293,16 @@ function ExternalCalendarsListView({
             <h3 className="text-sm font-semibold text-stone-400">Comptes connectés</h3>
           </div>
           <div className="flex shrink-0 flex-col gap-1.5 sm:flex-row">
+            {permissions.canManageUsers && (
+              <button
+                type="button"
+                onClick={() => void handleEnvironmentDiagnostic()}
+                disabled={environmentDiagnosticLoading}
+                className="rounded-full border border-stone-200 bg-white px-3 py-1.5 text-sm font-semibold text-stone-500 transition hover:bg-stone-50 disabled:text-stone-300"
+              >
+                {environmentDiagnosticLoading ? "Diagnostic..." : "Diagnostic environnement"}
+              </button>
+            )}
             <button
               type="button"
               onClick={() => {
@@ -15297,6 +15335,32 @@ function ExternalCalendarsListView({
             </button>
           </div>
         </div>
+        {(environmentDiagnostic || environmentDiagnosticError) && (
+          <div className={cn("rounded-2xl border px-3 py-3", environmentDiagnosticError ? "border-rose-200 bg-rose-50" : "border-stone-200 bg-stone-50")}>
+            <div className="flex items-center justify-between gap-3">
+              <p className={cn("text-sm font-semibold", environmentDiagnosticError ? "text-rose-700" : "text-stone-700")}>
+                Diagnostic environnement
+              </p>
+              <button
+                type="button"
+                onClick={() => {
+                  setEnvironmentDiagnostic(null);
+                  setEnvironmentDiagnosticError(null);
+                }}
+                className="rounded-full border border-stone-200 bg-white px-2.5 py-1 text-xs font-semibold text-stone-500 transition hover:bg-stone-100"
+              >
+                Masquer
+              </button>
+            </div>
+            {environmentDiagnosticError ? (
+              <p className="mt-2 text-sm font-semibold text-rose-700">{environmentDiagnosticError}</p>
+            ) : (
+              <pre className="mt-2 max-h-72 overflow-auto rounded-xl bg-white px-3 py-2 text-xs font-semibold text-stone-600 ring-1 ring-stone-200">
+                {JSON.stringify(environmentDiagnostic, null, 2)}
+              </pre>
+            )}
+          </div>
+        )}
         <div className="mt-3 space-y-2">
           {appleConnectOpen && (
             <div className="rounded-2xl border border-stone-200 bg-stone-50 px-3 py-3">
