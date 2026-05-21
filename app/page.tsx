@@ -3320,6 +3320,7 @@ export default function Home() {
   const [appleCalendarsByAccountId, setAppleCalendarsByAccountId] = useState<Record<string, AppleProviderCalendar[]>>({});
   const [appleCalendarLoading, setAppleCalendarLoading] = useState(false);
   const [connectingAppleCalendar, setConnectingAppleCalendar] = useState(false);
+  const [cleaningAppleDuplicates, setCleaningAppleDuplicates] = useState(false);
   const [googleAutoSyncStatus, setGoogleAutoSyncStatus] = useState<GoogleAutoSyncStatus>({
     state: "idle",
     lastSyncedAt: null,
@@ -4396,6 +4397,44 @@ export default function Home() {
       setExternalCalendarSettingsError(getUserFacingErrorMessage(appleError, "Impossible de charger Apple Calendar."));
     } finally {
       setAppleCalendarLoading(false);
+    }
+  }
+
+  async function cleanupAppleCalendarDuplicates() {
+    if (!authSession) throw new Error(sessionExpiredMessage);
+
+    setCleaningAppleDuplicates(true);
+    setExternalCalendarSettingsError(null);
+    try {
+      const accessToken = await getServerApiAccessToken(authSession.access_token);
+      const response = await fetch(getAppApiUrl("/api/calendar/apple/calendars", "Nettoyage Apple Calendar momentanément indisponible."), {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${accessToken}`,
+        },
+        body: JSON.stringify({ action: "cleanup_duplicates" }),
+      });
+      const payload = (await response.json().catch(() => null)) as {
+        error?: string;
+        duplicatesDisabled?: number;
+        canonicalRowsUpdated?: number;
+        duplicateGroupCount?: number;
+      } | null;
+
+      if (!response.ok) {
+        throw new Error(payload?.error ?? "Impossible de nettoyer les doublons Apple.");
+      }
+
+      removeLocalStorageKey(`${cachedAppDataKeyPrefix}${authSession.user.id}`);
+      await refreshExternalCalendarSettings();
+      await refreshAppleCalendarAccounts();
+      await reloadData(selectedId, { silent: true });
+    } catch (cleanupError) {
+      console.error("Apple duplicate cleanup failed", cleanupError);
+      setExternalCalendarSettingsError(getUserFacingErrorMessage(cleanupError, "Impossible de nettoyer les doublons Apple."));
+    } finally {
+      setCleaningAppleDuplicates(false);
     }
   }
 
@@ -9268,6 +9307,7 @@ export default function Home() {
           appleCalendarsByAccountId={appleCalendarsByAccountId}
           appleLoading={appleCalendarLoading}
           connectingApple={connectingAppleCalendar}
+          cleaningAppleDuplicates={cleaningAppleDuplicates}
           loading={externalCalendarSettingsLoading}
           error={externalCalendarSettingsError}
           syncingCalendarId={syncingExternalCalendarId}
@@ -9279,6 +9319,7 @@ export default function Home() {
           onDisconnectGoogle={disconnectGoogleCalendar}
           onToggleGoogleCalendar={setGoogleCalendarSyncEnabled}
           onConnectApple={connectAppleCalendar}
+          onCleanupAppleDuplicates={cleanupAppleCalendarDuplicates}
           onDelete={async (calendar) => {
             try {
               await deleteExternalCalendar(calendar);
@@ -14647,6 +14688,7 @@ function ExternalCalendarsSheet({
   appleCalendarsByAccountId,
   appleLoading,
   connectingApple,
+  cleaningAppleDuplicates,
   loading,
   error,
   syncingCalendarId,
@@ -14658,6 +14700,7 @@ function ExternalCalendarsSheet({
   onDisconnectGoogle,
   onToggleGoogleCalendar,
   onConnectApple,
+  onCleanupAppleDuplicates,
   onDelete,
   onSync,
 }: {
@@ -14674,6 +14717,7 @@ function ExternalCalendarsSheet({
   appleCalendarsByAccountId: Record<string, AppleProviderCalendar[]>;
   appleLoading: boolean;
   connectingApple: boolean;
+  cleaningAppleDuplicates: boolean;
   loading: boolean;
   error: string | null;
   syncingCalendarId: string | null;
@@ -14685,6 +14729,7 @@ function ExternalCalendarsSheet({
   onDisconnectGoogle: (account: GoogleCalendarAccount) => Promise<void>;
   onToggleGoogleCalendar: (account: GoogleCalendarAccount, calendar: GoogleProviderCalendar, enabled: boolean) => Promise<void>;
   onConnectApple: (input: { appleId: string; appPassword: string }) => Promise<void>;
+  onCleanupAppleDuplicates: () => Promise<void>;
   onDelete: (calendar: ExternalCalendar) => Promise<void>;
   onSync: (calendar: ExternalCalendar) => Promise<ExternalCalendarSyncResult>;
 }) {
@@ -14822,6 +14867,7 @@ function ExternalCalendarsSheet({
               appleCalendarsByAccountId={appleCalendarsByAccountId}
               appleLoading={appleLoading}
               connectingApple={connectingApple}
+              cleaningAppleDuplicates={cleaningAppleDuplicates}
               loading={loading}
               error={error}
               syncingCalendarId={syncingCalendarId}
@@ -14829,6 +14875,7 @@ function ExternalCalendarsSheet({
               onConnectGoogle={onConnectGoogle}
               onDisconnectGoogle={onDisconnectGoogle}
               onConnectApple={onConnectApple}
+              onCleanupAppleDuplicates={onCleanupAppleDuplicates}
               onUpdate={onUpdate}
               onDelete={onDelete}
               onSync={onSync}
@@ -14903,6 +14950,7 @@ function ExternalCalendarsListView({
   appleCalendarsByAccountId,
   appleLoading,
   connectingApple,
+  cleaningAppleDuplicates,
   loading,
   error,
   syncingCalendarId,
@@ -14910,6 +14958,7 @@ function ExternalCalendarsListView({
   onConnectGoogle,
   onDisconnectGoogle,
   onConnectApple,
+  onCleanupAppleDuplicates,
   onUpdate,
   onDelete,
   onSync,
@@ -14928,6 +14977,7 @@ function ExternalCalendarsListView({
   appleCalendarsByAccountId: Record<string, AppleProviderCalendar[]>;
   appleLoading: boolean;
   connectingApple: boolean;
+  cleaningAppleDuplicates: boolean;
   loading: boolean;
   error: string | null;
   syncingCalendarId: string | null;
@@ -14935,6 +14985,7 @@ function ExternalCalendarsListView({
   onConnectGoogle: () => Promise<void>;
   onDisconnectGoogle: (account: GoogleCalendarAccount) => Promise<void>;
   onConnectApple: (input: { appleId: string; appPassword: string }) => Promise<void>;
+  onCleanupAppleDuplicates: () => Promise<void>;
   onUpdate: (calendar: ExternalCalendar, input: { name: string; icsUrl: string; color: string; visibility: ExternalCalendarVisibility; syncEnabled?: boolean }) => Promise<void>;
   onDelete: (calendar: ExternalCalendar) => Promise<void>;
   onSync: (calendar: ExternalCalendar) => Promise<ExternalCalendarSyncResult>;
@@ -15326,7 +15377,19 @@ function ExternalCalendarsListView({
             </section>
 
             <section className="space-y-2">
-              <h4 className="text-xs font-semibold uppercase tracking-wide text-stone-400">Apple</h4>
+              <div className="flex items-center justify-between gap-3">
+                <h4 className="text-xs font-semibold uppercase tracking-wide text-stone-400">Apple</h4>
+                {appleAccounts.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => void onCleanupAppleDuplicates()}
+                    disabled={cleaningAppleDuplicates}
+                    className="rounded-full border border-stone-200 bg-white px-2.5 py-1 text-xs font-semibold text-stone-500 transition hover:bg-stone-100 disabled:text-stone-300"
+                  >
+                    {cleaningAppleDuplicates ? "Nettoyage..." : "Nettoyer les doublons Apple"}
+                  </button>
+                )}
+              </div>
           {appleLoading && <div className="rounded-2xl bg-stone-50 px-3 py-2 text-sm font-semibold text-stone-400">Chargement Apple Calendar...</div>}
           {!appleLoading && appleAccounts.length === 0 && (
               <div className="mt-2 rounded-xl bg-white px-3 py-2 text-sm font-semibold text-stone-400 ring-1 ring-stone-200">Aucun compte Apple Calendar connecté.</div>

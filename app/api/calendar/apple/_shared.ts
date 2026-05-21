@@ -31,6 +31,29 @@ export type AppleCalDavCalendar = {
   visibility: string | null;
 };
 
+type StoredAppleCalendarRow = {
+  id: string;
+  name: string;
+  provider_account_id: string | null;
+  provider_calendar_id: string | null;
+  sync_enabled: boolean;
+  visibility: string | null;
+  color: string | null;
+  created_at: string;
+};
+
+export type AppleCalendarDuplicateCleanupResult = {
+  canonicalKept: number;
+  duplicatesDisabled: number;
+  canonicalRowsUpdated: number;
+  duplicateGroups: Array<{
+    key: string;
+    canonicalCalendarId: string;
+    disabledCalendarIds: string[];
+    enabled: boolean;
+  }>;
+};
+
 function normalizeAppleEmail(value: string) {
   return value.trim().toLowerCase();
 }
@@ -79,6 +102,147 @@ export function normalizeCalDavCalendarKey(value: string | null | undefined) {
     }
   }
   return trimmed.replace(/\/+$/, "");
+}
+
+function normalizeAppleCalendarNameKey(value: string | null | undefined) {
+  return (value ?? "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLocaleLowerCase("fr-FR")
+    .replace(/[’']/g, " ")
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim()
+    .replace(/^(la|le|les|l) /, "")
+    .replace(/\s+/g, " ");
+}
+
+function isDirectionCalendarName(value: string | null | undefined) {
+  return normalizeAppleCalendarNameKey(value) === "direction";
+}
+
+function chooseAppleCanonicalCalendar(
+  rows: StoredAppleCalendarRow[],
+  currentProviderKeys: Set<string>,
+) {
+  return [...rows].sort((left, right) => {
+    const leftCurrent = currentProviderKeys.has(normalizeCalDavCalendarKey(left.provider_calendar_id)) ? 1 : 0;
+    const rightCurrent = currentProviderKeys.has(normalizeCalDavCalendarKey(right.provider_calendar_id)) ? 1 : 0;
+    if (leftCurrent !== rightCurrent) return rightCurrent - leftCurrent;
+    if (left.sync_enabled !== right.sync_enabled) return Number(right.sync_enabled) - Number(left.sync_enabled);
+    return (right.created_at ?? "").localeCompare(left.created_at ?? "");
+  })[0];
+}
+
+function chooseAppleCanonicalColor(rows: StoredAppleCalendarRow[], canonical: StoredAppleCalendarRow) {
+  if (canonical.color && canonical.color !== "blue") return canonical.color;
+  return rows.find((row) => row.sync_enabled && row.color && row.color !== "blue")?.color
+    ?? rows.find((row) => row.color && row.color !== "blue")?.color
+    ?? canonical.color
+    ?? "blue";
+}
+
+export async function cleanupAppleCalendarDuplicates(
+  supabase: ReturnType<typeof getServiceSupabaseClient>,
+  input: {
+    account: StoredAppleAccount;
+    userId: string;
+    calendars?: Array<{ providerCalendarId: string; name: string; color: string | null }>;
+  },
+): Promise<AppleCalendarDuplicateCleanupResult> {
+  const { data: existingCalendars, error: existingError } = await supabase
+    .from("external_calendars")
+    .select("id, name, provider_account_id, provider_calendar_id, sync_enabled, visibility, color, created_at")
+    .eq("provider_account_id", input.account.id)
+    .eq("provider_type", "apple_caldav")
+    .eq("created_by_profile_id", input.userId);
+
+  if (existingError) throw existingError;
+
+  const rows = (existingCalendars ?? []) as StoredAppleCalendarRow[];
+  const currentProviderKeys = new Set((input.calendars ?? []).map((calendar) => normalizeCalDavCalendarKey(calendar.providerCalendarId)).filter(Boolean));
+  const groupsByKey = new Map<string, StoredAppleCalendarRow[]>();
+
+  for (const row of rows) {
+    const providerKey = normalizeCalDavCalendarKey(row.provider_calendar_id);
+    if (providerKey) {
+      groupsByKey.set(`href:${providerKey}`, [...(groupsByKey.get(`href:${providerKey}`) ?? []), row]);
+    }
+
+    if (isDirectionCalendarName(row.name)) {
+      groupsByKey.set("name:direction", [...(groupsByKey.get("name:direction") ?? []), row]);
+    }
+  }
+
+  const processedCalendarIds = new Set<string>();
+  const result: AppleCalendarDuplicateCleanupResult = {
+    canonicalKept: 0,
+    duplicatesDisabled: 0,
+    canonicalRowsUpdated: 0,
+    duplicateGroups: [],
+  };
+
+  for (const [groupKey, groupRows] of groupsByKey) {
+    const uniqueRows = Array.from(new Map(groupRows.map((row) => [row.id, row])).values())
+      .filter((row) => !processedCalendarIds.has(row.id));
+    if (uniqueRows.length <= 1) continue;
+
+    const canonical = chooseAppleCanonicalCalendar(uniqueRows, currentProviderKeys);
+    const disabledRows = uniqueRows.filter((row) => row.id !== canonical.id);
+    const disabledCalendarIds = disabledRows.map((row) => row.id);
+    const currentRows = uniqueRows.filter((row) => currentProviderKeys.has(normalizeCalDavCalendarKey(row.provider_calendar_id)));
+    const canonicalShouldBeEnabled = currentRows.length > 0
+      ? currentRows.some((row) => row.sync_enabled)
+      : canonical.sync_enabled;
+    const canonicalColor = chooseAppleCanonicalColor(uniqueRows, canonical);
+
+    if (disabledCalendarIds.length > 0) {
+      const { error } = await supabase
+        .from("external_calendars")
+        .update({
+          sync_enabled: false,
+          last_sync_status: "idle",
+          last_sync_error: null,
+        })
+        .in("id", disabledCalendarIds);
+      if (error) throw error;
+      result.duplicatesDisabled += disabledCalendarIds.length;
+    }
+
+    if (canonical.sync_enabled !== canonicalShouldBeEnabled || canonical.color !== canonicalColor) {
+      const { error } = await supabase
+        .from("external_calendars")
+        .update({
+          sync_enabled: canonicalShouldBeEnabled,
+          color: canonicalColor,
+          last_sync_status: "idle",
+          last_sync_error: null,
+        })
+        .eq("id", canonical.id);
+      if (error) throw error;
+      result.canonicalRowsUpdated += 1;
+    }
+
+    result.canonicalKept += 1;
+    result.duplicateGroups.push({
+      key: groupKey,
+      canonicalCalendarId: canonical.id,
+      disabledCalendarIds,
+      enabled: canonicalShouldBeEnabled,
+    });
+
+    for (const row of uniqueRows) processedCalendarIds.add(row.id);
+  }
+
+  if (result.duplicatesDisabled > 0 || result.canonicalRowsUpdated > 0) {
+    console.info("Apple duplicate calendar cleanup completed", {
+      accountId: input.account.id,
+      canonicalKept: result.canonicalKept,
+      duplicatesDisabled: result.duplicatesDisabled,
+      canonicalRowsUpdated: result.canonicalRowsUpdated,
+    });
+  }
+
+  return result;
 }
 
 function getBasicAuthHeader(appleId: string, appPassword: string) {
@@ -313,6 +477,8 @@ export async function materializeAppleCalendars(
 
     if (error) throw error;
   }
+
+  await cleanupAppleCalendarDuplicates(supabase, input);
 }
 
 export function toSafeAppleAccount(account: StoredAppleAccount) {

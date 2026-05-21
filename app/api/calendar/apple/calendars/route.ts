@@ -1,6 +1,7 @@
 import {
   appleCorsHeaders,
   appleJsonResponse,
+  cleanupAppleCalendarDuplicates,
   decryptAppleCredentials,
   getServiceSupabaseClient,
   listAppleCalDavCalendars,
@@ -91,7 +92,7 @@ export async function POST(request: Request) {
     if ("error" in authResult) return authResult.error;
 
     const body = (await request.json().catch(() => null)) as {
-      action?: "list" | "update_settings" | "remove";
+      action?: "list" | "update_settings" | "remove" | "cleanup_duplicates";
       accountId?: string;
       calendarId?: string;
       providerCalendarId?: string;
@@ -101,6 +102,57 @@ export async function POST(request: Request) {
     } | null;
 
     const supabase = getServiceSupabaseClient();
+
+    if (body?.action === "cleanup_duplicates") {
+      const { data: accounts, error: accountsError } = await supabase
+        .from("external_calendar_accounts")
+        .select("*")
+        .eq("user_id", authResult.user.id)
+        .eq("provider_type", "apple_caldav")
+        .order("created_at", { ascending: true });
+
+      if (accountsError) throw accountsError;
+
+      let duplicatesDisabled = 0;
+      let canonicalRowsUpdated = 0;
+      let duplicateGroupCount = 0;
+
+      for (const account of accounts ?? []) {
+        let calendars: Array<{ providerCalendarId: string; name: string; color: string | null }> = [];
+        if (account.connection_status === "connected") {
+          try {
+            const credentials = decryptAppleCredentials(account);
+            calendars = await listAppleCalDavCalendars(credentials);
+            await materializeAppleCalendars(supabase, {
+              account,
+              userId: authResult.user.id,
+              calendars,
+            });
+          } catch (calendarError) {
+            console.warn("Apple cleanup could not refresh CalDAV listing; falling back to local rows.", {
+              accountId: account.id,
+              message: calendarError instanceof Error ? calendarError.message : String(calendarError),
+            });
+          }
+        }
+
+        const cleanupResult = await cleanupAppleCalendarDuplicates(supabase, {
+          account,
+          userId: authResult.user.id,
+          calendars,
+        });
+        duplicatesDisabled += cleanupResult.duplicatesDisabled;
+        canonicalRowsUpdated += cleanupResult.canonicalRowsUpdated;
+        duplicateGroupCount += cleanupResult.duplicateGroups.length;
+      }
+
+      return appleJsonResponse({
+        ok: true,
+        duplicatesDisabled,
+        canonicalRowsUpdated,
+        duplicateGroupCount,
+      });
+    }
 
     if (body?.action === "update_settings" || body?.action === "remove") {
       const accountId = body.accountId?.trim();
