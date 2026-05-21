@@ -16,6 +16,7 @@ import {
 export const runtime = "nodejs";
 
 type ProductionEventInsert = Database["public"]["Tables"]["events"]["Insert"];
+type ExternalEventLinkInsert = Database["public"]["Tables"]["external_event_links"]["Insert"];
 type ExternalCalendarRow = Database["public"]["Tables"]["external_calendars"]["Row"];
 
 type AppleCalDavEvent = {
@@ -346,6 +347,39 @@ function throwSupabaseError(step: string, error: unknown): never {
   throw new Error("Apple Calendar a été lu, mais MSTV n’a pas pu enregistrer les événements.");
 }
 
+async function softDeleteOrphanedInsertedEvent(
+  supabase: ReturnType<typeof getServiceSupabaseClient>,
+  eventId: string,
+) {
+  const { error } = await supabase
+    .from("events")
+    .update({
+      deleted_at: new Date().toISOString(),
+      deleted_by: "external_link_creation_failed",
+    })
+    .eq("id", eventId);
+
+  if (error) {
+    console.error("Apple pull sync failed to hide orphan event after link creation failure", {
+      eventId,
+      ...getSafeSupabaseError(error),
+    });
+  }
+}
+
+async function insertAppleExternalEventLinkOrRollback(params: {
+  supabase: ReturnType<typeof getServiceSupabaseClient>;
+  insertedEventId: string;
+  payload: ExternalEventLinkInsert;
+}) {
+  const { supabase, insertedEventId, payload } = params;
+  const { error } = await supabase.from("external_event_links").insert(payload);
+  if (!error) return;
+
+  await softDeleteOrphanedInsertedEvent(supabase, insertedEventId);
+  throwSupabaseError("insert_external_event_link", error);
+}
+
 export async function POST(request: Request) {
   try {
     const authResult = await requireAuthenticatedUser(request);
@@ -405,9 +439,17 @@ export async function POST(request: Request) {
 
       const values = mapAppleEventToMstvEvent(appleEvent);
       if (!existingLink) {
+        if (!calendar.id || !calendar.provider_calendar_id || !appleEvent.externalEventId) {
+          throw new Error("Apple Calendar a été lu, mais MSTV n’a pas pu enregistrer les événements.");
+        }
+
         const { data: insertedEvent, error: insertError } = await supabase
           .from("events")
-          .insert(values)
+          .insert({
+            ...values,
+            imported_from: "apple_caldav",
+            external_import_id: appleEvent.externalEventId,
+          })
           .select()
           .single();
 
@@ -428,8 +470,11 @@ export async function POST(request: Request) {
           last_sync_error: null,
           raw_external_event: appleEvent.rawEvent,
         };
-        const { error: linkInsertError } = await supabase.from("external_event_links").insert(linkPayload);
-        if (linkInsertError) throwSupabaseError("insert_external_event_link", linkInsertError);
+        await insertAppleExternalEventLinkOrRollback({
+          supabase,
+          insertedEventId: insertedEvent.id,
+          payload: linkPayload,
+        });
         created += 1;
         continue;
       }

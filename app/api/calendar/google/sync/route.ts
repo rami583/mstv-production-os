@@ -12,6 +12,7 @@ import type { Database } from "@/lib/supabase";
 export const runtime = "nodejs";
 
 type ProductionEventRow = Database["public"]["Tables"]["events"]["Row"];
+type ExternalEventLinkInsert = Database["public"]["Tables"]["external_event_links"]["Insert"];
 type SyncFailureKind = "google_auth" | "google_api" | "supabase_write" | "supabase_read" | "generic";
 type SyncFailureStage =
   | "google_auth"
@@ -328,6 +329,39 @@ function throwSupabaseSyncError(kind: "supabase_read" | "supabase_write", step: 
   throw new GooglePullSyncError(kind, "Google a été lu, mais MSTV n’a pas pu enregistrer les événements.", stage, safeError);
 }
 
+async function softDeleteOrphanedInsertedEvent(
+  supabase: ReturnType<typeof getServiceSupabaseClient>,
+  eventId: string,
+) {
+  const { error } = await supabase
+    .from("events")
+    .update({
+      deleted_at: new Date().toISOString(),
+      deleted_by: "external_link_creation_failed",
+    })
+    .eq("id", eventId);
+
+  if (error) {
+    console.error("Google pull sync failed to hide orphan event after link creation failure", {
+      eventId,
+      ...getSafeSupabaseError(error),
+    });
+  }
+}
+
+async function insertGoogleExternalEventLinkOrRollback(params: {
+  supabase: ReturnType<typeof getServiceSupabaseClient>;
+  insertedEventId: string;
+  payload: ExternalEventLinkInsert;
+}) {
+  const { supabase, insertedEventId, payload } = params;
+  const { error } = await supabase.from("external_event_links").insert(payload);
+  if (!error) return;
+
+  await softDeleteOrphanedInsertedEvent(supabase, insertedEventId);
+  throwSupabaseSyncError("supabase_write", "insert_external_event_link", error);
+}
+
 function getErrorMessage(error: unknown) {
   if (error instanceof Error) return error.message;
   if (error && typeof error === "object" && "message" in error && typeof (error as { message?: unknown }).message === "string") {
@@ -620,9 +654,27 @@ export async function POST(request: Request) {
       const values = mapGoogleEventToMstvEvent(googleEvent);
 
       if (!existingLink) {
+        if (!calendar.id || !calendar.provider_calendar_id || !googleEvent.id) {
+          throw new GooglePullSyncError(
+            "supabase_write",
+            "Google a été lu, mais MSTV n’a pas pu enregistrer les événements.",
+            "supabase_insert",
+            {
+              message: "Identifiants Google incomplets pour créer le lien externe.",
+              code: null,
+              details: null,
+              hint: null,
+            },
+          );
+        }
+
         const { data: insertedEvent, error: insertError } = await supabase
           .from("events")
-          .insert(values)
+          .insert({
+            ...values,
+            imported_from: "google_calendar",
+            external_import_id: googleEvent.id,
+          })
           .select()
           .single();
 
@@ -643,8 +695,11 @@ export async function POST(request: Request) {
           last_external_updated_at: providerUpdatedAt,
           raw_external_event: googleEvent,
         };
-        const { error: linkInsertError } = await supabase.from("external_event_links").insert(linkInsertPayload);
-        if (linkInsertError) throwSupabaseSyncError("supabase_write", "insert_external_event_link", linkInsertError);
+        await insertGoogleExternalEventLinkOrRollback({
+          supabase,
+          insertedEventId: insertedEvent.id,
+          payload: linkInsertPayload,
+        });
         created += 1;
         continue;
       }

@@ -1039,7 +1039,7 @@ function isCachedExternalEventLinkVisible(link: ExternalEventLink, state: Cached
 
 function isCachedProductionEventVisible(event: ProductionEvent, state: CachedExternalCalendarVisibilityState) {
   if (event.deletedAt) return false;
-  if (isLikelyStaleAppleDirectionOrphanEvent(event)) return false;
+  if (isLikelyOrphanExternalImportEvent(event)) return false;
   return event.externalLinks.every((link) => isCachedExternalEventLinkVisible(link, state));
 }
 
@@ -2898,11 +2898,16 @@ function getPrimaryExternalEventLink(event: ProductionEvent) {
   return event.externalLinks.find((link) => link.calendarSyncEnabled && Boolean(link.calendarColor)) ?? null;
 }
 
-function isLikelyStaleAppleDirectionOrphanEvent(event: ProductionEvent) {
-  return event.externalLinks.length === 0 &&
-    !event.deletedAt &&
-    normalizeLabel(event.clientName).includes("direction") &&
-    normalizeLabel(event.eventName) === "evenement apple";
+function isLikelyOrphanExternalImportEvent(event: ProductionEvent) {
+  if (event.externalLinks.length > 0 || event.deletedAt) return false;
+  if (event.importedFrom === nativeMstvIcsImportSource) return false;
+
+  const normalizedEventName = normalizeLabel(event.eventName);
+  if (normalizedEventName === "evenement apple" || normalizedEventName === "evenement google") return true;
+
+  const normalizedImportedFrom = normalizeLabel(event.importedFrom ?? "");
+  if (normalizedImportedFrom.includes("apple") || normalizedImportedFrom.includes("google")) return true;
+  return Boolean(event.externalImportId && normalizedImportedFrom && normalizedImportedFrom !== normalizeLabel(nativeMstvIcsImportSource));
 }
 
 function getExternalSyncStatusLabel(status: string | null) {
@@ -3573,7 +3578,7 @@ export default function Home() {
   );
   const isProductionEventVisible = useCallback(
     (event: ProductionEvent) => {
-      if (isLikelyStaleAppleDirectionOrphanEvent(event)) return false;
+      if (isLikelyOrphanExternalImportEvent(event)) return false;
       return event.externalLinks.every(isExternalEventLinkVisible);
     },
     [isExternalEventLinkVisible],
