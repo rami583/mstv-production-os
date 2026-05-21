@@ -310,6 +310,7 @@ type ExternalCalendarEvent = {
   calendarName: string;
   calendarColor: string | null;
   calendarVisibility: ExternalCalendarVisibility;
+  calendarSyncEnabled: boolean;
   calendarCreatedByProfileId: string | null;
 };
 
@@ -2860,6 +2861,7 @@ function mapExternalCalendarEvent(row: ExternalCalendarEventQueryRow): ExternalC
     calendarName: row.external_calendars?.name ?? "Calendrier externe",
     calendarColor: row.external_calendars?.color ?? null,
     calendarVisibility: normalizeExternalCalendarVisibility(row.external_calendars?.visibility),
+    calendarSyncEnabled: Boolean(row.external_calendars?.sync_enabled ?? true),
     calendarCreatedByProfileId: row.external_calendars?.created_by_profile_id ?? null,
   };
 }
@@ -3421,6 +3423,7 @@ export default function Home() {
   const visibleExternalCalendarEvents = useMemo(
     () =>
       externalCalendarEvents.filter((event) =>
+        event.calendarSyncEnabled &&
         canViewExternalCalendar(permissions, profile, {
           visibility: event.calendarVisibility,
           createdByProfileId: event.calendarCreatedByProfileId,
@@ -4485,6 +4488,11 @@ export default function Home() {
 
     if (updateError) throw updateError;
     await refreshExternalCalendarSettings();
+    if (calendar.providerType === "google") {
+      await refreshGoogleCalendarAccounts();
+    } else if (calendar.providerType === "apple_caldav") {
+      await refreshAppleCalendarAccounts();
+    }
   }
 
   async function syncExternalCalendar(calendar: ExternalCalendar): Promise<ExternalCalendarSyncResult> {
@@ -4791,6 +4799,26 @@ export default function Home() {
     if (!supabase) throw new Error("Configuration Supabase manquante.");
     if (!canManageExternalCalendar(permissions, profile, calendar)) {
       throw new Error("Vous ne pouvez supprimer que vos calendriers.");
+    }
+
+    if (calendar.providerType === "google" || calendar.providerType === "apple_caldav") {
+      const { error: disableError } = await supabase
+        .from("external_calendars")
+        .update({
+          sync_enabled: false,
+          last_sync_status: "idle",
+          last_sync_error: null,
+        })
+        .eq("id", calendar.id);
+
+      if (disableError) throw disableError;
+      await refreshExternalCalendarSettings();
+      if (calendar.providerType === "google") {
+        await refreshGoogleCalendarAccounts();
+      } else {
+        await refreshAppleCalendarAccounts();
+      }
+      return;
     }
 
     const { error: deleteError } = await supabase
@@ -15006,7 +15034,7 @@ function ExternalCalendarsListView({
                         >
                           <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                             <div className="flex min-w-0 items-start gap-2">
-                              <ExternalCalendarColorDot color={calendar.color} className="mt-0.5" />
+                              <ExternalCalendarColorDot color={storedCalendar?.color ?? calendar.color} className="mt-0.5" />
                               <div className="min-w-0">
                                 <div className="truncate text-sm font-semibold text-stone-800">{calendar.summary}</div>
                                 <div className="mt-1 flex flex-wrap items-center gap-1.5 text-xs font-semibold">
@@ -15116,7 +15144,7 @@ function ExternalCalendarsListView({
                         >
                           <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                             <div className="flex min-w-0 items-start gap-2">
-                              <ExternalCalendarColorDot color={calendar.color} className="mt-0.5" />
+                              <ExternalCalendarColorDot color={storedCalendar?.color ?? calendar.color} className="mt-0.5" />
                           <div className="min-w-0">
                             <div className="truncate text-sm font-semibold text-stone-800">{calendar.name}</div>
                                 <div className="mt-1 flex flex-wrap items-center gap-1.5 text-xs font-semibold">
