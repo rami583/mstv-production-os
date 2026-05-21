@@ -49,6 +49,7 @@ type GoogleEvent = {
   description?: string;
   location?: string;
   updated?: string;
+  status?: string;
   start?: { date?: string; dateTime?: string; timeZone?: string };
   end?: { date?: string; dateTime?: string; timeZone?: string };
 };
@@ -101,22 +102,32 @@ function mapGoogleEventToMstvEvent(event: GoogleEvent) {
   };
 }
 
-async function fetchGoogleEvents(accessToken: string, providerCalendarId: string) {
-  const events: GoogleEvent[] = [];
-  let pageToken: string | undefined;
+function getGoogleSyncWindow() {
   const now = new Date();
   const timeMin = new Date(now);
   timeMin.setFullYear(timeMin.getFullYear() - 1);
   const timeMax = new Date(now);
   timeMax.setFullYear(timeMax.getFullYear() + 2);
 
+  return {
+    timeMin,
+    timeMax,
+    startDate: timeMin.toISOString().slice(0, 10),
+    endDate: timeMax.toISOString().slice(0, 10),
+  };
+}
+
+async function fetchGoogleEvents(accessToken: string, providerCalendarId: string, syncWindow: ReturnType<typeof getGoogleSyncWindow>) {
+  const events: GoogleEvent[] = [];
+  let pageToken: string | undefined;
+
   do {
     const url = new URL(`${googleCalendarApiBaseUrl}/calendars/${encodeURIComponent(providerCalendarId)}/events`);
     url.searchParams.set("singleEvents", "true");
     url.searchParams.set("showDeleted", "false");
     url.searchParams.set("maxResults", "2500");
-    url.searchParams.set("timeMin", timeMin.toISOString());
-    url.searchParams.set("timeMax", timeMax.toISOString());
+    url.searchParams.set("timeMin", syncWindow.timeMin.toISOString());
+    url.searchParams.set("timeMax", syncWindow.timeMax.toISOString());
     url.searchParams.set("orderBy", "startTime");
     if (pageToken) url.searchParams.set("pageToken", pageToken);
 
@@ -136,6 +147,26 @@ async function fetchGoogleEvents(accessToken: string, providerCalendarId: string
   } while (pageToken);
 
   return events;
+}
+
+async function fetchGoogleEventById(accessToken: string, providerCalendarId: string, externalEventId: string) {
+  const response = await fetch(
+    `${googleCalendarApiBaseUrl}/calendars/${encodeURIComponent(providerCalendarId)}/events/${encodeURIComponent(externalEventId)}`,
+    {
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+      },
+    },
+  );
+
+  if (response.status === 404 || response.status === 410) return null;
+
+  const payload = (await response.json().catch(() => null)) as (GoogleEvent & { error?: { message?: string } }) | null;
+  if (!response.ok) {
+    throw new GooglePullSyncError("google_api", payload?.error?.message || "Impossible de lire ce calendrier Google.");
+  }
+
+  return payload?.status === "cancelled" ? null : payload;
 }
 
 function getSafeSupabaseError(error: unknown): SafeSupabaseError {
@@ -198,6 +229,80 @@ function getUserMessageForSyncError(error: unknown) {
   return "Impossible de synchroniser ce calendrier.";
 }
 
+async function markGoogleDeletedEvents(params: {
+  supabase: ReturnType<typeof getServiceSupabaseClient>;
+  accessToken: string;
+  calendar: { id: string; provider_calendar_id: string };
+  currentGoogleEventIds: Set<string>;
+  syncWindow: ReturnType<typeof getGoogleSyncWindow>;
+}) {
+  const { supabase, accessToken, calendar, currentGoogleEventIds, syncWindow } = params;
+  const { data: links, error: linksError } = await supabase
+    .from("external_event_links")
+    .select("id,event_id,external_event_id,deleted_externally_at,deleted_locally_at")
+    .eq("external_calendar_id", calendar.id)
+    .eq("provider_type", "google")
+    .is("deleted_externally_at", null)
+    .is("deleted_locally_at", null);
+
+  if (linksError) throwSupabaseSyncError("supabase_read", "load_google_event_links_for_deletion", linksError);
+
+  const missingLinks = (links ?? []).filter((link) => link.external_event_id && !currentGoogleEventIds.has(link.external_event_id));
+  if (missingLinks.length === 0) return 0;
+
+  const eventIds = Array.from(new Set(missingLinks.map((link) => link.event_id).filter(Boolean)));
+  if (eventIds.length === 0) return 0;
+
+  const { data: linkedEvents, error: eventsError } = await supabase
+    .from("events")
+    .select("id,date,deleted_at")
+    .in("id", eventIds);
+
+  if (eventsError) throwSupabaseSyncError("supabase_read", "load_mstv_events_for_google_deletion", eventsError);
+
+  const eventById = new Map((linkedEvents ?? []).map((event) => [event.id, event]));
+  let deleted = 0;
+
+  for (const link of missingLinks) {
+    const localEvent = eventById.get(link.event_id);
+    if (!localEvent) continue;
+    if (localEvent.date < syncWindow.startDate || localEvent.date > syncWindow.endDate) continue;
+
+    const googleEvent = await fetchGoogleEventById(accessToken, calendar.provider_calendar_id, link.external_event_id);
+    if (googleEvent) continue;
+
+    const now = new Date().toISOString();
+
+    if (!localEvent.deleted_at) {
+      const { error: deleteError } = await supabase
+        .from("events")
+        .update({
+          deleted_at: now,
+          deleted_by: "Google Calendar",
+        })
+        .eq("id", localEvent.id);
+
+      if (deleteError) throwSupabaseSyncError("supabase_write", "mark_mstv_event_deleted_from_google", deleteError);
+      deleted += 1;
+    }
+
+    const { error: linkUpdateError } = await supabase
+      .from("external_event_links")
+      .update({
+        deleted_externally_at: now,
+        sync_status: "synced",
+        last_synced_at: now,
+        last_sync_error: null,
+        updated_at: now,
+      })
+      .eq("id", link.id);
+
+    if (linkUpdateError) throwSupabaseSyncError("supabase_write", "mark_external_event_link_deleted_from_google", linkUpdateError);
+  }
+
+  return deleted;
+}
+
 export async function POST(request: Request) {
   try {
     const authResult = await requireAuthenticatedUser(request);
@@ -244,12 +349,15 @@ export async function POST(request: Request) {
       });
       throw new GooglePullSyncError("google_auth", "Autorisation Google expirée. Reconnectez Google Calendar.", "google_auth");
     }
-    const googleEvents = await fetchGoogleEvents(accessToken, calendar.provider_calendar_id);
+    const syncWindow = getGoogleSyncWindow();
+    const googleEvents = await fetchGoogleEvents(accessToken, calendar.provider_calendar_id, syncWindow);
+    const currentGoogleEventIds = new Set(googleEvents.map((event) => event.id).filter(Boolean));
 
     let created = 0;
     let updated = 0;
     let unchanged = 0;
     let conflicts = 0;
+    let deleted = 0;
 
     for (const googleEvent of googleEvents) {
       const providerUpdatedAt = googleEvent.updated ?? new Date().toISOString();
@@ -359,6 +467,17 @@ export async function POST(request: Request) {
       }
     }
 
+    deleted = await markGoogleDeletedEvents({
+      supabase,
+      accessToken,
+      calendar: {
+        id: calendar.id,
+        provider_calendar_id: calendar.provider_calendar_id,
+      },
+      currentGoogleEventIds,
+      syncWindow,
+    });
+
     const finishedAt = new Date().toISOString();
     const { error: finishSyncError } = await supabase
       .from("external_calendars")
@@ -377,6 +496,7 @@ export async function POST(request: Request) {
       updated,
       unchanged,
       conflicts,
+      deleted,
     });
   } catch (error) {
     const message = getUserMessageForSyncError(error);
