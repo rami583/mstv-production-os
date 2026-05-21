@@ -2902,6 +2902,43 @@ function getEventWritableExternalLinks(event: ProductionEvent) {
   );
 }
 
+function isGoogleOrAppleImportedEvent(event: ProductionEvent) {
+  if (event.externalLinks.some((link) => link.providerType === "google" || link.providerType === "apple_caldav")) return true;
+
+  const normalizedSource = normalizeLabel(event.importedFrom ?? "");
+  return normalizedSource.includes("google") || normalizedSource.includes("apple");
+}
+
+function isGenericExternalEventName(value: string) {
+  const normalizedValue = normalizeLabel(value);
+  return (
+    normalizedValue === "evenement apple" ||
+    normalizedValue === "evenement google" ||
+    normalizedValue === "evenement importe" ||
+    normalizedValue === "external event"
+  );
+}
+
+function getProductionEventDisplay(event: ProductionEvent) {
+  const title = event.clientName.trim() || event.eventName.trim() || "Événement";
+  const subtitle = event.eventName.trim();
+
+  if (!isGoogleOrAppleImportedEvent(event)) {
+    return { title, subtitle };
+  }
+
+  if (!subtitle || isGenericExternalEventName(subtitle) || normalizeLabel(subtitle) === normalizeLabel(title)) {
+    return { title, subtitle: "" };
+  }
+
+  return { title, subtitle };
+}
+
+function getProductionEventDisplayLine(event: ProductionEvent) {
+  const display = getProductionEventDisplay(event);
+  return [display.title, display.subtitle].filter(Boolean).join(" - ");
+}
+
 function getPrimaryExternalEventLink(event: ProductionEvent) {
   return event.externalLinks.find((link) => link.calendarSyncEnabled && Boolean(link.calendarColor)) ?? null;
 }
@@ -6851,6 +6888,7 @@ export default function Home() {
     if (!supabase) {
       throw new Error("Configuration Supabase manquante.");
     }
+    const eventDisplayLine = getProductionEventDisplayLine(event);
 
     const columnByField: Record<EventTimeField, "client_arrival_time" | "start_time" | "end_time" | "end_of_day_time"> = {
       clientArrivalTime: "client_arrival_time",
@@ -6906,7 +6944,7 @@ export default function Home() {
           {
             type: "event_time_changed",
             title: "Horaire modifié",
-            body: `${event.clientName} - ${getEventTimeFieldLabel(field)}: ${formatTime(nextValue) || "Non défini"}`,
+            body: `${eventDisplayLine} - ${getEventTimeFieldLabel(field)}: ${formatTime(nextValue) || "Non défini"}`,
             relatedEventId: event.id,
           },
           { dedupe: true },
@@ -6931,7 +6969,7 @@ export default function Home() {
             {
               type: "event_time_changed",
               title: "Horaire modifié",
-              body: `${event.clientName} - ${getEventTimeFieldLabel(field)}: ${formatTime(nextValue) || "Non défini"}`,
+              body: `${eventDisplayLine} - ${getEventTimeFieldLabel(field)}: ${formatTime(nextValue) || "Non défini"}`,
               relatedEventId: event.id,
             },
             { dedupe: true },
@@ -6973,7 +7011,7 @@ export default function Home() {
         {
           type: "event_time_changed",
           title: "Horaire modifié",
-          body: `${event.clientName} - ${getEventTimeFieldLabel(field)}: ${formatTime(updatedValue) || "Non défini"}`,
+          body: `${eventDisplayLine} - ${getEventTimeFieldLabel(field)}: ${formatTime(updatedValue) || "Non défini"}`,
           relatedEventId: event.id,
         },
         { dedupe: true },
@@ -6986,7 +7024,7 @@ export default function Home() {
               {
                 type: "google_calendar_sync_success",
                 title: "Événement synchronisé avec le calendrier externe.",
-                body: `${event.clientName} - ${event.eventName}`,
+                body: eventDisplayLine,
                 relatedEventId: event.id,
               },
               { persist: false },
@@ -7016,6 +7054,7 @@ export default function Home() {
     if (!supabase) {
       throw new Error("Configuration Supabase manquante.");
     }
+    const eventDisplayLine = getProductionEventDisplayLine(event);
 
     const normalizedDate = nextDate.trim();
     if (!normalizedDate) {
@@ -7068,7 +7107,7 @@ export default function Home() {
           {
             type: "event_date_changed",
             title: "Date modifiée",
-            body: `${event.clientName} - ${formatFullDate(normalizedDate)}`,
+            body: `${eventDisplayLine} - ${formatFullDate(normalizedDate)}`,
             relatedEventId: event.id,
           },
           { dedupe: true },
@@ -7093,7 +7132,7 @@ export default function Home() {
             {
               type: "event_date_changed",
               title: "Date modifiée",
-              body: `${event.clientName} - ${formatFullDate(normalizedDate)}`,
+              body: `${eventDisplayLine} - ${formatFullDate(normalizedDate)}`,
               relatedEventId: event.id,
             },
             { dedupe: true },
@@ -7134,7 +7173,7 @@ export default function Home() {
         {
           type: "event_date_changed",
           title: "Date modifiée",
-          body: `${event.clientName} - ${formatFullDate(data.date)}`,
+          body: `${eventDisplayLine} - ${formatFullDate(data.date)}`,
           relatedEventId: event.id,
         },
         { dedupe: true },
@@ -7147,7 +7186,7 @@ export default function Home() {
               {
                 type: "google_calendar_sync_success",
                 title: "Événement synchronisé avec le calendrier externe.",
-                body: `${event.clientName} - ${event.eventName}`,
+                body: eventDisplayLine,
                 relatedEventId: event.id,
               },
               { persist: false },
@@ -8751,6 +8790,7 @@ export default function Home() {
     }
 
     const eventId = eventToDelete.id;
+    const eventDisplayLine = getProductionEventDisplayLine(eventToDelete);
     console.log("Soft deleting current event", {
       eventId,
       selectedEventId: selectedEvent?.id ?? null,
@@ -8795,7 +8835,7 @@ export default function Home() {
         {
           type: "event_deleted",
           title: "Événement placé dans la corbeille",
-          body: `${eventToDelete.clientName} - ${eventToDelete.eventName}`,
+          body: eventDisplayLine,
           relatedEventId: eventId,
         },
         { dedupe: true },
@@ -8845,7 +8885,7 @@ export default function Home() {
       {
         type: "event_deleted",
         title: "Événement placé dans la corbeille",
-        body: `${eventToDelete.clientName} - ${eventToDelete.eventName}`,
+        body: eventDisplayLine,
         relatedEventId: eventId,
       },
       { dedupe: true },
@@ -8867,7 +8907,7 @@ export default function Home() {
               {
                 type: "google_calendar_sync_success",
                 title: "Événement synchronisé avec le calendrier externe.",
-                body: `${eventToDelete.clientName} - ${eventToDelete.eventName}`,
+                body: eventDisplayLine,
                 relatedEventId: eventId,
               },
               { persist: false },
@@ -9952,10 +9992,11 @@ function CreateMenu({
 }
 
 function getEventSearchText(event: ProductionEvent) {
+  const display = getProductionEventDisplay(event);
   return normalizeLabel(
     [
-      event.clientName,
-      event.eventName,
+      display.title,
+      display.subtitle,
       event.date,
       formatFullDate(event.date),
       formatTimeRange(event.startTime, event.endTime),
@@ -10031,6 +10072,7 @@ function EventSearchOverlay({
             <div className="space-y-1.5">
               {results.map((event) => {
                 const timeRange = formatTimeRange(event.startTime, event.endTime);
+                const display = getProductionEventDisplay(event);
                 return (
                   <button
                     key={event.id}
@@ -10040,8 +10082,8 @@ function EventSearchOverlay({
                   >
                     <span className="h-full min-h-14 rounded-full bg-[#bb2720]" />
                     <span className="min-w-0">
-                      <span className="block truncate text-base font-semibold leading-snug text-stone-950">{event.clientName}</span>
-                      <span className="block truncate text-base font-medium text-stone-500">{event.eventName}</span>
+                      <span className="block truncate text-base font-semibold leading-snug text-stone-950">{display.title}</span>
+                      {display.subtitle && <span className="block truncate text-base font-medium text-stone-500">{display.subtitle}</span>}
                       <span className="mt-1 block truncate text-sm font-semibold text-stone-400">
                         {formatFullDate(event.date)}
                         {timeRange ? ` · ${timeRange}` : ""}
@@ -11238,6 +11280,7 @@ function SwipeableCalendarEventRow({
   const timeRange = formatTimeRange(event.startTime, event.endTime);
   const externalLink = getPrimaryExternalEventLink(event);
   const externalTone = getExternalCalendarTone(externalLink?.calendarColor ?? null);
+  const display = getProductionEventDisplay(event);
 
   function handlePointerDown(pointerEvent: ReactPointerEvent<HTMLDivElement>) {
     if (!canSwipe) return;
@@ -11399,8 +11442,8 @@ function SwipeableCalendarEventRow({
       >
         <span style={externalTone.stripeStyle} className={cn("h-full min-h-14 rounded-full", externalLink?.calendarColor ? externalTone.stripe : "bg-[#bb2720]")} />
         <span className="min-w-0">
-          <span className="block text-base font-semibold leading-snug text-stone-950">{event.clientName}</span>
-          <span className="block truncate text-base font-medium text-stone-500">{event.eventName}</span>
+          <span className="block text-base font-semibold leading-snug text-stone-950">{display.title}</span>
+          {display.subtitle && <span className="block truncate text-base font-medium text-stone-500">{display.subtitle}</span>}
         </span>
         {timeRange && <span className="pl-2 text-right text-base font-medium text-stone-500">{timeRange}</span>}
       </div>
@@ -11500,6 +11543,7 @@ function ProductionDetail({
   const [isEventSwipeDragging, setIsEventSwipeDragging] = useState(false);
   const [eventSwipeAnimating, setEventSwipeAnimating] = useState(false);
   const googleLinks = getEventGoogleLinks(event);
+  const eventDisplay = getProductionEventDisplay(event);
 
   function publishEventDateSwipeTransition({
     currentOffset,
@@ -11976,8 +12020,8 @@ function ProductionDetail({
       >
         <div className="flex items-start justify-between gap-4">
           <div className="min-w-0 flex-1">
-            <h1 className="truncate text-4xl font-semibold leading-tight text-stone-950 sm:text-6xl">{event.clientName}</h1>
-            <p className="mt-2 truncate text-base font-medium text-stone-500">{event.eventName}</p>
+            <h1 className="truncate text-4xl font-semibold leading-tight text-stone-950 sm:text-6xl">{eventDisplay.title}</h1>
+            {eventDisplay.subtitle && <p className="mt-2 truncate text-base font-medium text-stone-500">{eventDisplay.subtitle}</p>}
             {permissions.canManageEvents && (
               <button
                 type="button"
@@ -12314,13 +12358,14 @@ function ProductionDetail({
 }
 
 function EventSwipePreview({ event, style }: { event: ProductionEvent; style: React.CSSProperties }) {
+  const display = getProductionEventDisplay(event);
   return (
     <section aria-hidden className="pointer-events-none absolute inset-0 z-0 flex min-h-0 w-full flex-col gap-5 overflow-hidden" style={style}>
       <Card className="premium-surface shrink-0 p-5 sm:p-8">
         <div className="flex items-start justify-between gap-4">
           <div className="min-w-0 flex-1">
-            <h1 className="truncate text-4xl font-semibold leading-tight text-stone-950 sm:text-6xl">{event.clientName}</h1>
-            <p className="mt-2 truncate text-base font-medium text-stone-500">{event.eventName}</p>
+            <h1 className="truncate text-4xl font-semibold leading-tight text-stone-950 sm:text-6xl">{display.title}</h1>
+            {display.subtitle && <p className="mt-2 truncate text-base font-medium text-stone-500">{display.subtitle}</p>}
           </div>
         </div>
         <ProductionTimeline
@@ -14576,6 +14621,8 @@ function EventHistorySheet({
   onRestore: (entry: EventActivityLog) => Promise<void>;
   canRestore: boolean;
 }) {
+  const display = getProductionEventDisplay(event);
+
   useEscapeToClose(onClose);
 
   return (
@@ -14585,7 +14632,7 @@ function EventHistorySheet({
           <div className="min-w-0">
             <h2 className="text-base font-semibold text-stone-950">Historique</h2>
             <p className="mt-1 truncate text-base font-medium text-stone-500">
-              {event.clientName} · {event.eventName}
+              {[display.title, display.subtitle].filter(Boolean).join(" · ")}
             </p>
           </div>
           <button type="button" onClick={onClose} className="rounded-full border border-stone-200 bg-white px-3 py-1.5 text-base font-semibold text-stone-600 transition hover:bg-stone-50">
@@ -14688,12 +14735,13 @@ function TrashEventsSheet({
           <div className="space-y-2">
             {events.map((event) => {
               const isRestoring = restoringEventId === event.id;
+              const display = getProductionEventDisplay(event);
               return (
                 <div key={event.id} className="rounded-2xl border border-stone-200 bg-stone-50/70 px-4 py-3">
                   <div className="flex min-w-0 items-start justify-between gap-3">
                     <div className="min-w-0">
-                      <p className="truncate text-base font-semibold text-stone-950">{event.clientName}</p>
-                      <p className="truncate text-base font-medium text-stone-500">{event.eventName}</p>
+                      <p className="truncate text-base font-semibold text-stone-950">{display.title}</p>
+                      {display.subtitle && <p className="truncate text-base font-medium text-stone-500">{display.subtitle}</p>}
                       <p className="mt-2 text-sm font-semibold text-stone-500">
                         {formatFullDate(event.date)}
                         {event.deletedAt && ` · Supprimé le ${formatHistoryTimestamp(event.deletedAt)}`}
@@ -16012,6 +16060,7 @@ function DuplicateEventDialog({
 }) {
   const [duplicating, setDuplicating] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const display = getProductionEventDisplay(request.event);
 
   async function handleConfirm() {
     setDuplicating(true);
@@ -16030,8 +16079,8 @@ function DuplicateEventDialog({
     <div className={cn(modalBackdropClassName, modalSheetPositionClassName)} onPointerDown={(pointerEvent) => handleModalBackdropPointerDown(pointerEvent, onClose)}>
       <div className={cn(modalPanelClassName, "w-full p-5 sm:max-w-md sm:p-6")} onPointerDown={(pointerEvent) => pointerEvent.stopPropagation()}>
         <div className="mb-5">
-          <p className="truncate text-base font-semibold text-stone-950">{request.event.clientName}</p>
-          <p className="mt-1 truncate text-base text-stone-500">{request.event.eventName}</p>
+          <p className="truncate text-base font-semibold text-stone-950">{display.title}</p>
+          {display.subtitle && <p className="mt-1 truncate text-base text-stone-500">{display.subtitle}</p>}
           <div className="mt-4 grid grid-cols-2 gap-2">
             <div className="rounded-2xl bg-stone-50 px-3 py-3">
               <p className="text-xs font-semibold uppercase tracking-normal text-stone-400">Date source</p>
@@ -16083,6 +16132,7 @@ function DeleteEventDialog({
   const [deleteExternalEvent, setDeleteExternalEvent] = useState(hasExternalLinks);
   const [deleting, setDeleting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const display = getProductionEventDisplay(event);
 
   async function handleConfirm() {
     console.log("Delete event confirmation clicked", {
@@ -16108,8 +16158,8 @@ function DeleteEventDialog({
         <div className="mb-5">
           <h2 className="text-base font-semibold text-stone-950">Placer cet événement dans la corbeille ?</h2>
           <p className="mt-2 text-base font-medium text-stone-500">Vous pourrez le restaurer depuis la Corbeille.</p>
-          <p className="mt-4 truncate text-base font-semibold text-stone-950">{event.clientName}</p>
-          <p className="mt-1 truncate text-base text-stone-500">{event.eventName}</p>
+          <p className="mt-4 truncate text-base font-semibold text-stone-950">{display.title}</p>
+          {display.subtitle && <p className="mt-1 truncate text-base text-stone-500">{display.subtitle}</p>}
         </div>
 
         {hasExternalLinks && (
@@ -16166,6 +16216,7 @@ function PermanentDeleteEventDialog({
 }) {
   const [deleting, setDeleting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const display = getProductionEventDisplay(event);
 
   async function handleConfirm() {
     setDeleting(true);
@@ -16186,8 +16237,8 @@ function PermanentDeleteEventDialog({
         <div className="mb-5">
           <h2 className="text-base font-semibold text-stone-950">Supprimer définitivement cet événement ?</h2>
           <p className="mt-2 text-base font-medium text-rose-700">Cette action est irréversible.</p>
-          <p className="mt-4 truncate text-base font-semibold text-stone-950">{event.clientName}</p>
-          <p className="mt-1 truncate text-base text-stone-500">{event.eventName}</p>
+          <p className="mt-4 truncate text-base font-semibold text-stone-950">{display.title}</p>
+          {display.subtitle && <p className="mt-1 truncate text-base text-stone-500">{display.subtitle}</p>}
         </div>
 
         {error && <div className="mb-4 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-base font-medium text-rose-700">{error}</div>}
