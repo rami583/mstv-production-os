@@ -2571,6 +2571,10 @@ function normalizeExternalCalendarIcsUrl(value: string) {
   return trimmed;
 }
 
+function normalizeProviderCalendarKey(value: string | null | undefined) {
+  return (value ?? "").trim().replace(/\/+$/, "");
+}
+
 function getExternalCalendarVisibilityLabel(visibility: ExternalCalendarVisibility) {
   const labels: Record<ExternalCalendarVisibility, string> = {
     admin_only: "Admin",
@@ -4222,14 +4226,14 @@ export default function Home() {
     );
     if (mappedCalendar.providerType === "google" && mappedCalendar.providerAccountId && mappedCalendar.providerCalendarId) {
       const providerAccountId = mappedCalendar.providerAccountId;
-      const providerCalendarId = mappedCalendar.providerCalendarId;
+      const providerCalendarId = normalizeProviderCalendarKey(mappedCalendar.providerCalendarId);
       setGoogleCalendarsByAccountId((current) => {
         const accountCalendars = current[providerAccountId] ?? [];
         if (accountCalendars.length === 0) return current;
         return {
           ...current,
           [providerAccountId]: accountCalendars.map((calendar) => (
-            calendar.providerCalendarId === providerCalendarId
+            normalizeProviderCalendarKey(calendar.providerCalendarId) === providerCalendarId
               ? {
                   ...calendar,
                   externalCalendarId: mappedCalendar.id,
@@ -4244,14 +4248,14 @@ export default function Home() {
     }
     if (mappedCalendar.providerType === "apple_caldav" && mappedCalendar.providerAccountId && mappedCalendar.providerCalendarId) {
       const providerAccountId = mappedCalendar.providerAccountId;
-      const providerCalendarId = mappedCalendar.providerCalendarId;
+      const providerCalendarId = normalizeProviderCalendarKey(mappedCalendar.providerCalendarId);
       setAppleCalendarsByAccountId((current) => {
         const accountCalendars = current[providerAccountId] ?? [];
         if (accountCalendars.length === 0) return current;
         return {
           ...current,
           [providerAccountId]: accountCalendars.map((calendar) => (
-            calendar.providerCalendarId === providerCalendarId
+            normalizeProviderCalendarKey(calendar.providerCalendarId) === providerCalendarId
               ? {
                   ...calendar,
                   externalCalendarId: mappedCalendar.id,
@@ -14979,14 +14983,16 @@ function ExternalCalendarsListView({
   }
 
   function getGoogleStoredCalendar(providerCalendar: GoogleProviderCalendar) {
+    const providerCalendarKey = normalizeProviderCalendarKey(providerCalendar.providerCalendarId);
     return calendars.find((item) => item.id === providerCalendar.externalCalendarId)
-      ?? calendars.find((item) => item.providerType === "google" && item.providerCalendarId === providerCalendar.providerCalendarId)
+      ?? calendars.find((item) => item.providerType === "google" && normalizeProviderCalendarKey(item.providerCalendarId) === providerCalendarKey)
       ?? null;
   }
 
   function getAppleStoredCalendar(providerCalendar: AppleProviderCalendar) {
+    const providerCalendarKey = normalizeProviderCalendarKey(providerCalendar.providerCalendarId);
     return calendars.find((item) => item.id === providerCalendar.externalCalendarId)
-      ?? calendars.find((item) => item.providerType === "apple_caldav" && item.providerCalendarId === providerCalendar.providerCalendarId)
+      ?? calendars.find((item) => item.providerType === "apple_caldav" && normalizeProviderCalendarKey(item.providerCalendarId) === providerCalendarKey)
       ?? null;
   }
 

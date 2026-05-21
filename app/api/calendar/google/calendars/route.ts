@@ -39,6 +39,20 @@ async function findStoredGoogleCalendar(
   supabase: ReturnType<typeof getServiceSupabaseClient>,
   input: { accountId: string; providerCalendarId: string; userId: string; calendarId?: string | null },
 ) {
+  if (input.calendarId) {
+    const { data, error } = await supabase
+      .from("external_calendars")
+      .select("id, provider_account_id, provider_calendar_id, sync_enabled, visibility, color")
+      .eq("id", input.calendarId)
+      .eq("provider_account_id", input.accountId)
+      .eq("provider_type", "google")
+      .eq("created_by_profile_id", input.userId)
+      .maybeSingle();
+
+    if (error) throw error;
+    if (data) return data;
+  }
+
   let query = supabase
     .from("external_calendars")
     .select("id, provider_account_id, provider_calendar_id, sync_enabled, visibility, color")
@@ -47,10 +61,6 @@ async function findStoredGoogleCalendar(
     .eq("provider_type", "google")
     .eq("created_by_profile_id", input.userId)
     .limit(1);
-
-  if (input.calendarId) {
-    query = query.eq("id", input.calendarId);
-  }
 
   const { data, error } = await query.maybeSingle();
 

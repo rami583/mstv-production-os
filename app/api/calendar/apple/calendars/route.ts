@@ -19,27 +19,38 @@ export function OPTIONS() {
   });
 }
 
+function normalizeProviderCalendarKey(value: string | null | undefined) {
+  return (value ?? "").trim().replace(/\/+$/, "");
+}
+
 async function findStoredAppleCalendar(
   supabase: ReturnType<typeof getServiceSupabaseClient>,
   input: { accountId: string; providerCalendarId: string; userId: string; calendarId?: string | null },
 ) {
-  let query = supabase
+  if (input.calendarId) {
+    const { data, error } = await supabase
+      .from("external_calendars")
+      .select("id, provider_account_id, provider_calendar_id, sync_enabled, visibility, color")
+      .eq("id", input.calendarId)
+      .eq("provider_account_id", input.accountId)
+      .eq("provider_type", "apple_caldav")
+      .eq("created_by_profile_id", input.userId)
+      .maybeSingle();
+
+    if (error) throw error;
+    if (data) return data;
+  }
+
+  const { data: candidates, error: candidatesError } = await supabase
     .from("external_calendars")
     .select("id, provider_account_id, provider_calendar_id, sync_enabled, visibility, color")
     .eq("provider_account_id", input.accountId)
-    .eq("provider_calendar_id", input.providerCalendarId)
     .eq("provider_type", "apple_caldav")
-    .eq("created_by_profile_id", input.userId)
-    .limit(1);
+    .eq("created_by_profile_id", input.userId);
 
-  if (input.calendarId) {
-    query = query.eq("id", input.calendarId);
-  }
-
-  const { data, error } = await query.maybeSingle();
-
-  if (error) throw error;
-  return data;
+  if (candidatesError) throw candidatesError;
+  const providerCalendarKey = normalizeProviderCalendarKey(input.providerCalendarId);
+  return (candidates ?? []).find((calendar) => normalizeProviderCalendarKey(calendar.provider_calendar_id) === providerCalendarKey) ?? null;
 }
 
 async function refetchStoredAppleCalendar(
@@ -155,7 +166,7 @@ export async function POST(request: Request) {
     const storedByProviderId = new Map(
       (storedCalendars ?? [])
         .filter((calendar) => calendar.provider_account_id && calendar.provider_calendar_id)
-        .map((calendar) => [`${calendar.provider_account_id}:${calendar.provider_calendar_id}`, calendar]),
+        .map((calendar) => [`${calendar.provider_account_id}:${normalizeProviderCalendarKey(calendar.provider_calendar_id)}`, calendar]),
     );
 
     const calendarsByAccountId: Record<string, AppleCalDavCalendar[]> = {};
@@ -185,12 +196,12 @@ export async function POST(request: Request) {
         if (refreshedStoredCalendarsError) throw refreshedStoredCalendarsError;
         for (const storedCalendar of refreshedStoredCalendars ?? []) {
           if (storedCalendar.provider_account_id && storedCalendar.provider_calendar_id) {
-            storedByProviderId.set(`${storedCalendar.provider_account_id}:${storedCalendar.provider_calendar_id}`, storedCalendar);
+            storedByProviderId.set(`${storedCalendar.provider_account_id}:${normalizeProviderCalendarKey(storedCalendar.provider_calendar_id)}`, storedCalendar);
           }
         }
 
         calendarsByAccountId[account.id] = calendars.map((calendar) => {
-          const stored = storedByProviderId.get(`${account.id}:${calendar.providerCalendarId}`);
+          const stored = storedByProviderId.get(`${account.id}:${normalizeProviderCalendarKey(calendar.providerCalendarId)}`);
           return {
             providerCalendarId: calendar.providerCalendarId,
             name: calendar.name,
