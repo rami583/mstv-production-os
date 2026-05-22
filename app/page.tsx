@@ -48,8 +48,10 @@ import {
   useState,
   type Dispatch,
   type PointerEvent as ReactPointerEvent,
+  type ReactNode,
   type SetStateAction,
   type TouchEvent as ReactTouchEvent,
+  type TransitionEvent as ReactTransitionEvent,
   type WheelEvent as ReactWheelEvent,
 } from "react";
 import { Card } from "@/components/ui/card";
@@ -647,6 +649,8 @@ const EVENT_SWIPE_THRESHOLD_MIN = 38;
 const EVENT_SWIPE_THRESHOLD_MAX = 84;
 const EVENT_SWIPE_AXIS_ACTIVATION_PX = 8;
 const EVENT_SWIPE_HORIZONTAL_DOMINANCE = 1.12;
+const EVENT_DETAIL_CAROUSEL_TRANSITION_MS = 240;
+const EVENT_DETAIL_CAROUSEL_EASING = "cubic-bezier(0.22, 1, 0.36, 1)";
 
 function getSwipePageStep(viewportWidth: number) {
   return viewportWidth + PAGE_GAP;
@@ -3612,6 +3616,7 @@ export default function Home() {
   const [activityError, setActivityError] = useState<string | null>(null);
   const [restoringActivityId, setRestoringActivityId] = useState<string | null>(null);
   const [promotingEventId, setPromotingEventId] = useState<string | null>(null);
+  const [eventDetailCarousel, setEventDetailCarousel] = useState<{ direction: -1 | 1; targetId: string } | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [isTimelineTimeEditing, setIsTimelineTimeEditing] = useState(false);
@@ -3781,6 +3786,8 @@ export default function Home() {
   const selectedEventIndex = selectedEvent ? chronologicalEvents.findIndex((item) => item.id === selectedEvent.id) : -1;
   const hasPreviousEvent = selectedEventIndex > 0;
   const hasNextEvent = selectedEventIndex >= 0 && selectedEventIndex < chronologicalEvents.length - 1;
+  const previousDetailEvent = hasPreviousEvent ? chronologicalEvents[selectedEventIndex - 1] : null;
+  const nextDetailEvent = hasNextEvent ? chronologicalEvents[selectedEventIndex + 1] : null;
   const writableGoogleCalendars = useMemo(
     () =>
       externalCalendars.filter(
@@ -3809,6 +3816,11 @@ export default function Home() {
     () => [...writableGoogleCalendars, ...writableAppleCalendars],
     [writableAppleCalendars, writableGoogleCalendars],
   );
+
+  useEffect(() => {
+    setEventDetailCarousel(null);
+  }, [screen, selectedId]);
+
   const connectedGoogleAccountCount = useMemo(
     () => googleCalendarAccounts.filter((account) => account.connectionStatus === "connected").length,
     [googleCalendarAccounts],
@@ -6065,10 +6077,83 @@ export default function Home() {
     setScreen("calendar");
   }
 
-  function navigateEvent(delta: -1 | 1) {
-    const nextEvent = chronologicalEvents[selectedEventIndex + delta];
-    if (!nextEvent) return;
-    setSelectedId(nextEvent.id);
+  function startEventDetailCarousel(delta: -1 | 1) {
+    if (eventDetailCarousel) return;
+    const targetEvent = chronologicalEvents[selectedEventIndex + delta];
+    if (!targetEvent) return;
+    setEventDetailCarousel({ direction: delta, targetId: targetEvent.id });
+  }
+
+  function finishEventDetailCarousel(targetId: string) {
+    setSelectedId(targetId);
+    setEventDetailCarousel(null);
+  }
+
+  function renderEventDetailPanel(eventToRender: ProductionEvent) {
+    const eventIndex = chronologicalEvents.findIndex((item) => item.id === eventToRender.id);
+    const panelHasPrevious = eventIndex > 0;
+    const panelHasNext = eventIndex >= 0 && eventIndex < chronologicalEvents.length - 1;
+
+    if (isExternalContextProductionEvent(eventToRender)) {
+      return (
+        <ExternalContextEventDetail
+          event={eventToRender}
+          hasPrevious={panelHasPrevious}
+          hasNext={panelHasNext}
+          goPrevious={() => startEventDetailCarousel(-1)}
+          goNext={() => startEventDetailCarousel(1)}
+          onEditEvent={() => {
+            if (!permissions.canManageEvents) return;
+            setEditingEvent(eventToRender);
+            setEditingReturnScreen("detail");
+            setCreateModalOpen(true);
+          }}
+          onPromote={() => promoteEventToProduction(eventToRender)}
+          promoting={promotingEventId === eventToRender.id}
+          permissions={permissions}
+        />
+      );
+    }
+
+    return (
+      <ProductionDetail
+        event={eventToRender}
+        hasPrevious={panelHasPrevious}
+        hasNext={panelHasNext}
+        goPrevious={() => startEventDetailCarousel(-1)}
+        goNext={() => startEventDetailCarousel(1)}
+        onEditEvent={() => {
+          if (!permissions.canManageEvents) return;
+          setEditingEvent(eventToRender);
+          setEditingReturnScreen("detail");
+          setCreateModalOpen(true);
+        }}
+        onUpdateEventTime={updateEventTime}
+        onToggleOption={toggleOption}
+        onChangeOptionCompletedBy={updateOptionCompletedBy}
+        onCreateOption={createEventOption}
+        onDeleteOption={deleteEventOption}
+        onRenameOption={renameEventOption}
+        onCreateOptionItem={createEventOptionItem}
+        onUpdateOptionItem={updateEventOptionItem}
+        onDeleteOptionItem={deleteEventOptionItem}
+        onCreateLink={createEventLink}
+        onDeleteLink={deleteEventLink}
+        onRenameLink={renameEventLink}
+        onSaveLinkEntries={syncEventLinkEntries}
+        onCreateDocumentGroup={createEventDocumentGroup}
+        onDeleteDocumentGroup={deleteEventDocumentGroup}
+        onRenameDocumentGroup={renameEventDocumentGroup}
+        onUploadDocument={uploadEventDocument}
+        onDeleteDocumentFile={deleteEventDocument}
+        onOpenDocument={openEventDocument}
+        onDownloadDocument={downloadEventDocument}
+        onTimelineTimeEditStart={startTimelineTimeEditing}
+        onTimelineTimeEditEnd={endTimelineTimeEditing}
+        permissions={permissions}
+        profile={profile}
+      />
+    );
   }
 
   const startTimelineTimeEditing = useCallback((saveTime: () => Promise<void>) => {
@@ -9486,62 +9571,15 @@ export default function Home() {
           )}
 
           {!loading && screen === "detail" && selectedEvent && (
-            isExternalContextProductionEvent(selectedEvent) ? (
-              <ExternalContextEventDetail
-                event={selectedEvent}
-                hasPrevious={hasPreviousEvent}
-                hasNext={hasNextEvent}
-                goPrevious={() => navigateEvent(-1)}
-                goNext={() => navigateEvent(1)}
-                onEditEvent={() => {
-                  if (!permissions.canManageEvents) return;
-                  setEditingEvent(selectedEvent);
-                  setEditingReturnScreen("detail");
-                  setCreateModalOpen(true);
-                }}
-                onPromote={() => promoteEventToProduction(selectedEvent)}
-                promoting={promotingEventId === selectedEvent.id}
-                permissions={permissions}
-              />
-            ) : (
-              <ProductionDetail
-                event={selectedEvent}
-                hasPrevious={hasPreviousEvent}
-                hasNext={hasNextEvent}
-                goPrevious={() => navigateEvent(-1)}
-                goNext={() => navigateEvent(1)}
-                onEditEvent={() => {
-                  if (!permissions.canManageEvents) return;
-                  setEditingEvent(selectedEvent);
-                  setEditingReturnScreen("detail");
-                  setCreateModalOpen(true);
-                }}
-                onUpdateEventTime={updateEventTime}
-                onToggleOption={toggleOption}
-                onChangeOptionCompletedBy={updateOptionCompletedBy}
-                onCreateOption={createEventOption}
-                onDeleteOption={deleteEventOption}
-                onRenameOption={renameEventOption}
-                onCreateOptionItem={createEventOptionItem}
-                onUpdateOptionItem={updateEventOptionItem}
-                onDeleteOptionItem={deleteEventOptionItem}
-                onCreateLink={createEventLink}
-                onDeleteLink={deleteEventLink}
-                onRenameLink={renameEventLink}
-                onSaveLinkEntries={syncEventLinkEntries}
-                onCreateDocumentGroup={createEventDocumentGroup}
-                onDeleteDocumentGroup={deleteEventDocumentGroup}
-                onRenameDocumentGroup={renameEventDocumentGroup}
-                onUploadDocument={uploadEventDocument}
-                onDeleteDocumentFile={deleteEventDocument}
-                onOpenDocument={openEventDocument}
-                onDownloadDocument={downloadEventDocument}
-                onTimelineTimeEditStart={startTimelineTimeEditing}
-                onTimelineTimeEditEnd={endTimelineTimeEditing}
-                permissions={permissions}
-                profile={profile}
-              />
-            )
+            <EventDetailCarousel
+              currentEvent={selectedEvent}
+              previousEvent={previousDetailEvent}
+              nextEvent={nextDetailEvent}
+              direction={eventDetailCarousel?.direction ?? null}
+              targetId={eventDetailCarousel?.targetId ?? null}
+              onTransitionComplete={finishEventDetailCarousel}
+              renderPanel={renderEventDetailPanel}
+            />
           )}
 
           {!loading && screen === "detail" && !selectedEvent && (
@@ -11625,6 +11663,66 @@ function SwipeableCalendarEventRow({
           {display.subtitle && <span className="block truncate text-base font-medium text-stone-500">{display.subtitle}</span>}
         </span>
         {timeRange && <span className="pl-2 text-right text-base font-medium text-stone-500">{timeRange}</span>}
+      </div>
+    </div>
+  );
+}
+
+function EventDetailCarousel({
+  currentEvent,
+  previousEvent,
+  nextEvent,
+  direction,
+  targetId,
+  onTransitionComplete,
+  renderPanel,
+}: {
+  currentEvent: ProductionEvent;
+  previousEvent: ProductionEvent | null;
+  nextEvent: ProductionEvent | null;
+  direction: -1 | 1 | null;
+  targetId: string | null;
+  onTransitionComplete: (targetId: string) => void;
+  renderPanel: (event: ProductionEvent) => ReactNode;
+}) {
+  const trackTransform =
+    direction === 1
+      ? "translate3d(-66.666666%, 0, 0)"
+      : direction === -1
+        ? "translate3d(0, 0, 0)"
+        : "translate3d(-33.333333%, 0, 0)";
+  const panels: Array<{ key: string; event: ProductionEvent | null; current: boolean }> = [
+    { key: `previous-${previousEvent?.id ?? "empty"}`, event: previousEvent, current: false },
+    { key: `current-${currentEvent.id}`, event: currentEvent, current: true },
+    { key: `next-${nextEvent?.id ?? "empty"}`, event: nextEvent, current: false },
+  ];
+
+  function handleTransitionEnd(transitionEvent: ReactTransitionEvent<HTMLDivElement>) {
+    if (transitionEvent.target !== transitionEvent.currentTarget || transitionEvent.propertyName !== "transform") return;
+    if (!targetId) return;
+    onTransitionComplete(targetId);
+  }
+
+  return (
+    <div className="min-h-0 min-w-0 flex-1 overflow-hidden">
+      <div
+        className="flex h-full min-h-0 will-change-transform"
+        style={{
+          width: "300%",
+          transform: trackTransform,
+          transition: direction ? `transform ${EVENT_DETAIL_CAROUSEL_TRANSITION_MS}ms ${EVENT_DETAIL_CAROUSEL_EASING}` : "none",
+        }}
+        onTransitionEnd={handleTransitionEnd}
+      >
+        {panels.map((panel) => (
+          <div
+            key={panel.key}
+            aria-hidden={!panel.current}
+            className={cn("flex min-h-0 w-1/3 min-w-0 shrink-0", !panel.current && "pointer-events-none")}
+          >
+            {panel.event ? renderPanel(panel.event) : <div className="min-h-0 flex-1" />}
+          </div>
+        ))}
       </div>
     </div>
   );
