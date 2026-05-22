@@ -2014,6 +2014,33 @@ function getDebugError(error: unknown) {
   };
 }
 
+type EventEditorDiagnostic = {
+  stage?: string | null;
+  routeCalled?: string | null;
+  responseStatus?: number | null;
+  responseJson?: unknown;
+  error?: unknown;
+  selectedCalendarId?: string | null;
+  selectedProvider?: string | null;
+};
+
+function createEventEditorDiagnosticError(error: unknown, diagnostic: EventEditorDiagnostic) {
+  const rawMessage =
+    error instanceof Error && error.message.trim()
+      ? error.message.trim()
+      : error && typeof error === "object" && "message" in error && typeof (error as { message?: unknown }).message === "string"
+        ? (error as { message: string }).message.trim()
+        : typeof error === "string" && error.trim()
+          ? error.trim()
+          : "Erreur inconnue.";
+  const wrappedError = new Error(rawMessage);
+  (wrappedError as Error & { eventEditorDiagnostic?: EventEditorDiagnostic }).eventEditorDiagnostic = {
+    ...diagnostic,
+    error: diagnostic.error ?? getDebugError(error),
+  };
+  return wrappedError;
+}
+
 async function extractPdfText(file: File) {
   const debugId = `quote-pdf-${Date.now()}`;
   console.info("[Quote PDF import] file received", {
@@ -4433,7 +4460,14 @@ export default function Home() {
     const payload = (await response.json().catch(() => null)) as { error?: string; externalEventId?: string; synced?: number } | null;
 
     if (!response.ok) {
-      throw new Error(payload?.error ?? "Synchronisation calendrier externe impossible.");
+      throw createEventEditorDiagnosticError(new Error(payload?.error ?? "Synchronisation calendrier externe impossible."), {
+        stage: `google_${action}_route`,
+        routeCalled: "/api/calendar/google/events",
+        responseStatus: response.status,
+        responseJson: payload,
+        selectedCalendarId: externalCalendarId ?? null,
+        selectedProvider: "google",
+      });
     }
 
     return payload;
@@ -4472,7 +4506,14 @@ export default function Home() {
         status: response.status,
         message: routeMessage,
       });
-      throw new Error(action === "move" ? "Déplacement Apple impossible." : routeMessage);
+      throw createEventEditorDiagnosticError(new Error(action === "move" ? "Déplacement Apple impossible." : routeMessage), {
+        stage: `apple_${action}_route`,
+        routeCalled: "/api/calendar/apple/events",
+        responseStatus: response.status,
+        responseJson: payload,
+        selectedCalendarId: externalCalendarId ?? null,
+        selectedProvider: "apple_caldav",
+      });
     }
 
     return payload;
@@ -5742,6 +5783,13 @@ export default function Home() {
 
     const normalizedInput = normalizeEventTimeInput(input);
     const eventId = createLocalId();
+    const selectedCreateCalendar = normalizedInput.syncExternalCalendarId
+      ? externalCalendars.find((calendar) => calendar.id === normalizedInput.syncExternalCalendarId) ?? null
+      : null;
+    const createDiagnosticBase = {
+      selectedCalendarId: normalizedInput.syncExternalCalendarId ?? null,
+      selectedProvider: selectedCreateCalendar?.providerType ?? null,
+    } satisfies EventEditorDiagnostic;
     const eventInsertPayload: Database["public"]["Tables"]["events"]["Insert"] = {
       id: eventId,
       client_name: normalizedInput.clientName,
@@ -5885,7 +5933,18 @@ export default function Home() {
         await queueOfflineEventCreate();
         return;
       }
-      throw eventError;
+      throw createEventEditorDiagnosticError(eventError, {
+        ...createDiagnosticBase,
+        stage: "supabase_event_insert",
+        routeCalled: "supabase.events.insert",
+        responseStatus: null,
+        responseJson: {
+          message: eventError.message,
+          code: eventError.code,
+          details: eventError.details,
+          hint: eventError.hint,
+        },
+      });
     }
 
     let insertedOptions: EventOptionRow[] = [];
@@ -5904,7 +5963,20 @@ export default function Home() {
         )
         .select();
 
-      if (optionError) throw optionError;
+      if (optionError) {
+        throw createEventEditorDiagnosticError(optionError, {
+          ...createDiagnosticBase,
+          stage: "supabase_option_insert",
+          routeCalled: "supabase.event_options.insert",
+          responseStatus: null,
+          responseJson: {
+            message: optionError.message,
+            code: optionError.code,
+            details: optionError.details,
+            hint: optionError.hint,
+          },
+        });
+      }
       insertedOptions = data ?? [];
     }
 
@@ -5919,7 +5991,20 @@ export default function Home() {
 
     if (defaultOptionItems.length > 0) {
       const { error: optionItemError } = await supabase.from("event_option_items").insert(defaultOptionItems);
-      if (optionItemError) throw optionItemError;
+      if (optionItemError) {
+        throw createEventEditorDiagnosticError(optionItemError, {
+          ...createDiagnosticBase,
+          stage: "supabase_option_item_insert",
+          routeCalled: "supabase.event_option_items.insert",
+          responseStatus: null,
+          responseJson: {
+            message: optionItemError.message,
+            code: optionItemError.code,
+            details: optionItemError.details,
+            hint: optionItemError.hint,
+          },
+        });
+      }
     }
 
     await logEventActivity({
@@ -5982,6 +6067,11 @@ export default function Home() {
           { persist: false },
         );
         setError(getUserFacingErrorMessage(googleSyncError, "L’événement MSTV a été enregistré, mais la synchronisation du calendrier externe a échoué."));
+        throw createEventEditorDiagnosticError(googleSyncError, {
+          ...createDiagnosticBase,
+          ...((googleSyncError as { eventEditorDiagnostic?: EventEditorDiagnostic } | null)?.eventEditorDiagnostic ?? {}),
+          stage: (googleSyncError as { eventEditorDiagnostic?: EventEditorDiagnostic } | null)?.eventEditorDiagnostic?.stage ?? "provider_event_create",
+        });
       }
     }
 
