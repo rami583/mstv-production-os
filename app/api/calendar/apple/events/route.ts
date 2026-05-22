@@ -16,6 +16,59 @@ type ProductionEventRow = Database["public"]["Tables"]["events"]["Row"];
 type ExternalCalendarRow = Database["public"]["Tables"]["external_calendars"]["Row"];
 type ExternalEventLinkRow = Database["public"]["Tables"]["external_event_links"]["Row"];
 type ExternalEventLinkInsert = Database["public"]["Tables"]["external_event_links"]["Insert"];
+type AppleMoveErrorDetails = {
+  stage: string;
+  message: string;
+  status?: number;
+  providerResponse?: string | null;
+  oldHrefPresent?: boolean;
+  newCalendarIdPresent?: boolean;
+  externalEventLinkIdPresent?: boolean;
+};
+
+class AppleProviderRequestError extends Error {
+  status: number;
+  providerResponse: string | null;
+
+  constructor(message: string, status: number, providerResponse: string | null) {
+    super(message);
+    this.name = "AppleProviderRequestError";
+    this.status = status;
+    this.providerResponse = providerResponse;
+  }
+}
+
+class AppleMoveRouteError extends Error {
+  details: AppleMoveErrorDetails;
+
+  constructor(details: AppleMoveErrorDetails) {
+    super(details.message);
+    this.name = "AppleMoveRouteError";
+    this.details = details;
+  }
+}
+
+function getProviderErrorDetails(error: unknown) {
+  if (error instanceof AppleProviderRequestError) {
+    return {
+      status: error.status,
+      providerResponse: error.providerResponse,
+    };
+  }
+
+  return {
+    status: undefined,
+    providerResponse: null,
+  };
+}
+
+function makeAppleMoveError(stage: string, message: string, context: Omit<AppleMoveErrorDetails, "stage" | "message"> = {}) {
+  return new AppleMoveRouteError({
+    stage,
+    message,
+    ...context,
+  });
+}
 
 export function OPTIONS() {
   return new Response(null, {
@@ -193,8 +246,16 @@ async function putAppleEvent(params: {
       host: new URL(params.href).host,
       body: responseText.slice(0, 180),
     });
-    throw new Error(response.status === 401 ? "Autorisation Apple expirée. Reconnectez Apple Calendar." : "Synchronisation Apple Calendar impossible.");
+    throw new AppleProviderRequestError(
+      response.status === 401 ? "Autorisation Apple expirée. Reconnectez Apple Calendar." : "Synchronisation Apple Calendar impossible.",
+      response.status,
+      responseText.slice(0, 180) || null,
+    );
   }
+  console.info("Apple CalDAV PUT succeeded", {
+    status: response.status,
+    host: new URL(params.href).host,
+  });
 
   return {
     etag: response.headers.get("etag"),
@@ -212,15 +273,24 @@ async function deleteAppleEvent(params: {
       Authorization: getBasicAuthHeader(params.credentials.appleId, params.credentials.appPassword),
     },
   });
+  const responseText = await response.text().catch(() => "");
   if (!response.ok && response.status !== 404 && response.status !== 410) {
-    const responseText = await response.text().catch(() => "");
     console.error("Apple CalDAV DELETE failed", {
       status: response.status,
       host: new URL(params.href).host,
       body: responseText.slice(0, 180),
     });
-    throw new Error(response.status === 401 ? "Autorisation Apple expirée. Reconnectez Apple Calendar." : "Suppression Apple Calendar impossible.");
+    throw new AppleProviderRequestError(
+      response.status === 401 ? "Autorisation Apple expirée. Reconnectez Apple Calendar." : "Suppression Apple Calendar impossible.",
+      response.status,
+      responseText.slice(0, 180) || null,
+    );
   }
+  console.info("Apple CalDAV DELETE completed", {
+    status: response.status,
+    host: new URL(params.href).host,
+  });
+  return { status: response.status };
 }
 
 async function deleteRemoteAppleEventQuietly(params: {
@@ -374,7 +444,11 @@ async function moveAppleLinkedEvent(
   userId: string,
 ) {
   if (!nextCalendar.provider_calendar_id) {
-    throw new Error("Calendrier Apple incomplet.");
+    throw makeAppleMoveError("validate_target_calendar", "Calendrier Apple cible incomplet.", {
+      status: 400,
+      newCalendarIdPresent: Boolean(nextCalendar.id),
+      externalEventLinkIdPresent: Boolean(link.id),
+    });
   }
 
   const previousCredentials = await getAppleCredentialsForCalendar(supabase, previousCalendar, userId);
@@ -383,7 +457,30 @@ async function moveAppleLinkedEvent(
   const previousHref = getAppleHref({ credentialsServerUrl: previousCredentials.serverUrl, calendar: previousCalendar, uid, link });
   const nextHref = getAppleHref({ credentialsServerUrl: nextCredentials.serverUrl, calendar: nextCalendar, uid });
   const icsText = getAppleEventPayload(event, uid);
-  const putResult = await putAppleEvent({ credentials: nextCredentials, href: nextHref, icsText });
+  console.info("Apple calendar move payload", {
+    eventId: event.id,
+    linkId: link.id,
+    previousCalendarId: previousCalendar.id,
+    targetCalendarId: nextCalendar.id,
+    uid,
+  });
+  console.info("Apple calendar move hrefs", {
+    oldHref: previousHref,
+    newHref: nextHref,
+  });
+  let putResult: Awaited<ReturnType<typeof putAppleEvent>>;
+  try {
+    putResult = await putAppleEvent({ credentials: nextCredentials, href: nextHref, icsText });
+  } catch (error) {
+    const provider = getProviderErrorDetails(error);
+    throw makeAppleMoveError("caldav_create", error instanceof Error ? error.message : "Création Apple Calendar impossible.", {
+      status: provider.status,
+      providerResponse: provider.providerResponse,
+      oldHrefPresent: Boolean(previousHref),
+      newCalendarIdPresent: Boolean(nextCalendar.id),
+      externalEventLinkIdPresent: Boolean(link.id),
+    });
+  }
   const now = new Date().toISOString();
 
   const { error: linkUpdateError } = await supabase
@@ -407,7 +504,12 @@ async function moveAppleLinkedEvent(
 
   if (linkUpdateError) {
     await deleteRemoteAppleEventQuietly({ credentials: nextCredentials, href: nextHref });
-    throw linkUpdateError;
+    throw makeAppleMoveError("external_event_link_update", linkUpdateError.message || "MSTV n’a pas pu enregistrer le nouveau calendrier.", {
+      status: 500,
+      oldHrefPresent: Boolean(previousHref),
+      newCalendarIdPresent: Boolean(nextCalendar.id),
+      externalEventLinkIdPresent: Boolean(link.id),
+    });
   }
 
   try {
@@ -465,17 +567,47 @@ export async function POST(request: Request) {
     if (action === "move") {
       const externalCalendarId = body.externalCalendarId?.trim();
       if (!externalCalendarId) {
-        return appleJsonResponse({ error: "Calendrier Apple manquant." }, { status: 400 });
+        const details = makeAppleMoveError("validate_request", "Calendrier Apple cible manquant.", {
+          status: 400,
+          newCalendarIdPresent: false,
+          externalEventLinkIdPresent: false,
+        }).details;
+        return appleJsonResponse({ success: false, ...details, error: details.message }, { status: 400 });
       }
+      console.info("Apple move route requested", {
+        eventId,
+        targetExternalCalendarId: externalCalendarId,
+      });
       const nextCalendar = await getOwnedAppleCalendar(supabase, externalCalendarId, authResult.user.id);
       const links = await getAppleLinks(supabase, eventId, authResult.user.id);
+      console.info("Apple move route link lookup", {
+        eventId,
+        targetExternalCalendarId: externalCalendarId,
+        foundAppleLinkIds: links.map(({ link }) => link.id),
+      });
       if (links.length === 0) {
-        return appleJsonResponse({ error: "Aucun lien Apple Calendar trouvé pour cet événement." }, { status: 409 });
+        const details = makeAppleMoveError("find_existing_link", "Aucun lien Apple Calendar trouvé pour cet événement.", {
+          status: 409,
+          newCalendarIdPresent: Boolean(externalCalendarId),
+          externalEventLinkIdPresent: false,
+        }).details;
+        return appleJsonResponse({ success: false, ...details, error: details.message }, { status: 409 });
       }
       const movableLink = links.find(({ calendar }) => calendar.id !== nextCalendar.id) ?? links[0];
       if (!movableLink || movableLink.calendar.id === nextCalendar.id) {
-        return appleJsonResponse({ ok: true, synced: 0 });
+        const details = makeAppleMoveError("compare_calendars", "L’événement est déjà dans ce calendrier Apple.", {
+          status: 409,
+          newCalendarIdPresent: Boolean(externalCalendarId),
+          externalEventLinkIdPresent: Boolean(movableLink?.link.id),
+        }).details;
+        return appleJsonResponse({ success: false, ...details, error: details.message }, { status: 409 });
       }
+      console.info("Apple move route selected link", {
+        eventId,
+        targetExternalCalendarId: externalCalendarId,
+        linkId: movableLink.link.id,
+        previousExternalCalendarId: movableLink.calendar.id,
+      });
       const moveResult = await moveAppleLinkedEvent(supabase, event, movableLink.link, movableLink.calendar, nextCalendar, authResult.user.id);
       return appleJsonResponse({ ok: true, externalEventId: moveResult.id, synced: 1, warning: moveResult.warning });
     }
@@ -502,6 +634,10 @@ export async function POST(request: Request) {
     return appleJsonResponse({ error: "Action Apple Calendar inconnue." }, { status: 400 });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Synchronisation Apple Calendar impossible.";
+    if (error instanceof AppleMoveRouteError) {
+      console.error("Apple move failed", error.details);
+      return appleJsonResponse({ success: false, ...error.details, error: error.details.message }, { status: error.details.status && error.details.status >= 400 ? error.details.status : 500 });
+    }
     console.error("Apple event sync failed", { message });
     return appleJsonResponse({ error: message }, { status: 500 });
   }

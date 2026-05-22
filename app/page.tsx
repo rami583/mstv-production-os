@@ -4876,7 +4876,15 @@ export default function Home() {
       },
       body: JSON.stringify({ action, eventId, externalCalendarId }),
     });
-    const payload = (await response.json().catch(() => null)) as { error?: string; externalEventId?: string; synced?: number; warning?: string } | null;
+    const payload = (await response.json().catch(() => null)) as {
+      error?: string;
+      message?: string;
+      stage?: string;
+      status?: number;
+      externalEventId?: string;
+      synced?: number;
+      warning?: string;
+    } | null;
     console.info("Apple event sync client response", {
       action,
       eventId,
@@ -4886,7 +4894,15 @@ export default function Home() {
       payload,
     });
     if (!response.ok) {
-      throw new Error(payload?.error ?? "Synchronisation Apple Calendar impossible.");
+      const routeMessage = payload?.message ?? payload?.error ?? "Synchronisation Apple Calendar impossible.";
+      console.error("Apple event sync route failed", {
+        action,
+        eventId,
+        externalCalendarId: externalCalendarId ?? null,
+        status: response.status,
+        payload,
+      });
+      throw new Error(action === "move" ? `Déplacement Apple impossible : ${routeMessage}` : routeMessage);
     }
 
     return payload;
