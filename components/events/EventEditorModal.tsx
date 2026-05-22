@@ -168,6 +168,15 @@ export function EventEditorModal({
     syncCalendars,
     currentExternalCalendarId,
   });
+
+  useEffect(() => {
+    if (isEditing || form.syncExternalCalendarId || selectableSyncCalendars.length === 0) return;
+    setForm((current) => ({
+      ...current,
+      syncExternalCalendarId: current.syncExternalCalendarId ?? selectableSyncCalendars[0]?.id ?? null,
+    }));
+  }, [form.syncExternalCalendarId, isEditing, selectableSyncCalendars]);
+
   async function handleSubmit(formEvent: FormEvent<HTMLFormElement>) {
     formEvent.preventDefault();
     setSubmitting(true);
@@ -271,11 +280,11 @@ export function EventEditorModal({
             </>
           )}
 
-          {(!isEditing || selectableSyncCalendars.length > 0 || currentExternalCalendarId) && (
+          {((!isEditing && selectableSyncCalendars.length > 0) || Boolean(currentExternalCalendarId)) && (
             <Field label="Calendrier">
               <div className="space-y-1.5">
                 <select
-                  value={form.syncExternalCalendarId ?? ""}
+                  value={form.syncExternalCalendarId ?? selectableSyncCalendars[0]?.id ?? ""}
                   onChange={(selectEvent) => {
                     const nextValue = selectEvent.target.value || null;
                     setForm((current) => ({
@@ -286,7 +295,6 @@ export function EventEditorModal({
                   disabled={!isEditing && selectableSyncCalendars.length === 0}
                   className={cn(formInputClassName, selectableSyncCalendars.length === 0 && "bg-stone-50 text-stone-400")}
                 >
-                  <option value="">Aucun calendrier externe</option>
                   {selectableSyncCalendars.map((calendar) => (
                     <option key={calendar.id} value={calendar.id}>
                       {calendar.name}
@@ -294,7 +302,7 @@ export function EventEditorModal({
                   ))}
                 </select>
                 {!isEditing && selectableSyncCalendars.length === 0 ? (
-                  <p className="text-sm font-semibold text-stone-400">Aucun calendrier externe bidirectionnel disponible.</p>
+                  <p className="text-sm font-semibold text-stone-400">Aucun calendrier disponible.</p>
                 ) : null}
               </div>
             </Field>

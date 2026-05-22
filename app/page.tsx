@@ -2835,7 +2835,7 @@ function mapExternalEventLink(row: ExternalEventLinkQueryRow): ExternalEventLink
     conflictDetectedAt: row.conflict_detected_at,
     conflictReason: row.conflict_reason,
     lastSyncError: row.last_sync_error,
-    calendarName: calendar?.name ?? "Calendrier externe",
+    calendarName: calendar?.name ?? "Calendrier",
     calendarColor: calendar?.color ?? null,
     calendarProviderAccountId: calendar?.provider_account_id ?? null,
     calendarProviderType: normalizeExternalCalendarProviderType(calendar?.provider_type ?? row.provider_type),
@@ -2909,7 +2909,7 @@ function mapExternalCalendarEvent(row: ExternalCalendarEventQueryRow): ExternalC
     allDay: Boolean(row.all_day),
     rawEvent: row.raw_event,
     lastSyncedAt: row.last_synced_at,
-    calendarName: row.external_calendars?.name ?? "Calendrier externe",
+    calendarName: row.external_calendars?.name ?? "Calendrier",
     calendarColor: row.external_calendars?.color ?? null,
     calendarVisibility: normalizeExternalCalendarVisibility(row.external_calendars?.visibility),
     calendarSyncEnabled: Boolean(row.external_calendars?.sync_enabled ?? false),
@@ -4118,7 +4118,7 @@ export default function Home() {
       setExternalCalendarEvents(nextEvents);
     } catch (calendarError) {
       console.error("Failed to load external calendars. Apply supabase/migrations/023_external_calendars.sql if needed.", calendarError);
-      setExternalCalendarSettingsError("Impossible de charger les calendriers externes.");
+      setExternalCalendarSettingsError("Impossible de charger les calendriers.");
     } finally {
       setExternalCalendarSettingsLoading(false);
     }
@@ -4460,7 +4460,7 @@ export default function Home() {
     const payload = (await response.json().catch(() => null)) as { error?: string; externalEventId?: string; synced?: number } | null;
 
     if (!response.ok) {
-      throw createEventEditorDiagnosticError(new Error(payload?.error ?? "Synchronisation calendrier externe impossible."), {
+      throw createEventEditorDiagnosticError(new Error(payload?.error ?? "Synchronisation calendrier impossible."), {
         stage: `google_${action}_route`,
         routeCalled: "/api/calendar/google/events",
         responseStatus: response.status,
@@ -4522,7 +4522,7 @@ export default function Home() {
   async function syncProviderEventAction(action: "create" | "update" | "delete", eventId: string, externalCalendarId?: string | null) {
     const selectedCalendar = externalCalendarId ? externalCalendars.find((calendar) => calendar.id === externalCalendarId) ?? null : null;
     if (externalCalendarId && !selectedCalendar) {
-      throw new Error("Calendrier externe introuvable.");
+      throw new Error("Calendrier introuvable.");
     }
 
     if (selectedCalendar?.providerType === "apple_caldav") {
@@ -4542,26 +4542,6 @@ export default function Home() {
       synced: results.reduce((count, result) => count + (result?.synced ?? (result?.externalEventId ? 1 : 0)), 0),
       externalEventId: results.find((result) => result?.externalEventId)?.externalEventId,
     };
-  }
-
-  async function markExternalEventLinksDeletedLocally(eventId: string) {
-    if (!supabase) return;
-
-    const { error } = await supabase
-      .from("external_event_links")
-      .update({
-        deleted_locally_at: new Date().toISOString(),
-        sync_status: "synced",
-        last_sync_error: null,
-        updated_at: new Date().toISOString(),
-      })
-      .eq("event_id", eventId)
-      .in("provider_type", ["google", "apple_caldav"])
-      .is("deleted_locally_at", null);
-
-    if (error) {
-      console.error("Failed to unlink external calendar event after local trash move", getDebugError(error));
-    }
   }
 
   async function createExternalCalendar(input: { name: string; icsUrl: string; color: string; visibility: ExternalCalendarVisibility }) {
@@ -4603,7 +4583,7 @@ export default function Home() {
     if ((calendar.providerType === "google" || calendar.providerType === "apple_caldav") && calendar.providerAccountId && calendar.providerCalendarId) {
       const accessToken = await getServerApiAccessToken(authSession?.access_token);
       const apiPath = calendar.providerType === "google" ? "/api/calendar/google/calendars" : "/api/calendar/apple/calendars";
-      const response = await fetch(getAppApiUrl(apiPath, "Calendrier externe momentanément indisponible."), {
+      const response = await fetch(getAppApiUrl(apiPath, "Calendrier momentanément indisponible."), {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -5010,7 +4990,7 @@ export default function Home() {
     if ((calendar.providerType === "google" || calendar.providerType === "apple_caldav") && calendar.providerAccountId && calendar.providerCalendarId) {
       const accessToken = await getServerApiAccessToken(authSession?.access_token);
       const apiPath = calendar.providerType === "google" ? "/api/calendar/google/calendars" : "/api/calendar/apple/calendars";
-      const response = await fetch(getAppApiUrl(apiPath, "Calendrier externe momentanément indisponible."), {
+      const response = await fetch(getAppApiUrl(apiPath, "Calendrier momentanément indisponible."), {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -6049,7 +6029,7 @@ export default function Home() {
         await createNotification(
           {
             type: "google_calendar_sync_success",
-            title: "Événement synchronisé avec le calendrier externe.",
+            title: "Événement synchronisé avec le calendrier.",
             body: `${normalizedInput.clientName} - ${normalizedInput.eventName}`,
             relatedEventId: event.id,
           },
@@ -6061,12 +6041,12 @@ export default function Home() {
           {
             type: "google_calendar_sync_failed",
             title: "Synchronisation calendrier échouée",
-            body: "L’événement MSTV a été enregistré, mais la synchronisation du calendrier externe a échoué.",
+            body: "L’événement MSTV a été enregistré, mais la synchronisation du calendrier lié a échoué.",
             relatedEventId: event.id,
           },
           { persist: false },
         );
-        setError(getUserFacingErrorMessage(googleSyncError, "L’événement MSTV a été enregistré, mais la synchronisation du calendrier externe a échoué."));
+        setError(getUserFacingErrorMessage(googleSyncError, "L’événement MSTV a été enregistré, mais la synchronisation du calendrier lié a échoué."));
         throw createEventEditorDiagnosticError(googleSyncError, {
           ...createDiagnosticBase,
           ...((googleSyncError as { eventEditorDiagnostic?: EventEditorDiagnostic } | null)?.eventEditorDiagnostic ?? {}),
@@ -6360,7 +6340,7 @@ export default function Home() {
         if (calendarSelectionChanged && requestedExternalCalendarId) {
           const requestedCalendar = externalCalendars.find((calendar) => calendar.id === requestedExternalCalendarId) ?? null;
           if (!requestedCalendar) {
-            throw new Error("Calendrier externe introuvable.");
+            throw new Error("Calendrier introuvable.");
           }
           if (currentExternalLink?.providerType === "apple_caldav" && requestedCalendar.providerType === "apple_caldav") {
             syncPayload = await syncAppleEventAction("move", updatedEvent.id, requestedExternalCalendarId);
@@ -6381,7 +6361,7 @@ export default function Home() {
           await createNotification(
             {
               type: "google_calendar_sync_success",
-              title: "Événement synchronisé avec le calendrier externe.",
+              title: "Événement synchronisé avec le calendrier.",
               body: `${updatedEvent.clientName} - ${updatedEvent.eventName}`,
               relatedEventId: updatedEvent.id,
             },
@@ -6398,12 +6378,12 @@ export default function Home() {
           {
             type: "google_calendar_sync_failed",
             title: "Synchronisation calendrier échouée",
-            body: "L’événement MSTV a été enregistré, mais la synchronisation du calendrier externe a échoué.",
+            body: "L’événement MSTV a été enregistré, mais la synchronisation du calendrier lié a échoué.",
             relatedEventId: updatedEvent.id,
           },
           { persist: false },
         );
-        setError(getUserFacingErrorMessage(googleSyncError, "L’événement MSTV a été enregistré, mais la synchronisation du calendrier externe a échoué."));
+        setError(getUserFacingErrorMessage(googleSyncError, "L’événement MSTV a été enregistré, mais la synchronisation du calendrier lié a échoué."));
         await reloadData(updatedEvent.id, { silent: true });
         throw googleSyncError;
       }
@@ -6859,7 +6839,7 @@ export default function Home() {
             await createNotification(
               {
                 type: "google_calendar_sync_success",
-                title: "Événement synchronisé avec le calendrier externe.",
+                title: "Événement synchronisé avec le calendrier.",
                 body: eventDisplayLine,
                 relatedEventId: event.id,
               },
@@ -6872,12 +6852,12 @@ export default function Home() {
             {
               type: "google_calendar_sync_failed",
               title: "Synchronisation calendrier échouée",
-              body: "L’événement MSTV a été enregistré, mais la synchronisation du calendrier externe a échoué.",
+              body: "L’événement MSTV a été enregistré, mais la synchronisation du calendrier lié a échoué.",
               relatedEventId: event.id,
             },
             { persist: false },
           );
-          setError(getUserFacingErrorMessage(googleSyncError, "L’événement MSTV a été enregistré, mais la synchronisation du calendrier externe a échoué."));
+          setError(getUserFacingErrorMessage(googleSyncError, "L’événement MSTV a été enregistré, mais la synchronisation du calendrier lié a échoué."));
         } finally {
           await reloadData(event.id, { silent: true });
         }
@@ -7021,7 +7001,7 @@ export default function Home() {
             await createNotification(
               {
                 type: "google_calendar_sync_success",
-                title: "Événement synchronisé avec le calendrier externe.",
+                title: "Événement synchronisé avec le calendrier.",
                 body: eventDisplayLine,
                 relatedEventId: event.id,
               },
@@ -7034,12 +7014,12 @@ export default function Home() {
             {
               type: "google_calendar_sync_failed",
               title: "Synchronisation calendrier échouée",
-              body: "L’événement MSTV a été enregistré, mais la synchronisation du calendrier externe a échoué.",
+              body: "L’événement MSTV a été enregistré, mais la synchronisation du calendrier lié a échoué.",
               relatedEventId: event.id,
             },
             { persist: false },
           );
-          setError(getUserFacingErrorMessage(googleSyncError, "L’événement MSTV a été enregistré, mais la synchronisation du calendrier externe a échoué."));
+          setError(getUserFacingErrorMessage(googleSyncError, "L’événement MSTV a été enregistré, mais la synchronisation du calendrier lié a échoué."));
         } finally {
           await reloadData(event.id, { silent: true });
         }
@@ -8618,7 +8598,7 @@ export default function Home() {
     downloadLink.remove();
   }
 
-  async function deleteCurrentEvent(eventToDelete: ProductionEvent, deleteExternalEvent = true) {
+  async function deleteCurrentEvent(eventToDelete: ProductionEvent) {
     assertCanSoftDeleteEvents();
 
     if (!eventToDelete) {
@@ -8732,38 +8712,34 @@ export default function Home() {
       eventId,
       linkedExternalEventFound: externalLinksToDelete.length > 0,
       linkCount: externalLinksToDelete.length,
-      deleteExternalEvent,
+      deleteLinkedProviderEvents: true,
     });
     if (externalLinksToDelete.length > 0) {
-      if (deleteExternalEvent) {
-        try {
-          const syncPayload = await syncProviderEventAction("delete", eventId);
-          if ((syncPayload?.synced ?? 0) > 0) {
-            await createNotification(
-              {
-                type: "google_calendar_sync_success",
-                title: "Événement synchronisé avec le calendrier externe.",
-                body: eventDisplayLine,
-                relatedEventId: eventId,
-              },
-              { persist: false },
-            );
-          }
-        } catch (googleSyncError) {
-          console.error("External calendar event delete failed", getDebugError(googleSyncError));
+      try {
+        const syncPayload = await syncProviderEventAction("delete", eventId);
+        if ((syncPayload?.synced ?? 0) > 0) {
           await createNotification(
             {
-              type: "google_calendar_sync_failed",
-              title: "Synchronisation calendrier échouée",
-              body: "L’événement MSTV a été enregistré, mais la synchronisation du calendrier externe a échoué.",
+              type: "google_calendar_sync_success",
+              title: "Événement supprimé du calendrier lié.",
+              body: eventDisplayLine,
               relatedEventId: eventId,
             },
             { persist: false },
           );
-          setError(getUserFacingErrorMessage(googleSyncError, "L’événement MSTV a été placé dans la corbeille, mais la suppression du calendrier externe a échoué."));
         }
-      } else {
-        await markExternalEventLinksDeletedLocally(eventId);
+      } catch (googleSyncError) {
+        console.error("Linked calendar event delete failed", getDebugError(googleSyncError));
+        await createNotification(
+          {
+            type: "google_calendar_sync_failed",
+            title: "Suppression calendrier échouée",
+            body: "L’événement MSTV a été placé dans la corbeille, mais la suppression du calendrier lié a échoué.",
+            relatedEventId: eventId,
+          },
+          { persist: false },
+        );
+        setError(getUserFacingErrorMessage(googleSyncError, "L’événement MSTV a été placé dans la corbeille, mais la suppression du calendrier lié a échoué."));
       }
     }
 
@@ -11242,10 +11218,9 @@ function ExternalInvitationDetailsCard({ event }: { event: ProductionEvent }) {
         </a>
       )}
 
-      {(descriptionView.usefulLines.length > 0 || details.description) && (
-        <div className="min-w-0 rounded-2xl border border-stone-200 bg-white px-4 py-3">
-          <p className="text-xs font-semibold uppercase text-stone-400">Description</p>
-          {descriptionView.usefulLines.length > 0 ? (
+      {(descriptionView.usefulLines.length > 0 || details.meetingUrls.length > 0) && (
+        <div className="min-w-0 px-1 py-1">
+          {descriptionView.usefulLines.length > 0 && (
             <div className="mobile-no-scrollbar mt-1 grid max-h-56 gap-2 overflow-y-auto overscroll-contain">
               {descriptionView.usefulLines.map((line, index) => (
                 <p key={`${line}-${index}`} className="whitespace-pre-wrap text-base font-medium text-stone-700" style={wrapStyle}>
@@ -11253,8 +11228,6 @@ function ExternalInvitationDetailsCard({ event }: { event: ProductionEvent }) {
                 </p>
               ))}
             </div>
-          ) : (
-            <p className="mobile-no-scrollbar mt-1 max-h-64 overflow-y-auto overscroll-contain whitespace-pre-wrap text-base font-medium text-stone-700" style={wrapStyle}>{details.description}</p>
           )}
           {details.meetingUrls.length > 0 && (
             <div className="mobile-no-scrollbar mt-3 grid max-h-36 min-w-0 gap-1 overflow-y-auto overscroll-contain">
@@ -14246,7 +14219,7 @@ function ExternalCalendarsSheet({
             )}
             <div className="min-w-0">
               <h2 className="text-base font-semibold text-stone-950">
-                {view === "add" ? "Ajouter un calendrier" : view === "detail" ? selectedCalendar?.name ?? "Calendrier" : "Calendriers externes"}
+                {view === "add" ? "Ajouter un calendrier" : view === "detail" ? selectedCalendar?.name ?? "Calendrier" : "Calendriers"}
               </h2>
             </div>
           </div>
@@ -14789,7 +14762,7 @@ function ExternalCalendarsListView({
           </div>
 
           {!googleConnected && !appleConnected && !error && (
-            <div className="rounded-2xl bg-stone-50 px-4 py-3 text-base font-medium text-stone-500">Aucun calendrier externe pour le moment.</div>
+            <div className="rounded-2xl bg-stone-50 px-4 py-3 text-base font-medium text-stone-500">Aucun calendrier pour le moment.</div>
           )}
         </div>
       </div>
@@ -14830,7 +14803,7 @@ function ProviderDisconnectDialog({
       >
         <h3 className="text-lg font-semibold text-stone-950">Déconnecter {providerName} ?</h3>
         <p className="mt-2 text-base font-medium leading-relaxed text-stone-500">
-          Les calendriers externes de ce compte disparaîtront de MSTV. Les événements natifs MSTV ne seront pas supprimés.
+          Les calendriers de ce compte disparaîtront de MSTV. Les événements MSTV locaux ne seront pas supprimés.
         </p>
         <div className="mt-5 flex justify-end gap-2">
           <button
@@ -15123,7 +15096,7 @@ function getExternalEventDescriptionView(description?: string | null) {
     .filter(Boolean);
   const urlMatches = Array.from(new Set(normalized.match(/https?:\/\/[^\s<>"')]+/g) ?? []));
   const technicalLinePattern =
-    /^([-_=]{5,}|Microsoft Teams$|Need help\?|Learn More|Meeting options|Legal|Privacy and security|For organizers:|Join with a video conferencing device|Video ID:)/i;
+    /^([-_=]{5,}|Microsoft Teams$|Need help\?|Learn More|Meeting options|Legal|Privacy and security|For organizers:|Join with a video conferencing device|Video ID:|Rappel:?$|Reminder:?$|VALARM|Alarme:?$)/i;
   const usefulLinePattern =
     /(rejoindre|join|teams|réunion|meeting|passcode|code secret|mot de passe|conference|conférence|numéro|number|ID de réunion|meeting id|https?:\/\/)/i;
   const readableLines = lines.filter((line) => !technicalLinePattern.test(line));
@@ -15313,11 +15286,8 @@ function DeleteEventDialog({
 }: {
   event: ProductionEvent;
   onClose: () => void;
-  onConfirm: (event: ProductionEvent, deleteExternalEvent: boolean) => Promise<void>;
+  onConfirm: (event: ProductionEvent) => Promise<void>;
 }) {
-  const externalLinks = getEventWritableExternalLinks(event);
-  const hasExternalLinks = externalLinks.length > 0;
-  const [deleteExternalEvent, setDeleteExternalEvent] = useState(hasExternalLinks);
   const [deleting, setDeleting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const display = getProductionEventDisplay(event);
@@ -15332,7 +15302,7 @@ function DeleteEventDialog({
     setError(null);
 
     try {
-      await onConfirm(event, hasExternalLinks ? deleteExternalEvent : false);
+      await onConfirm(event);
     } catch (deleteError) {
       setError(getUserFacingErrorMessage(deleteError, "Impossible de supprimer l'événement."));
       setDeleting(false);
@@ -15349,24 +15319,6 @@ function DeleteEventDialog({
           <p className="mt-4 truncate text-base font-semibold text-stone-950">{display.title}</p>
           {display.subtitle && <p className="mt-1 truncate text-base text-stone-500">{display.subtitle}</p>}
         </div>
-
-        {hasExternalLinks && (
-          <label className="mb-4 flex items-start gap-3 rounded-2xl border border-stone-200 bg-stone-50 px-4 py-3">
-            <input
-              type="checkbox"
-              checked={deleteExternalEvent}
-              onChange={(checkboxEvent) => setDeleteExternalEvent(checkboxEvent.target.checked)}
-              disabled={deleting}
-              className="mt-1 h-4 w-4 rounded border-stone-300 text-[#bb2720] focus:ring-[#bb2720]"
-            />
-            <span className="min-w-0">
-              <span className="block text-base font-semibold text-stone-800">Supprimer aussi cet événement des calendriers externes ?</span>
-              <span className="mt-1 block text-sm font-medium text-stone-500">
-                {externalLinks.map((link) => link.calendarName).join(", ")}
-              </span>
-            </span>
-          </label>
-        )}
 
         {error && <div className="mb-4 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-base font-medium text-rose-700">{error}</div>}
 
@@ -16223,7 +16175,7 @@ function AccountMenu({
               }}
               className="block w-full rounded-xl px-3 py-2 text-right text-sm font-medium text-stone-700 transition hover:bg-[#bb2720]/[0.05] hover:text-stone-950"
             >
-              Calendriers externes
+              Calendriers
             </button>
           )}
           <button
