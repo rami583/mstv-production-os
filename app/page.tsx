@@ -14031,13 +14031,7 @@ function CreateEventModal({
           </button>
         </div>
 
-        <div className="grid gap-3 sm:grid-cols-2">
-          <Field label="Événement">
-            <input required value={form.clientName} onChange={(event) => updateField("clientName", event.target.value)} className={formInputClassName} />
-          </Field>
-          <Field label="Titre">
-            <input required value={form.eventName} onChange={(event) => updateField("eventName", event.target.value)} className={formInputClassName} />
-          </Field>
+        <div className="space-y-3">
           <Field label="Date">
             <button
               type="button"
@@ -14047,22 +14041,36 @@ function CreateEventModal({
               {formatFullDate(form.date)}
             </button>
           </Field>
-          {showProductionTimeFields && (
-            <Field label="Arrivée client">
-              <TimeTextInput value={form.clientArrivalTime} onChange={(value) => updateField("clientArrivalTime", value)} className={formInputClassName} />
+
+          <div className="grid gap-3 sm:grid-cols-2">
+            <Field label="Événement">
+              <input required value={form.clientName} onChange={(event) => updateField("clientName", event.target.value)} className={formInputClassName} />
             </Field>
-          )}
-          <Field label="Début">
-            <TimeTextInput value={form.startTime} onChange={(value) => updateField("startTime", value)} className={formInputClassName} />
-          </Field>
-          <Field label="Fin">
-            <TimeTextInput value={form.endTime} onChange={(value) => updateField("endTime", value)} className={formInputClassName} />
-          </Field>
-          {showProductionTimeFields && (
-            <Field label="Fin journée">
-              <TimeTextInput value={form.endOfDayTime} onChange={(value) => updateField("endOfDayTime", value)} className={formInputClassName} />
+            <Field label="Titre">
+              <input required value={form.eventName} onChange={(event) => updateField("eventName", event.target.value)} className={formInputClassName} />
             </Field>
+          </div>
+
+          <div className="grid gap-3 sm:grid-cols-2">
+            <Field label="Début">
+              <TimeTextInput value={form.startTime} onChange={(value) => updateField("startTime", value)} className={formInputClassName} />
+            </Field>
+            <Field label="Fin">
+              <TimeTextInput value={form.endTime} onChange={(value) => updateField("endTime", value)} className={formInputClassName} />
+            </Field>
+          </div>
+
+          {showProductionTimeFields && (
+            <div className="grid gap-3 sm:grid-cols-2">
+              <Field label="Arrivée client">
+                <TimeTextInput value={form.clientArrivalTime} onChange={(value) => updateField("clientArrivalTime", value)} className={formInputClassName} />
+              </Field>
+              <Field label="Fin journée">
+                <TimeTextInput value={form.endOfDayTime} onChange={(value) => updateField("endOfDayTime", value)} className={formInputClassName} />
+              </Field>
+            </div>
           )}
+
           {!isEditing && (
             <Field label="Calendrier">
               <div className="space-y-1.5">
