@@ -4879,35 +4879,10 @@ export default function Home() {
     const payload = (await response.json().catch(() => null)) as {
       error?: string;
       message?: string;
-      stage?: string;
-      status?: number;
-      statusText?: string | null;
-      details?: string | null;
-      providerResponse?: string | null;
-      oldHrefExists?: boolean;
-      targetCalendarId?: string | null;
-      oldExternalCalendarId?: string | null;
-      linkId?: string | null;
-      newPutStatus?: number | null;
-      oldDeleteStatus?: number | null;
-      targetCalendarUrl?: string | null;
-      generatedEventHref?: string | null;
-      generatedUid?: string | null;
-      contentType?: string | null;
-      targetCalendarUrlEndsWithSlash?: boolean | null;
-      finalPutUrl?: string | null;
       externalEventId?: string;
       synced?: number;
       warning?: string;
     } | null;
-    console.info("Apple event sync client response", {
-      action,
-      eventId,
-      externalCalendarId: externalCalendarId ?? null,
-      ok: response.ok,
-      status: response.status,
-      payload,
-    });
     if (!response.ok) {
       const routeMessage = payload?.message ?? payload?.error ?? "Synchronisation Apple Calendar impossible.";
       console.error("Apple event sync route failed", {
@@ -4915,10 +4890,9 @@ export default function Home() {
         eventId,
         externalCalendarId: externalCalendarId ?? null,
         status: response.status,
-        payload,
+        message: routeMessage,
       });
-      const movePrefix = payload?.stage ? `${payload.stage} — ${routeMessage}` : routeMessage;
-      throw new Error(action === "move" ? `Déplacement Apple impossible : ${movePrefix}` : routeMessage);
+      throw new Error(action === "move" ? "Déplacement Apple impossible." : routeMessage);
     }
 
     return payload;
@@ -6774,12 +6748,6 @@ export default function Home() {
             throw new Error("Calendrier externe introuvable.");
           }
           if (currentExternalLink?.providerType === "apple_caldav" && requestedCalendar.providerType === "apple_caldav") {
-            console.info("Apple calendar move requested for existing MSTV event", {
-              eventId: updatedEvent.id,
-              previousExternalCalendarId: currentExternalCalendarId,
-              selectedSyncExternalCalendarId: requestedExternalCalendarId,
-              routeCalled: "/api/calendar/apple/events",
-            });
             syncPayload = await syncAppleEventAction("move", updatedEvent.id, requestedExternalCalendarId);
             if (!syncPayload?.externalEventId && (syncPayload?.synced ?? 0) === 0) {
               throw new Error("Le changement de calendrier Apple n’a pas été appliqué.");
