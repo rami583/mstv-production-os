@@ -11456,7 +11456,6 @@ function ExternalContextEventPanel({
 
   return (
     <section
-      data-event-detail-layout="layout-v2"
       className="flex min-h-0 w-full min-w-0 touch-pan-y flex-1 flex-col gap-5 overflow-hidden"
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
@@ -11469,9 +11468,6 @@ function ExternalContextEventPanel({
           <div className="min-w-0 flex-1">
             <div className="mb-3 flex flex-wrap items-center gap-2">
               <EventCalendarBadge event={event} />
-              {permissions.canManageEvents && (
-                <span className="rounded-full bg-stone-100 px-2 py-0.5 text-xs font-semibold text-stone-400">layout-v2</span>
-              )}
             </div>
             <h1 className="text-3xl font-semibold leading-tight text-stone-950 sm:text-5xl" style={wrapStyle}>{display.title}</h1>
             {display.subtitle && <p className="mt-2 text-base font-medium text-stone-500" style={wrapStyle}>{display.subtitle}</p>}
@@ -11951,7 +11947,6 @@ function ProductionDetail({
   return (
     <>
       <section
-        data-event-detail-layout="layout-v2"
         className="flex min-h-0 w-full touch-pan-y flex-1 flex-col gap-5 overflow-hidden"
         onPointerDown={handleEventSwipePointerDown}
         onPointerMove={handleEventSwipePointerMove}
@@ -11971,9 +11966,6 @@ function ProductionDetail({
           <div className="min-w-0 flex-1">
             <div className="mb-3 flex flex-wrap items-center gap-2">
               <EventCalendarBadge event={event} />
-              {permissions.canManageEvents && (
-                <span className="rounded-full bg-stone-100 px-2 py-0.5 text-xs font-semibold text-stone-400">layout-v2</span>
-              )}
             </div>
             <h1 className="truncate text-4xl font-semibold leading-tight text-stone-950 sm:text-6xl">{eventDisplay.title}</h1>
             {eventDisplay.subtitle && <p className="mt-2 truncate text-base font-medium text-stone-500">{eventDisplay.subtitle}</p>}
