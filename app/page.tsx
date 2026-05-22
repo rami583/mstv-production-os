@@ -19,7 +19,6 @@ import {
   FileStack,
   FileText,
   FileSpreadsheet,
-  History,
   Import,
   KeyRound,
   Link,
@@ -6023,11 +6022,6 @@ export default function Home() {
     }
   }
 
-  function openHistory() {
-    if (!selectedEvent) return;
-    setHistoryOpen(true);
-  }
-
   async function restoreActivityEntry(entry: EventActivityLog) {
     assertCanManageEvents();
     const eventToRestore = chronologicalEvents.find((item) => item.id === entry.eventId);
@@ -9449,8 +9443,6 @@ export default function Home() {
           }}
           onImportNativeMstvCalendar={openNativeMstvIcsImport}
           onSearch={() => setSearchOpen(true)}
-          canOpenHistory={headerPermissions.canManageEvents && screen === "detail" && Boolean(selectedEvent) && !selectedEventIsExternalContext}
-          onOpenHistory={openHistory}
           canOpenTrash={headerCanOpenTrash}
           onOpenTrash={() => {
             setTrashOpen(true);
@@ -9913,8 +9905,6 @@ function AppHeader({
   onImportQuote,
   onImportNativeMstvCalendar,
   onSearch,
-  canOpenHistory,
-  onOpenHistory,
   canOpenTrash,
   onOpenTrash,
   onLogoClick,
@@ -9958,8 +9948,6 @@ function AppHeader({
   onImportQuote: () => void;
   onImportNativeMstvCalendar: () => void;
   onSearch: () => void;
-  canOpenHistory: boolean;
-  onOpenHistory: () => void;
   canOpenTrash: boolean;
   onOpenTrash: () => void;
   onLogoClick?: () => void;
@@ -10005,7 +9993,6 @@ function AppHeader({
         </button>
         <div className="flex shrink-0 items-center gap-1.5 sm:gap-2">
           <HeaderIcon label="Rechercher" icon={Search} onClick={onSearch} />
-          {canOpenHistory && <HeaderIcon label="Historique" icon={History} onClick={onOpenHistory} />}
           <NotificationMenu
             notifications={notifications}
             unreadCount={unreadNotificationCount}
@@ -10656,8 +10643,6 @@ function YearOverviewOverlay({
           onImportQuote={onImportQuote}
           onImportNativeMstvCalendar={onImportNativeMstvCalendar}
           onSearch={onSearch}
-          canOpenHistory={false}
-          onOpenHistory={() => undefined}
           canOpenTrash={canOpenTrash}
           onOpenTrash={onOpenTrash}
           onLogoClick={onGoToday}
