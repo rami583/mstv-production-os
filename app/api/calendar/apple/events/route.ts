@@ -365,13 +365,80 @@ async function deleteAppleLinkedEvent(supabase: ReturnType<typeof getServiceSupa
   if (error) throw error;
 }
 
+async function moveAppleLinkedEvent(
+  supabase: ReturnType<typeof getServiceSupabaseClient>,
+  event: ProductionEventRow,
+  link: ExternalEventLinkRow,
+  previousCalendar: ExternalCalendarRow,
+  nextCalendar: ExternalCalendarRow,
+  userId: string,
+) {
+  if (!nextCalendar.provider_calendar_id) {
+    throw new Error("Calendrier Apple incomplet.");
+  }
+
+  const previousCredentials = await getAppleCredentialsForCalendar(supabase, previousCalendar, userId);
+  const nextCredentials = await getAppleCredentialsForCalendar(supabase, nextCalendar, userId);
+  const uid = getAppleUid(event, link);
+  const previousHref = getAppleHref({ credentialsServerUrl: previousCredentials.serverUrl, calendar: previousCalendar, uid, link });
+  const nextHref = getAppleHref({ credentialsServerUrl: nextCredentials.serverUrl, calendar: nextCalendar, uid });
+  const icsText = getAppleEventPayload(event, uid);
+  const putResult = await putAppleEvent({ credentials: nextCredentials, href: nextHref, icsText });
+  const now = new Date().toISOString();
+
+  const { error: linkUpdateError } = await supabase
+    .from("external_event_links")
+    .update({
+      external_calendar_id: nextCalendar.id,
+      provider_calendar_id: nextCalendar.provider_calendar_id,
+      external_event_id: uid,
+      external_event_uid: uid,
+      sync_status: "synced",
+      local_updated_at: event.updated_at,
+      last_synced_at: now,
+      last_external_updated_at: now,
+      last_sync_error: null,
+      deleted_locally_at: null,
+      deleted_externally_at: null,
+      raw_external_event: { href: nextHref, etag: putResult.etag, uid },
+      updated_at: now,
+    })
+    .eq("id", link.id);
+
+  if (linkUpdateError) {
+    await deleteRemoteAppleEventQuietly({ credentials: nextCredentials, href: nextHref });
+    throw linkUpdateError;
+  }
+
+  try {
+    await deleteAppleEvent({ credentials: previousCredentials, href: previousHref });
+  } catch (error) {
+    const warning = "L’événement a été déplacé, mais l’ancienne copie Apple n’a pas pu être supprimée.";
+    console.error("Apple CalDAV old event cleanup after move failed", {
+      message: error instanceof Error ? error.message : String(error),
+      previousCalendarId: previousCalendar.id,
+      nextCalendarId: nextCalendar.id,
+    });
+    await supabase
+      .from("external_event_links")
+      .update({
+        last_sync_error: warning,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", link.id);
+    return { id: uid, href: nextHref, etag: putResult.etag, warning };
+  }
+
+  return { id: uid, href: nextHref, etag: putResult.etag, warning: null };
+}
+
 export async function POST(request: Request) {
   try {
     const authResult = await requireAuthenticatedUser(request);
     if ("error" in authResult) return authResult.error;
 
     const body = (await request.json().catch(() => null)) as {
-      action?: "create" | "update" | "delete";
+      action?: "create" | "update" | "delete" | "move";
       eventId?: string;
       externalCalendarId?: string;
     } | null;
@@ -398,6 +465,20 @@ export async function POST(request: Request) {
     const links = await getAppleLinks(supabase, eventId, authResult.user.id);
     if (links.length === 0) {
       return appleJsonResponse({ ok: true, synced: 0 });
+    }
+
+    if (action === "move") {
+      const externalCalendarId = body.externalCalendarId?.trim();
+      if (!externalCalendarId) {
+        return appleJsonResponse({ error: "Calendrier Apple manquant." }, { status: 400 });
+      }
+      const nextCalendar = await getOwnedAppleCalendar(supabase, externalCalendarId, authResult.user.id);
+      const movableLink = links.find(({ calendar }) => calendar.id !== nextCalendar.id) ?? links[0];
+      if (!movableLink || movableLink.calendar.id === nextCalendar.id) {
+        return appleJsonResponse({ ok: true, synced: 0 });
+      }
+      const moveResult = await moveAppleLinkedEvent(supabase, event, movableLink.link, movableLink.calendar, nextCalendar, authResult.user.id);
+      return appleJsonResponse({ ok: true, externalEventId: moveResult.id, synced: 1, warning: moveResult.warning });
     }
 
     if (action === "update") {

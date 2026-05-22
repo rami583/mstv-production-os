@@ -4859,7 +4859,7 @@ export default function Home() {
     return payload;
   }
 
-  async function syncAppleEventAction(action: "create" | "update" | "delete", eventId: string, externalCalendarId?: string | null) {
+  async function syncAppleEventAction(action: "create" | "update" | "delete" | "move", eventId: string, externalCalendarId?: string | null) {
     if (!authSession) {
       throw new Error(sessionExpiredMessage);
     }
@@ -4876,7 +4876,7 @@ export default function Home() {
       },
       body: JSON.stringify({ action, eventId, externalCalendarId }),
     });
-    const payload = (await response.json().catch(() => null)) as { error?: string; externalEventId?: string; synced?: number } | null;
+    const payload = (await response.json().catch(() => null)) as { error?: string; externalEventId?: string; synced?: number; warning?: string } | null;
     if (!response.ok) {
       throw new Error(payload?.error ?? "Synchronisation Apple Calendar impossible.");
     }
@@ -6613,6 +6613,11 @@ export default function Home() {
     }
 
     const normalizedInput = normalizeEventTimeInput(input);
+    const currentWritableLinks = getEventWritableExternalLinks(event).filter((link) => link.calendarSyncEnabled);
+    const currentExternalLink = currentWritableLinks.length === 1 ? currentWritableLinks[0] : null;
+    const currentExternalCalendarId = currentExternalLink?.externalCalendarId ?? null;
+    const requestedExternalCalendarId = normalizedInput.syncExternalCalendarId ?? null;
+    const calendarSelectionChanged = requestedExternalCalendarId !== currentExternalCalendarId;
     const updatePayload = {
       client_name: normalizedInput.clientName,
       event_name: normalizedInput.eventName,
@@ -6714,22 +6719,43 @@ export default function Home() {
       );
     }
 
-    const linkedExternalEventCount = getEventWritableExternalLinks(event).length;
-    if (normalizedInput.syncExternalCalendarId || linkedExternalEventCount > 0) {
+    const linkedExternalEventCount = currentWritableLinks.length;
+    if (calendarSelectionChanged || normalizedInput.syncExternalCalendarId || linkedExternalEventCount > 0) {
       try {
-        let syncPayload: { error?: string; externalEventId?: string; synced?: number } | null | undefined;
-        if (normalizedInput.syncExternalCalendarId) {
-        console.info("External calendar create/link sync requested for existing MSTV event", {
-          eventId: updatedEvent.id,
-          selectedSyncExternalCalendarId: normalizedInput.syncExternalCalendarId,
-        });
-        syncPayload = await syncProviderEventAction("create", updatedEvent.id, normalizedInput.syncExternalCalendarId);
+        let syncPayload: { error?: string; externalEventId?: string; synced?: number; warning?: string } | null | undefined;
+        if (calendarSelectionChanged && requestedExternalCalendarId) {
+          const requestedCalendar = externalCalendars.find((calendar) => calendar.id === requestedExternalCalendarId) ?? null;
+          if (!requestedCalendar) {
+            throw new Error("Calendrier externe introuvable.");
+          }
+          if (currentExternalLink?.providerType === "apple_caldav" && requestedCalendar.providerType === "apple_caldav") {
+            console.info("Apple calendar move requested for existing MSTV event", {
+              eventId: updatedEvent.id,
+              previousExternalCalendarId: currentExternalCalendarId,
+              selectedSyncExternalCalendarId: requestedExternalCalendarId,
+            });
+            syncPayload = await syncAppleEventAction("move", updatedEvent.id, requestedExternalCalendarId);
+          } else if (!currentExternalLink) {
+            console.info("External calendar create/link sync requested for existing MSTV event", {
+              eventId: updatedEvent.id,
+              selectedSyncExternalCalendarId: requestedExternalCalendarId,
+            });
+            syncPayload = await syncProviderEventAction("create", updatedEvent.id, requestedExternalCalendarId);
+          } else {
+            throw new Error("Le changement de calendrier est disponible pour Apple Calendar pour le moment.");
+          }
+        } else if (calendarSelectionChanged && !requestedExternalCalendarId && linkedExternalEventCount > 0) {
+          console.info("External calendar unlink requested for existing MSTV event", {
+            eventId: updatedEvent.id,
+            previousExternalCalendarId: currentExternalCalendarId,
+          });
+          syncPayload = await syncProviderEventAction("delete", updatedEvent.id);
         } else {
-        console.info("External calendar update sync requested for linked MSTV event", {
-          eventId: updatedEvent.id,
-          linkedExternalEventFound: linkedExternalEventCount > 0,
-        });
-        syncPayload = await syncProviderEventAction("update", updatedEvent.id);
+          console.info("External calendar update sync requested for linked MSTV event", {
+            eventId: updatedEvent.id,
+            linkedExternalEventFound: linkedExternalEventCount > 0,
+          });
+          syncPayload = await syncProviderEventAction("update", updatedEvent.id);
         }
         if (syncPayload?.externalEventId || (syncPayload?.synced ?? 0) > 0) {
           await createNotification(
@@ -6741,6 +6767,9 @@ export default function Home() {
             },
             { persist: false },
           );
+        }
+        if (syncPayload?.warning) {
+          setError(syncPayload.warning);
         }
         await reloadData(updatedEvent.id, { silent: true });
       } catch (googleSyncError) {
@@ -13976,6 +14005,9 @@ function CreateEventModal({
 }) {
   const isEditing = Boolean(event);
   const externalLinks = event ? getEventWritableExternalLinks(event) : [];
+  const currentExternalCalendarId = externalLinks.filter((link) => link.calendarSyncEnabled).length === 1
+    ? externalLinks.find((link) => link.calendarSyncEnabled)?.externalCalendarId ?? null
+    : null;
   const [form, setForm] = useState<CreateEventInput>({
     clientName: event?.clientName ?? "",
     eventName: event?.eventName ?? "",
@@ -13984,12 +14016,18 @@ function CreateEventModal({
     startTime: event ? toTimeInputValue(event.startTime) : "10:00",
     endTime: event ? toTimeInputValue(event.endTime) : "11:30",
     endOfDayTime: event ? toTimeInputValue(event.endOfDayTime) : "13:00",
-    syncExternalCalendarId: null,
+    syncExternalCalendarId: currentExternalCalendarId,
   });
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [datePickerOpen, setDatePickerOpen] = useState(false);
-  const selectedSyncCalendar = form.syncExternalCalendarId ? syncCalendars.find((calendar) => calendar.id === form.syncExternalCalendarId) ?? null : null;
+  const currentExternalLink = currentExternalCalendarId ? externalLinks.find((link) => link.externalCalendarId === currentExternalCalendarId) ?? null : null;
+  const selectableSyncCalendars = isEditing && currentExternalLink?.providerType === "apple_caldav"
+    ? syncCalendars.filter((calendar) => calendar.providerType === "apple_caldav")
+    : isEditing && currentExternalLink?.providerType === "google"
+      ? syncCalendars.filter((calendar) => calendar.id === currentExternalCalendarId)
+      : syncCalendars;
+  const selectedSyncCalendar = form.syncExternalCalendarId ? selectableSyncCalendars.find((calendar) => calendar.id === form.syncExternalCalendarId) ?? null : null;
   const showProductionTimeFields = event ? getEffectiveProductionEventRole(event) === "production" : selectedSyncCalendar?.calendarRole !== "external_context";
 
   async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
@@ -14071,51 +14109,29 @@ function CreateEventModal({
             </div>
           )}
 
-          {!isEditing && (
+          {(!isEditing || selectableSyncCalendars.length > 0 || currentExternalCalendarId) && (
             <Field label="Calendrier">
               <div className="space-y-1.5">
                 <select
                   value={form.syncExternalCalendarId ?? ""}
                   onChange={(event) => updateField("syncExternalCalendarId", event.target.value || null)}
-                  disabled={syncCalendars.length === 0}
-                  className={cn(formInputClassName, syncCalendars.length === 0 && "bg-stone-50 text-stone-400")}
+                  disabled={!isEditing && selectableSyncCalendars.length === 0}
+                  className={cn(formInputClassName, selectableSyncCalendars.length === 0 && "bg-stone-50 text-stone-400")}
                 >
                   <option value="">MSTV uniquement</option>
-                  {syncCalendars.map((calendar) => (
+                  {selectableSyncCalendars.map((calendar) => (
                     <option key={calendar.id} value={calendar.id}>
                       {calendar.name} · {getExternalCalendarProviderLabel(calendar.providerType)}
                     </option>
                   ))}
                 </select>
-                {syncCalendars.length === 0 ? (
+                {!isEditing && selectableSyncCalendars.length === 0 ? (
                   <p className="text-sm font-semibold text-stone-400">Aucun calendrier externe bidirectionnel disponible.</p>
                 ) : null}
               </div>
             </Field>
           )}
         </div>
-
-        {isEditing && (
-          <div className="mt-4 rounded-2xl border border-stone-200 bg-stone-50/70 px-4 py-3">
-            <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-              <div className="min-w-0">
-                <p className="text-base font-semibold text-stone-950">Calendrier</p>
-                {externalLinks.length > 0 ? (
-                  <div className="mt-2 flex flex-col gap-2">
-                    {externalLinks.map((link) => (
-                      <div key={link.id} className="flex flex-wrap items-center gap-2">
-                        <ExternalCalendarColorDot color={link.calendarColor} />
-                        <span className="text-sm font-semibold text-stone-700">{link.calendarName}</span>
-                      </div>
-                    ))}
-                  </div>
-                ) : (
-                  <p className="mt-1 text-sm font-semibold text-stone-400">MSTV uniquement pour le moment.</p>
-                )}
-              </div>
-            </div>
-          </div>
-        )}
 
         {error && <div className="mt-4 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-base font-medium text-rose-700">{error}</div>}
 
