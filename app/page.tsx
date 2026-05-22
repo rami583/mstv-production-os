@@ -61,6 +61,23 @@ import {
   schoolHolidaysZoneC,
   type CalendarMarker,
 } from "@/lib/calendar-markers";
+import {
+  getEffectiveProductionEventRole,
+  getEventCalendarBadge,
+  getExternalContextDetails,
+  getPrimaryExternalEventLink,
+  getProductionEventDisplay,
+  getProductionEventDisplayLine,
+  isExternalContextProductionEvent,
+} from "@/lib/events/display";
+import {
+  buildExternalCalendarVisibilityState,
+  getExternalCalendarProviderKey,
+  isExternalEventLinkVisible as isExternalEventLinkVisibleByCalendarState,
+  isLegacyExternalCalendarEventVisible,
+  isProductionEventVisible as isProductionEventVisibleByCalendarState,
+  normalizeProviderCalendarKey,
+} from "@/lib/events/visibility";
 import { cn } from "@/lib/utils";
 import {
   supabase,
@@ -1010,64 +1027,14 @@ function sanitizeExternalCalendarEventForCache(event: ExternalCalendarEvent): Ex
   };
 }
 
-type CachedExternalCalendarVisibilityState = {
-  enabledById: Map<string, boolean>;
-  enabledByProviderKey: Map<string, boolean>;
-};
-
-function getCachedExternalCalendarVisibilityState(externalCalendars: ExternalCalendar[]): CachedExternalCalendarVisibilityState {
-  const enabledById = new Map<string, boolean>();
-  const enabledByProviderKey = new Map<string, boolean>();
-
-  for (const calendar of externalCalendars) {
-    enabledById.set(calendar.id, calendar.syncEnabled);
-
-    const providerKey = getExternalCalendarProviderKey({
-      providerType: calendar.providerType,
-      providerAccountId: calendar.providerAccountId,
-      providerCalendarId: calendar.providerCalendarId,
-    });
-    if (!providerKey) continue;
-
-    enabledByProviderKey.set(providerKey, (enabledByProviderKey.get(providerKey) ?? true) && calendar.syncEnabled);
-  }
-
-  return { enabledById, enabledByProviderKey };
-}
-
-function isCachedExternalEventLinkVisible(link: ExternalEventLink, state: CachedExternalCalendarVisibilityState) {
-  const exactEnabled = state.enabledById.get(link.externalCalendarId);
-  const providerKey = getExternalCalendarProviderKey({
-    providerType: link.calendarProviderType ?? link.providerType,
-    providerAccountId: link.calendarProviderAccountId,
-    providerCalendarId: link.providerCalendarId,
-  });
-  const providerEnabled = providerKey ? state.enabledByProviderKey.get(providerKey) : undefined;
-
-  if (exactEnabled === false) return false;
-  if (exactEnabled === true) return true;
-  if (providerEnabled === false) return false;
-  return providerEnabled ?? link.calendarSyncEnabled;
-}
-
-function isCachedProductionEventVisible(event: ProductionEvent, state: CachedExternalCalendarVisibilityState) {
-  if (event.deletedAt) return false;
-  if (isLikelyOrphanExternalImportEvent(event)) return false;
-  return event.externalLinks.every((link) => isCachedExternalEventLinkVisible(link, state));
-}
-
-function isCachedExternalCalendarEventVisible(event: ExternalCalendarEvent, state: CachedExternalCalendarVisibilityState) {
-  return state.enabledById.get(event.externalCalendarId) ?? event.calendarSyncEnabled;
-}
-
 function prepareCachedAppData(data: Omit<CachedAppData, "cachedAt">): Omit<CachedAppData, "cachedAt"> {
-  const visibilityState = getCachedExternalCalendarVisibilityState(data.externalCalendars);
+  const visibilityState = buildExternalCalendarVisibilityState(data.externalCalendars);
   const sortedProductionEvents = data.events
-    .filter((event) => isCachedProductionEventVisible(event, visibilityState))
+    .filter((event) => isProductionEventVisibleByCalendarState(event, visibilityState, { nativeMstvIcsImportSource }))
     .sort((a, b) => eventSortValue(a) - eventSortValue(b));
   const recentProductionEvents = sortedProductionEvents.slice(-maxCachedProductionEvents);
   const sortedExternalEvents = data.externalCalendarEvents
-    .filter((event) => isCachedExternalCalendarEventVisible(event, visibilityState))
+    .filter((event) => isLegacyExternalCalendarEventVisible(event, visibilityState))
     .sort((a, b) => a.startTime.localeCompare(b.startTime));
   const recentExternalEvents = sortedExternalEvents.slice(-maxCachedExternalCalendarEvents);
 
@@ -2664,28 +2631,6 @@ function normalizeExternalCalendarIcsUrl(value: string) {
   return trimmed;
 }
 
-function normalizeProviderCalendarKey(value: string | null | undefined) {
-  const trimmed = (value ?? "").trim();
-  if (!trimmed) return "";
-  if (/^https?:\/\//i.test(trimmed) || trimmed.startsWith("/")) {
-    try {
-      return new URL(trimmed, "https://caldav.icloud.com").pathname.replace(/\/+$/, "");
-    } catch {
-      return trimmed.replace(/\/+$/, "");
-    }
-  }
-  return trimmed.replace(/\/+$/, "");
-}
-
-function getExternalCalendarProviderKey(input: {
-  providerType: ExternalCalendarProviderType | null | undefined;
-  providerAccountId: string | null | undefined;
-  providerCalendarId: string | null | undefined;
-}) {
-  if (!input.providerType || !input.providerAccountId || !input.providerCalendarId) return null;
-  return `${input.providerType}:${input.providerAccountId}:${normalizeProviderCalendarKey(input.providerCalendarId)}`;
-}
-
 function getExternalCalendarVisibilityLabel(visibility: ExternalCalendarVisibility) {
   const labels: Record<ExternalCalendarVisibility, string> = {
     admin_only: "Admin",
@@ -2924,195 +2869,6 @@ function getEventWritableExternalLinks(event: ProductionEvent) {
       (link.providerType === "google" || link.providerType === "apple_caldav") &&
       link.calendarSyncCapability === "bidirectional",
   );
-}
-
-function isGoogleOrAppleImportedEvent(event: ProductionEvent) {
-  if (event.externalLinks.some((link) => link.providerType === "google" || link.providerType === "apple_caldav")) return true;
-
-  const normalizedSource = normalizeLabel(event.importedFrom ?? "");
-  return normalizedSource.includes("google") || normalizedSource.includes("apple");
-}
-
-function isGenericExternalEventName(value: string) {
-  const normalizedValue = normalizeLabel(value);
-  return (
-    normalizedValue === "evenement apple" ||
-    normalizedValue === "evenement google" ||
-    normalizedValue === "evenement importe" ||
-    normalizedValue === "external event"
-  );
-}
-
-function getProductionEventDisplay(event: ProductionEvent) {
-  const title = event.clientName.trim() || event.eventName.trim() || "Événement";
-  const subtitle = event.eventName.trim();
-
-  if (!isGoogleOrAppleImportedEvent(event)) {
-    return { title, subtitle };
-  }
-
-  if (!subtitle || isGenericExternalEventName(subtitle) || normalizeLabel(subtitle) === normalizeLabel(title)) {
-    return { title, subtitle: "" };
-  }
-
-  return { title, subtitle };
-}
-
-function getProductionEventDisplayLine(event: ProductionEvent) {
-  const display = getProductionEventDisplay(event);
-  return [display.title, display.subtitle].filter(Boolean).join(" - ");
-}
-
-function getEffectiveProductionEventRole(event: ProductionEvent): ProductionEventRole {
-  if (event.eventRole === "production") return "production";
-  if (event.externalLinks.some((link) => link.calendarRole === "business_primary")) return "production";
-  if (event.eventRole === "external_context") return "external_context";
-  if (isGoogleOrAppleImportedEvent(event)) return "external_context";
-  return "production";
-}
-
-function isExternalContextProductionEvent(event: ProductionEvent) {
-  return getEffectiveProductionEventRole(event) === "external_context";
-}
-
-function getStringFromUnknown(value: unknown) {
-  return typeof value === "string" && value.trim() ? value.trim() : null;
-}
-
-function getStringArrayFromUnknown(value: unknown) {
-  if (!Array.isArray(value)) return [];
-  return value
-    .map((item) => getStringFromUnknown(item))
-    .filter((item): item is string => Boolean(item));
-}
-
-function getObjectFromUnknown(value: unknown) {
-  return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : null;
-}
-
-function getNestedObjectValue(source: Record<string, unknown> | null, path: string[]) {
-  let current: unknown = source;
-  for (const key of path) {
-    const object = getObjectFromUnknown(current);
-    if (!object) return null;
-    current = object[key];
-  }
-  return current;
-}
-
-function getExternalEventUrlMatches(...values: Array<string | null | undefined>) {
-  const urls = values.flatMap((value) => value?.match(/https?:\/\/[^\s<>"')\]]+/g) ?? []);
-  return Array.from(new Set(urls.map((url) => url.replace(/[.,;]+$/, ""))));
-}
-
-function getMeetingUrlPriority(url: string) {
-  const normalizedUrl = url.toLowerCase();
-  if (normalizedUrl.includes("teams.microsoft.com") || normalizedUrl.includes("teams.live.com")) return 0;
-  if (normalizedUrl.includes("meet.google.com")) return 1;
-  if (normalizedUrl.includes("zoom.us") || normalizedUrl.includes("zoom.com")) return 2;
-  return 3;
-}
-
-function getBestMeetingUrl(urls: string[]) {
-  return [...urls].sort((left, right) => getMeetingUrlPriority(left) - getMeetingUrlPriority(right))[0] ?? null;
-}
-
-function getExternalEventAttendees(raw: Record<string, unknown> | null) {
-  if (!raw) return [];
-
-  const googleAttendees = Array.isArray(raw.attendees)
-    ? raw.attendees
-        .map((attendee) => {
-          const attendeeObject = getObjectFromUnknown(attendee);
-          if (!attendeeObject) return null;
-          return getStringFromUnknown(attendeeObject.displayName) ?? getStringFromUnknown(attendeeObject.email);
-        })
-        .filter((attendee): attendee is string => Boolean(attendee))
-    : [];
-
-  const appleAttendees = getStringArrayFromUnknown(raw.ATTENDEE);
-  return Array.from(new Set([...googleAttendees, ...appleAttendees])).slice(0, 12);
-}
-
-function getExternalContextDetails(event: ProductionEvent) {
-  const raw = event.externalLinks.find((link) => link.rawExternalEvent)?.rawExternalEvent ?? null;
-  const description =
-    getStringFromUnknown(raw?.description) ??
-    getStringFromUnknown(raw?.DESCRIPTION) ??
-    getStringFromUnknown(raw?.bodyPreview) ??
-    getStringFromUnknown(raw?.notes) ??
-    getStringFromUnknown(raw?.rawDescription);
-  const locationValue = raw?.location ?? raw?.LOCATION;
-  const location =
-    getStringFromUnknown(locationValue) ??
-    (locationValue && typeof locationValue === "object" ? getStringFromUnknown((locationValue as Record<string, unknown>).displayName) : null);
-  const sourceName = getPrimaryExternalEventLink(event)?.calendarName ?? null;
-  const conferenceEntryPoints = Array.isArray(getNestedObjectValue(raw, ["conferenceData", "entryPoints"]))
-    ? (getNestedObjectValue(raw, ["conferenceData", "entryPoints"]) as unknown[])
-        .map((entryPoint) => getStringFromUnknown(getObjectFromUnknown(entryPoint)?.uri))
-        .filter((url): url is string => Boolean(url))
-    : [];
-  const meetingUrls = Array.from(
-    new Set([
-      ...conferenceEntryPoints,
-      ...getExternalEventUrlMatches(
-        location,
-        description,
-        getStringFromUnknown(raw?.hangoutLink),
-        getStringFromUnknown(raw?.htmlLink),
-        getStringFromUnknown(raw?.URL),
-      ),
-    ]),
-  );
-  const meetingUrl = getBestMeetingUrl(meetingUrls);
-  const attendees = getExternalEventAttendees(raw);
-  return { description, location, sourceName, meetingUrl, meetingUrls, attendees };
-}
-
-function getPrimaryExternalEventLink(event: ProductionEvent) {
-  return event.externalLinks.find((link) => link.calendarSyncEnabled) ?? event.externalLinks[0] ?? null;
-}
-
-function getEventCalendarBadge(event: ProductionEvent) {
-  const externalLink = getPrimaryExternalEventLink(event);
-  if (externalLink) {
-    return {
-      name: externalLink.calendarName,
-      color: externalLink.calendarColor,
-    };
-  }
-
-  return {
-    name: "Mon Studio TV",
-    color: "rose",
-  };
-}
-
-function isLikelyOrphanExternalImportEvent(event: ProductionEvent) {
-  if (event.externalLinks.length > 0 || event.deletedAt) return false;
-  if (event.importedFrom === nativeMstvIcsImportSource) return false;
-
-  const normalizedEventName = normalizeLabel(event.eventName);
-  if (normalizedEventName === "evenement apple" || normalizedEventName === "evenement google") return true;
-
-  const normalizedImportedFrom = normalizeLabel(event.importedFrom ?? "");
-  if (normalizedImportedFrom.includes("apple") || normalizedImportedFrom.includes("google")) return true;
-  return Boolean(event.externalImportId && normalizedImportedFrom && normalizedImportedFrom !== normalizeLabel(nativeMstvIcsImportSource));
-}
-
-function getExternalSyncStatusLabel(status: string | null) {
-  if (status === "synced") return "Synchronisé";
-  if (status === "pending" || status === "syncing") return "En attente";
-  if (status === "failed") return "Erreur";
-  if (status === "conflict") return "Conflit";
-  return "En attente";
-}
-
-function getExternalSyncStatusClassName(status: string | null) {
-  if (status === "synced") return "bg-emerald-50 text-emerald-700 ring-emerald-200";
-  if (status === "failed") return "bg-rose-50 text-rose-700 ring-rose-200";
-  if (status === "conflict") return "bg-amber-50 text-amber-800 ring-amber-200";
-  return "bg-sky-50 text-sky-700 ring-sky-200";
 }
 
 function mapEventLinkEntry(row: EventLinkEntryRow): EventLinkEntry {
@@ -3516,6 +3272,8 @@ async function fetchExternalCalendarEvents() {
     throw new Error("Configuration Supabase manquante.");
   }
 
+  // Legacy ICS/Webcal read-only storage. Google/Apple/Microsoft provider events
+  // should be represented as native events linked through external_event_links.
   const rows: ExternalCalendarEventQueryRow[] = [];
   let from = 0;
 
@@ -3719,58 +3477,26 @@ export default function Home() {
   const headerPermissions = useMemo(() => getPermissionsForRole(headerProfile?.role ?? "team"), [headerProfile?.role]);
   const headerCanOpenTrash = headerPermissions.canRestoreEvents || headerPermissions.canPermanentDeleteEvents;
   const actorName = getProfileDisplayName(profile);
-  const externalCalendarEnabledById = useMemo(
-    () => new Map(externalCalendars.map((calendar) => [calendar.id, calendar.syncEnabled])),
+  const externalCalendarVisibilityState = useMemo(
+    () => buildExternalCalendarVisibilityState(externalCalendars),
     [externalCalendars],
   );
-  const externalCalendarProviderStateByKey = useMemo(() => {
-    const stateByKey = new Map<string, { enabled: boolean; color: string | null }>();
-    for (const calendar of externalCalendars) {
-      const key = getExternalCalendarProviderKey({
-        providerType: calendar.providerType,
-        providerAccountId: calendar.providerAccountId,
-        providerCalendarId: calendar.providerCalendarId,
-      });
-      if (!key) continue;
-      const existingState = stateByKey.get(key);
-      stateByKey.set(key, {
-        enabled: (existingState?.enabled ?? true) && calendar.syncEnabled,
-        color: calendar.color ?? existingState?.color ?? null,
-      });
-    }
-    return stateByKey;
-  }, [externalCalendars]);
   const isExternalEventLinkVisible = useCallback(
-    (link: ExternalEventLink) => {
-      const exactEnabled = externalCalendarEnabledById.get(link.externalCalendarId);
-      const providerKey = getExternalCalendarProviderKey({
-        providerType: link.calendarProviderType ?? link.providerType,
-        providerAccountId: link.calendarProviderAccountId,
-        providerCalendarId: link.providerCalendarId,
-      });
-      const providerEnabled = providerKey ? externalCalendarProviderStateByKey.get(providerKey)?.enabled : undefined;
-      if (exactEnabled === false) return false;
-      if (exactEnabled === true) return true;
-      if (providerEnabled === false) return false;
-      return providerEnabled ?? link.calendarSyncEnabled;
-    },
-    [externalCalendarEnabledById, externalCalendarProviderStateByKey],
+    (link: ExternalEventLink) => isExternalEventLinkVisibleByCalendarState(link, externalCalendarVisibilityState),
+    [externalCalendarVisibilityState],
   );
   const isExternalCalendarEventVisible = useCallback(
     (event: ExternalCalendarEvent) =>
-      (externalCalendarEnabledById.get(event.externalCalendarId) ?? event.calendarSyncEnabled) &&
+      isLegacyExternalCalendarEventVisible(event, externalCalendarVisibilityState) &&
       canViewExternalCalendar(permissions, profile, {
         visibility: event.calendarVisibility,
         createdByProfileId: event.calendarCreatedByProfileId,
       }),
-    [externalCalendarEnabledById, permissions, profile],
+    [externalCalendarVisibilityState, permissions, profile],
   );
   const isProductionEventVisible = useCallback(
-    (event: ProductionEvent) => {
-      if (isLikelyOrphanExternalImportEvent(event)) return false;
-      return event.externalLinks.every(isExternalEventLinkVisible);
-    },
-    [isExternalEventLinkVisible],
+    (event: ProductionEvent) => isProductionEventVisibleByCalendarState(event, externalCalendarVisibilityState, { nativeMstvIcsImportSource }),
+    [externalCalendarVisibilityState],
   );
   const visibleExternalCalendarEvents = useMemo(
     () => externalCalendarEvents.filter(isExternalCalendarEventVisible),
@@ -3820,31 +3546,6 @@ export default function Home() {
   useEffect(() => {
     setEventDetailCarousel(null);
   }, [screen, selectedId]);
-
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-
-    const monthStart = new Date(visibleMonth.getFullYear(), visibleMonth.getMonth(), 1);
-    const monthEnd = new Date(visibleMonth.getFullYear(), visibleMonth.getMonth() + 1, 0);
-    const monthStartKey = formatDateKey(monthStart);
-    const monthEndKey = formatDateKey(monthEnd);
-    const visibleExternalEventsInCurrentMonth = visibleExternalCalendarEvents.filter((event) => {
-      const dateKey = getExternalEventDateKey(event);
-      return dateKey >= monthStartKey && dateKey <= monthEndKey;
-    });
-    const visibleExternalEventsForSelectedDay = visibleExternalCalendarEvents.filter((event) => getExternalEventDateKey(event) === selectedDateKey);
-
-    console.info("External calendar display debug", {
-      externalCalendarsLoaded: externalCalendars.length,
-      externalEventsLoaded: externalCalendarEvents.length,
-      visibleExternalEventsLoaded: visibleExternalCalendarEvents.length,
-      visibleExternalEventsInCurrentMonth: visibleExternalEventsInCurrentMonth.length,
-      visibleExternalEventsForSelectedDay: visibleExternalEventsForSelectedDay.length,
-      currentMonth: `${visibleMonth.getFullYear()}-${String(visibleMonth.getMonth() + 1).padStart(2, "0")}`,
-      selectedDateKey,
-      currentUserRole: profile?.role ?? null,
-    });
-  }, [externalCalendars.length, externalCalendarEvents.length, profile?.role, selectedDateKey, visibleExternalCalendarEvents, visibleMonth]);
 
   useEffect(() => {
     setHasMounted(true);
@@ -4823,15 +4524,9 @@ export default function Home() {
     }
 
     const selectedCalendar = externalCalendarId ? externalCalendars.find((calendar) => calendar.id === externalCalendarId) ?? null : null;
-    console.info("Google event sync client route call", {
-      action,
-      eventId,
-      selectedExternalCalendarId: externalCalendarId ?? null,
-      selectedCalendarFound: Boolean(selectedCalendar),
-      selectedCalendarProviderType: selectedCalendar?.providerType ?? null,
-      selectedCalendarSyncCapability: selectedCalendar?.syncCapability ?? null,
-      selectedCalendarSyncEnabled: selectedCalendar?.syncEnabled ?? null,
-    });
+    if (!selectedCalendar && externalCalendarId) {
+      console.warn("External calendar selected for Google sync was not found.", { eventId, externalCalendarId });
+    }
 
     const accessToken = await getServerApiAccessToken(authSession.access_token);
     const response = await fetch(getAppApiUrl("/api/calendar/google/events", "Synchronisation Google Calendar momentanément indisponible."), {
@@ -4843,14 +4538,6 @@ export default function Home() {
       body: JSON.stringify({ action, eventId, externalCalendarId }),
     });
     const payload = (await response.json().catch(() => null)) as { error?: string; externalEventId?: string; synced?: number } | null;
-    console.info("Google event sync client response", {
-      action,
-      eventId,
-      ok: response.ok,
-      status: response.status,
-      googleEventIdReturned: Boolean(payload?.externalEventId),
-      syncedCount: payload?.synced ?? null,
-    });
 
     if (!response.ok) {
       throw new Error(payload?.error ?? "Synchronisation calendrier externe impossible.");
@@ -6349,10 +6036,6 @@ export default function Home() {
       }
       throw eventError;
     }
-    console.info("MSTV event insert succeeded before Google sync", {
-      eventId: event.id,
-      selectedSyncExternalCalendarId: normalizedInput.syncExternalCalendarId ?? null,
-    });
 
     let insertedOptions: EventOptionRow[] = [];
 
@@ -6426,10 +6109,6 @@ export default function Home() {
 
     if (normalizedInput.syncExternalCalendarId) {
       try {
-        console.info("External calendar create sync requested after MSTV event insert", {
-          eventId: event.id,
-          selectedSyncExternalCalendarId: normalizedInput.syncExternalCalendarId,
-        });
         await syncProviderEventAction("create", event.id, normalizedInput.syncExternalCalendarId);
         await createNotification(
           {
@@ -6654,15 +6333,6 @@ export default function Home() {
       console.error("MSTV event update failed before Google sync", getDebugError(updateError));
       throw updateError;
     }
-    console.info("MSTV event update succeeded before Google sync", {
-      eventId: event.id,
-      selectedSyncExternalCalendarId: normalizedInput.syncExternalCalendarId ?? null,
-      originalExternalCalendarId: currentExternalCalendarId,
-      requestedExternalCalendarId,
-      currentExternalProviderType: currentExternalLink?.providerType ?? null,
-      calendarSelectionChanged,
-      linkedExternalEventFound: currentWritableLinks.length > 0,
-    });
 
     const updatedEvent: ProductionEvent = {
       ...event,
@@ -6753,25 +6423,13 @@ export default function Home() {
               throw new Error("Le changement de calendrier Apple n’a pas été appliqué.");
             }
           } else if (!currentExternalLink) {
-            console.info("External calendar create/link sync requested for existing MSTV event", {
-              eventId: updatedEvent.id,
-              selectedSyncExternalCalendarId: requestedExternalCalendarId,
-            });
             syncPayload = await syncProviderEventAction("create", updatedEvent.id, requestedExternalCalendarId);
           } else {
             throw new Error("Le changement de calendrier est disponible pour Apple Calendar pour le moment.");
           }
         } else if (calendarSelectionChanged && !requestedExternalCalendarId && linkedExternalEventCount > 0) {
-          console.info("External calendar unlink requested for existing MSTV event", {
-            eventId: updatedEvent.id,
-            previousExternalCalendarId: currentExternalCalendarId,
-          });
           syncPayload = await syncProviderEventAction("delete", updatedEvent.id);
         } else {
-          console.info("External calendar update sync requested for linked MSTV event", {
-            eventId: updatedEvent.id,
-            linkedExternalEventFound: linkedExternalEventCount > 0,
-          });
           syncPayload = await syncProviderEventAction("update", updatedEvent.id);
         }
         if (syncPayload?.externalEventId || (syncPayload?.synced ?? 0) > 0) {
@@ -14063,13 +13721,6 @@ function CreateEventModal({
               endOfDayTime: "",
             },
       );
-      console.info("Event edit calendar submit", {
-        eventId: isEditing ? event?.id ?? null : null,
-        originalExternalCalendarId: currentExternalCalendarId,
-        selectedExternalCalendarId: normalizedForm.syncExternalCalendarId ?? null,
-        selectedProviderType: selectedSyncCalendar?.providerType ?? null,
-        calendarChanged: (normalizedForm.syncExternalCalendarId ?? null) !== currentExternalCalendarId,
-      });
       setForm(normalizedForm);
       await onSubmit(normalizedForm);
     } catch (createError) {
