@@ -3282,7 +3282,6 @@ export default function Home() {
   const [permanentDeleteDialogEvent, setPermanentDeleteDialogEvent] = useState<ProductionEvent | null>(null);
   const [duplicateDatePickerEvent, setDuplicateDatePickerEvent] = useState<ProductionEvent | null>(null);
   const [duplicateRequest, setDuplicateRequest] = useState<DuplicateEventRequest | null>(null);
-  const [dateEditorOpen, setDateEditorOpen] = useState(false);
   const [documentPreview, setDocumentPreview] = useState<DocumentPreview | null>(null);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [trashOpen, setTrashOpen] = useState(false);
@@ -9099,8 +9098,6 @@ export default function Home() {
           screen={screen}
           setScreen={setScreen}
           yearLabel={yearLabel}
-          detailDateLabel={screen === "detail" && selectedEvent ? formatFullDate(selectedEvent.date) : null}
-          onEditDetailDate={screen === "detail" && selectedEvent && headerPermissions.canManageEvents ? () => setDateEditorOpen(true) : undefined}
           goToday={goToday}
           isSelectedDateToday={isSelectedDateToday}
           createMenuOpen={createMenuOpen && !yearOverviewOpen}
@@ -9334,18 +9331,6 @@ export default function Home() {
         />
       )}
 
-      {dateEditorOpen && selectedEvent && (
-        <SharedDatePicker
-          selectedDate={selectedEvent.date}
-          onClose={() => setDateEditorOpen(false)}
-          onSelectDate={async (nextDate) => {
-            await updateEventDate(selectedEvent, nextDate);
-            setDateEditorOpen(false);
-          }}
-          confirmationTitle="Modifier la date de cet événement ?"
-        />
-      )}
-
       {duplicateDatePickerEvent && (
         <SharedDatePicker
           selectedDate={duplicateDatePickerEvent.date}
@@ -9511,8 +9496,6 @@ function AppHeader({
   screen,
   setScreen,
   yearLabel,
-  detailDateLabel,
-  onEditDetailDate,
   goToday,
   isSelectedDateToday,
   createMenuOpen,
@@ -9553,8 +9536,6 @@ function AppHeader({
   screen: Screen;
   setScreen: (screen: Screen) => void;
   yearLabel: string;
-  detailDateLabel: string | null;
-  onEditDetailDate?: () => void;
   goToday: () => void;
   isSelectedDateToday: boolean;
   createMenuOpen: boolean;
@@ -9682,12 +9663,6 @@ function AppHeader({
               {yearLabel}
             </button>
           )}
-          {screen === "detail" && detailDateLabel && (
-            <DetailDateControl
-              label={detailDateLabel}
-              onEdit={onEditDetailDate}
-            />
-          )}
         </div>
         <div className="flex shrink-0 items-center justify-end gap-1.5 sm:gap-2">
           <SyncStatusIndicator
@@ -9713,35 +9688,6 @@ function AppHeader({
         </div>
       </div>
     </header>
-  );
-}
-
-function DetailDateControl({
-  label,
-  onEdit,
-}: {
-  label: string;
-  onEdit?: () => void;
-}) {
-  const datePillClassName =
-    "whitespace-nowrap rounded-full border border-stone-200 bg-white px-2.5 py-1.5 text-base font-semibold text-stone-700 transition-colors sm:px-3";
-
-  return (
-    <span className="relative inline-grid max-w-full overflow-visible align-middle">
-      <span
-        aria-hidden="true"
-        className={cn(datePillClassName, "invisible col-start-1 row-start-1 pointer-events-none select-none")}
-      >
-        {label}
-      </span>
-      <button
-        type="button"
-        onClick={onEdit}
-        className={cn(datePillClassName, "col-start-1 row-start-1 hover:bg-stone-50")}
-      >
-        {label}
-      </button>
-    </span>
   );
 }
 
@@ -10223,8 +10169,6 @@ function YearOverviewOverlay({
           screen="calendar"
           setScreen={() => undefined}
           yearLabel={String(displayYear)}
-          detailDateLabel={null}
-          onEditDetailDate={undefined}
           goToday={onGoToday}
           isSelectedDateToday={isSelectedDateToday}
           createMenuOpen={createMenuOpen}
@@ -12049,16 +11993,23 @@ function ProductionDetail({
             </button>
           </div>
         </div>
-        <ProductionTimeline
-          event={event}
-          onUpdateTime={onUpdateEventTime}
-          onTimelineTimeEditStart={onTimelineTimeEditStart}
-          onTimelineTimeEditEnd={onTimelineTimeEditEnd}
-          editable={permissions.canManageEvents}
-        />
       </Card>
 
       <div key={event.id} ref={detailScrollContainerRef} className="no-scrollbar min-h-0 flex-1 space-y-5 overflow-y-auto overscroll-contain pb-6">
+        <Card className="premium-surface overflow-hidden p-5 sm:p-6">
+          <div className="rounded-2xl bg-stone-50 px-4 py-3">
+            <p className="text-xs font-semibold uppercase text-stone-400">Date</p>
+            <p className="mt-1 text-base font-semibold text-stone-900">{formatFullDate(event.date)}</p>
+          </div>
+          <ProductionTimeline
+            event={event}
+            onUpdateTime={onUpdateEventTime}
+            onTimelineTimeEditStart={onTimelineTimeEditStart}
+            onTimelineTimeEditEnd={onTimelineTimeEditEnd}
+            editable={permissions.canManageEvents}
+            className="mt-5"
+          />
+        </Card>
         <Card className="premium-surface overflow-hidden p-3 sm:p-5">
         <div className="grid grid-cols-[repeat(3,minmax(0,1fr))] gap-1.5 sm:gap-4 lg:items-start">
           <div className="min-w-0">
@@ -12455,12 +12406,14 @@ function ProductionTimeline({
   onTimelineTimeEditStart,
   onTimelineTimeEditEnd,
   editable = true,
+  className = "mt-8",
 }: {
   event: ProductionEvent;
   onUpdateTime: (event: ProductionEvent, field: EventTimeField, value: string) => Promise<void>;
   onTimelineTimeEditStart: (saveTime: () => Promise<void>) => void;
   onTimelineTimeEditEnd: () => void;
   editable?: boolean;
+  className?: string;
 }) {
   const moments = [
     { label: "Arrivée client", field: "clientArrivalTime" as const, value: event.clientArrivalTime },
@@ -12470,7 +12423,7 @@ function ProductionTimeline({
   ];
 
   return (
-    <div className="mt-8">
+    <div className={className}>
       <div className="relative flex w-full justify-between">
         <div className="absolute left-2.5 right-2.5 top-2.5 h-[2px] bg-[#bb2720]/20" />
         {moments.map((moment, index) => (
