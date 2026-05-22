@@ -424,20 +424,6 @@ type CreateEventInput = {
   sourceQuoteText?: string | null;
 };
 
-type EventCalendarMoveDiagnostic = {
-  eventId: string | null;
-  originalExternalCalendarId: string | null;
-  selectedExternalCalendarId: string | null;
-  originalProviderType: ExternalCalendarProviderType | null;
-  selectedProviderType: ExternalCalendarProviderType | null;
-  calendarChanged: boolean;
-  saveHandlerReached: boolean;
-  appleMoveRouteCalled: boolean;
-  routeResponse: Record<string, unknown> | null;
-  selectorChangeFired?: boolean;
-  lastSelectedValue?: string | null;
-};
-
 type QuoteExtractionResult = {
   clientName: string;
   eventName: string;
@@ -6635,25 +6621,12 @@ export default function Home() {
     }
 
     const normalizedInput = normalizeEventTimeInput(input);
-    const currentWritableLinks = getEventWritableExternalLinks(event).filter((link) => link.calendarSyncEnabled);
-    const currentExternalLink = currentWritableLinks.length === 1 ? currentWritableLinks[0] : null;
+    const currentWritableLinks = getEventWritableExternalLinks(event);
+    const currentAppleLink = getEventAppleLinks(event)[0] ?? null;
+    const currentExternalLink = currentWritableLinks.length === 1 ? currentWritableLinks[0] : currentAppleLink;
     const currentExternalCalendarId = currentExternalLink?.externalCalendarId ?? null;
     const requestedExternalCalendarId = normalizedInput.syncExternalCalendarId ?? null;
     const calendarSelectionChanged = requestedExternalCalendarId !== currentExternalCalendarId;
-    const requestedCalendarForDiagnostic = requestedExternalCalendarId
-      ? externalCalendars.find((calendar) => calendar.id === requestedExternalCalendarId) ?? null
-      : null;
-    const calendarMoveDiagnostic: EventCalendarMoveDiagnostic = {
-      eventId: event.id,
-      originalExternalCalendarId: currentExternalCalendarId,
-      selectedExternalCalendarId: requestedExternalCalendarId,
-      originalProviderType: currentExternalLink?.providerType ?? null,
-      selectedProviderType: requestedCalendarForDiagnostic?.providerType ?? null,
-      calendarChanged: calendarSelectionChanged,
-      saveHandlerReached: true,
-      appleMoveRouteCalled: false,
-      routeResponse: null,
-    };
     const updatePayload = {
       client_name: normalizedInput.clientName,
       event_name: normalizedInput.eventName,
@@ -6775,9 +6748,7 @@ export default function Home() {
               selectedSyncExternalCalendarId: requestedExternalCalendarId,
               routeCalled: "/api/calendar/apple/events",
             });
-            calendarMoveDiagnostic.appleMoveRouteCalled = true;
             syncPayload = await syncAppleEventAction("move", updatedEvent.id, requestedExternalCalendarId);
-            calendarMoveDiagnostic.routeResponse = syncPayload ? { ...syncPayload } : null;
             if (!syncPayload?.externalEventId && (syncPayload?.synced ?? 0) === 0) {
               throw new Error("Le changement de calendrier Apple n’a pas été appliqué.");
             }
@@ -6787,7 +6758,6 @@ export default function Home() {
               selectedSyncExternalCalendarId: requestedExternalCalendarId,
             });
             syncPayload = await syncProviderEventAction("create", updatedEvent.id, requestedExternalCalendarId);
-            calendarMoveDiagnostic.routeResponse = syncPayload ? { ...syncPayload } : null;
           } else {
             throw new Error("Le changement de calendrier est disponible pour Apple Calendar pour le moment.");
           }
@@ -6797,14 +6767,12 @@ export default function Home() {
             previousExternalCalendarId: currentExternalCalendarId,
           });
           syncPayload = await syncProviderEventAction("delete", updatedEvent.id);
-          calendarMoveDiagnostic.routeResponse = syncPayload ? { ...syncPayload } : null;
         } else {
           console.info("External calendar update sync requested for linked MSTV event", {
             eventId: updatedEvent.id,
             linkedExternalEventFound: linkedExternalEventCount > 0,
           });
           syncPayload = await syncProviderEventAction("update", updatedEvent.id);
-          calendarMoveDiagnostic.routeResponse = syncPayload ? { ...syncPayload } : null;
         }
         if (syncPayload?.externalEventId || (syncPayload?.synced ?? 0) > 0) {
           await createNotification(
@@ -6837,8 +6805,6 @@ export default function Home() {
         throw googleSyncError;
       }
     }
-
-    return calendarMoveDiagnostic;
   }
 
   async function updateEventFromQuote(event: ProductionEvent, input: CreateEventInput) {
@@ -9709,15 +9675,10 @@ export default function Home() {
           }}
           onSubmit={async (input) => {
             if (editingEvent) {
-              const diagnostic = await updateEvent(editingEvent, input, editingReturnScreen);
-              return { closeModal: false, diagnostic };
+              await updateEvent(editingEvent, input, editingReturnScreen);
             } else {
               await createEvent(input);
             }
-            return { closeModal: true, diagnostic: null };
-          }}
-          onAfterSubmit={(result) => {
-            if (result?.closeModal === false) return;
             setCreateModalOpen(false);
             setEditingEvent(null);
             setEditingReturnScreen("calendar");
@@ -14053,14 +14014,12 @@ function CreateEventModal({
   syncCalendars,
   onClose,
   onSubmit,
-  onAfterSubmit,
 }: {
   selectedDateKey: string;
   event: ProductionEvent | null;
   syncCalendars: ExternalCalendar[];
   onClose: () => void;
-  onSubmit: (input: CreateEventInput) => Promise<{ closeModal: boolean; diagnostic: EventCalendarMoveDiagnostic | null } | void>;
-  onAfterSubmit?: (result: { closeModal: boolean; diagnostic: EventCalendarMoveDiagnostic | null } | void) => void;
+  onSubmit: (input: CreateEventInput) => Promise<void>;
 }) {
   const isEditing = Boolean(event);
   const externalLinks = event ? getEventWritableExternalLinks(event) : [];
@@ -14080,9 +14039,6 @@ function CreateEventModal({
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [datePickerOpen, setDatePickerOpen] = useState(false);
-  const [calendarDiagnostic, setCalendarDiagnostic] = useState<EventCalendarMoveDiagnostic | null>(null);
-  const [calendarSelectorTouched, setCalendarSelectorTouched] = useState(false);
-  const [lastCalendarSelectionValue, setLastCalendarSelectionValue] = useState<string | null>(currentExternalCalendarId);
   const currentExternalLink = currentExternalCalendarId ? externalLinks.find((link) => link.externalCalendarId === currentExternalCalendarId) ?? null : null;
   const selectableSyncCalendars = isEditing && currentExternalLink?.providerType === "apple_caldav"
     ? syncCalendars.filter((calendar) => calendar.providerType === "apple_caldav")
@@ -14113,32 +14069,9 @@ function CreateEventModal({
         selectedExternalCalendarId: normalizedForm.syncExternalCalendarId ?? null,
         selectedProviderType: selectedSyncCalendar?.providerType ?? null,
         calendarChanged: (normalizedForm.syncExternalCalendarId ?? null) !== currentExternalCalendarId,
-        saveHandlerReached: true,
       });
-      const localDiagnostic: EventCalendarMoveDiagnostic = {
-        eventId: isEditing ? event?.id ?? null : null,
-        originalExternalCalendarId: currentExternalCalendarId,
-        selectedExternalCalendarId: normalizedForm.syncExternalCalendarId ?? null,
-        originalProviderType: currentExternalLink?.providerType ?? null,
-        selectedProviderType: selectedSyncCalendar?.providerType ?? null,
-        calendarChanged: (normalizedForm.syncExternalCalendarId ?? null) !== currentExternalCalendarId,
-        saveHandlerReached: true,
-        appleMoveRouteCalled: false,
-        routeResponse: null,
-        selectorChangeFired: calendarSelectorTouched,
-        lastSelectedValue: lastCalendarSelectionValue,
-      };
-      setCalendarDiagnostic(localDiagnostic);
       setForm(normalizedForm);
-      const submitResult = await onSubmit(normalizedForm);
-      if (submitResult?.diagnostic) {
-        setCalendarDiagnostic({
-          ...submitResult.diagnostic,
-          selectorChangeFired: calendarSelectorTouched,
-          lastSelectedValue: lastCalendarSelectionValue,
-        });
-      }
-      onAfterSubmit?.(submitResult);
+      await onSubmit(normalizedForm);
     } catch (createError) {
       setError(getUserFacingErrorMessage(createError, isEditing ? "Impossible de modifier l'événement." : "Impossible de créer l'événement."));
     } finally {
@@ -14208,8 +14141,6 @@ function CreateEventModal({
                   value={form.syncExternalCalendarId ?? ""}
                   onChange={(event) => {
                     const nextValue = event.target.value || null;
-                    setCalendarSelectorTouched(true);
-                    setLastCalendarSelectionValue(nextValue);
                     updateField("syncExternalCalendarId", nextValue);
                   }}
                   disabled={!isEditing && selectableSyncCalendars.length === 0}
@@ -14229,25 +14160,6 @@ function CreateEventModal({
             </Field>
           )}
         </div>
-
-        {calendarDiagnostic && (
-          <div className="mt-4 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-semibold text-amber-900">
-            <p className="text-base font-semibold">Diagnostic temporaire calendrier</p>
-            <div className="mt-2 grid gap-1 font-mono text-xs leading-relaxed text-amber-950">
-              <span>event id: {calendarDiagnostic.eventId ?? "null"}</span>
-              <span>original calendar id: {calendarDiagnostic.originalExternalCalendarId ?? "null"}</span>
-              <span>selected calendar id: {calendarDiagnostic.selectedExternalCalendarId ?? "null"}</span>
-              <span>original provider: {calendarDiagnostic.originalProviderType ?? "null"}</span>
-              <span>selected provider: {calendarDiagnostic.selectedProviderType ?? "null"}</span>
-              <span>selector onChange: {calendarDiagnostic.selectorChangeFired ? "true" : "false"}</span>
-              <span>last selected value: {calendarDiagnostic.lastSelectedValue ?? "null"}</span>
-              <span>calendarChanged: {calendarDiagnostic.calendarChanged ? "true" : "false"}</span>
-              <span>save handler reached: {calendarDiagnostic.saveHandlerReached ? "true" : "false"}</span>
-              <span>Apple move route called: {calendarDiagnostic.appleMoveRouteCalled ? "true" : "false"}</span>
-              <span className="break-all">route response: {calendarDiagnostic.routeResponse ? JSON.stringify(calendarDiagnostic.routeResponse) : "null"}</span>
-            </div>
-          </div>
-        )}
 
         {error && <div className="mt-4 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-base font-medium text-rose-700">{error}</div>}
 
