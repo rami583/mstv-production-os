@@ -259,13 +259,6 @@ type EventActivityLog = {
   createdAt: string;
 };
 
-type EventDateSwipeTransition = {
-  currentOffset: number;
-  incomingOffset: number;
-  incomingDateLabel: string | null;
-  dragging: boolean;
-};
-
 type AppNotification = {
   id: string;
   userId: string;
@@ -3606,12 +3599,6 @@ export default function Home() {
   const [notifications, setNotifications] = useState<AppNotification[]>([]);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [notificationsHydrated, setNotificationsHydrated] = useState(false);
-  const [eventDateSwipeTransition, setEventDateSwipeTransition] = useState<EventDateSwipeTransition>({
-    currentOffset: 0,
-    incomingOffset: 0,
-    incomingDateLabel: null,
-    dragging: false,
-  });
   const [online, setOnline] = useState(() => typeof navigator === "undefined" ? true : navigator.onLine);
   const [pendingSyncCount, setPendingSyncCount] = useState(0);
   const [syncingPendingActions, setSyncingPendingActions] = useState(false);
@@ -4237,16 +4224,6 @@ export default function Home() {
     if (!authSession || !profile || !online) return;
     void refreshNotifications({ silent: true });
   }, [authSession?.user.id, profile?.id, online]);
-
-  useEffect(() => {
-    if (screen === "detail") return;
-    setEventDateSwipeTransition({
-      currentOffset: 0,
-      incomingOffset: 0,
-      incomingDateLabel: null,
-      dragging: false,
-    });
-  }, [screen]);
 
   useEffect(() => {
     if (!authSession || !profile) return;
@@ -9414,7 +9391,6 @@ export default function Home() {
           setScreen={setScreen}
           yearLabel={yearLabel}
           detailDateLabel={screen === "detail" && selectedEvent ? formatFullDate(selectedEvent.date) : null}
-          detailDateTransition={undefined}
           onEditDetailDate={screen === "detail" && selectedEvent && headerPermissions.canManageEvents ? () => setDateEditorOpen(true) : undefined}
           goToday={goToday}
           isSelectedDateToday={isSelectedDateToday}
@@ -9513,8 +9489,6 @@ export default function Home() {
             isExternalContextProductionEvent(selectedEvent) ? (
               <ExternalContextEventDetail
                 event={selectedEvent}
-                previousEvent={chronologicalEvents[selectedEventIndex - 1] ?? null}
-                nextEvent={chronologicalEvents[selectedEventIndex + 1] ?? null}
                 hasPrevious={hasPreviousEvent}
                 hasNext={hasNextEvent}
                 goPrevious={() => navigateEvent(-1)}
@@ -9532,8 +9506,6 @@ export default function Home() {
             ) : (
               <ProductionDetail
                 event={selectedEvent}
-                previousEvent={chronologicalEvents[selectedEventIndex - 1] ?? null}
-                nextEvent={chronologicalEvents[selectedEventIndex + 1] ?? null}
                 hasPrevious={hasPreviousEvent}
                 hasNext={hasNextEvent}
                 goPrevious={() => navigateEvent(-1)}
@@ -9566,7 +9538,6 @@ export default function Home() {
                 onDownloadDocument={downloadEventDocument}
                 onTimelineTimeEditStart={startTimelineTimeEditing}
                 onTimelineTimeEditEnd={endTimelineTimeEditing}
-                onEventDateSwipeTransitionChange={setEventDateSwipeTransition}
                 permissions={permissions}
                 profile={profile}
               />
@@ -9879,7 +9850,6 @@ function AppHeader({
   setScreen,
   yearLabel,
   detailDateLabel,
-  detailDateTransition,
   onEditDetailDate,
   goToday,
   isSelectedDateToday,
@@ -9922,7 +9892,6 @@ function AppHeader({
   setScreen: (screen: Screen) => void;
   yearLabel: string;
   detailDateLabel: string | null;
-  detailDateTransition?: EventDateSwipeTransition;
   onEditDetailDate?: () => void;
   goToday: () => void;
   isSelectedDateToday: boolean;
@@ -10054,7 +10023,6 @@ function AppHeader({
           {screen === "detail" && detailDateLabel && (
             <DetailDateControl
               label={detailDateLabel}
-              transition={detailDateTransition}
               onEdit={onEditDetailDate}
             />
           )}
@@ -10088,20 +10056,13 @@ function AppHeader({
 
 function DetailDateControl({
   label,
-  transition,
   onEdit,
 }: {
   label: string;
-  transition?: EventDateSwipeTransition;
   onEdit?: () => void;
 }) {
   const datePillClassName =
     "whitespace-nowrap rounded-full border border-stone-200 bg-white px-2.5 py-1.5 text-base font-semibold text-stone-700 transition-colors sm:px-3";
-  const transformTransition = transition?.dragging ? undefined : `transform ${PAGE_TRANSITION_MS}ms ${PAGE_TRANSITION_EASING}`;
-  const currentOffset = transition?.currentOffset ?? 0;
-  const incomingOffset = transition?.incomingOffset ?? 0;
-  const incomingDateLabel = transition?.incomingDateLabel ?? null;
-  const widthLabel = incomingDateLabel && incomingDateLabel.length > label.length ? incomingDateLabel : label;
 
   return (
     <span className="relative inline-grid max-w-full overflow-visible align-middle">
@@ -10109,31 +10070,15 @@ function DetailDateControl({
         aria-hidden="true"
         className={cn(datePillClassName, "invisible col-start-1 row-start-1 pointer-events-none select-none")}
       >
-        {widthLabel}
+        {label}
       </span>
       <button
         type="button"
         onClick={onEdit}
         className={cn(datePillClassName, "col-start-1 row-start-1 hover:bg-stone-50")}
-        style={{
-          transform: `translate3d(${currentOffset}px, 0, 0)`,
-          transition: transformTransition,
-        }}
       >
         {label}
       </button>
-      {incomingDateLabel && (
-        <span
-          aria-hidden="true"
-          className={cn(datePillClassName, "pointer-events-none absolute left-0 top-0")}
-          style={{
-            transform: `translate3d(${incomingOffset}px, 0, 0)`,
-            transition: transformTransition,
-          }}
-        >
-          {incomingDateLabel}
-        </span>
-      )}
     </span>
   );
 }
@@ -10617,7 +10562,6 @@ function YearOverviewOverlay({
           setScreen={() => undefined}
           yearLabel={String(displayYear)}
           detailDateLabel={null}
-          detailDateTransition={undefined}
           onEditDetailDate={undefined}
           goToday={onGoToday}
           isSelectedDateToday={isSelectedDateToday}
@@ -11688,8 +11632,6 @@ function SwipeableCalendarEventRow({
 
 function ExternalContextEventDetail({
   event,
-  previousEvent,
-  nextEvent,
   hasPrevious,
   hasNext,
   goPrevious,
@@ -11700,8 +11642,6 @@ function ExternalContextEventDetail({
   permissions,
 }: {
   event: ProductionEvent;
-  previousEvent: ProductionEvent | null;
-  nextEvent: ProductionEvent | null;
   hasPrevious: boolean;
   hasNext: boolean;
   goPrevious: () => void;
@@ -11713,19 +11653,8 @@ function ExternalContextEventDetail({
 }) {
   const externalSwipeStartRef = useRef<{ pointerId: number; x: number; y: number; axis: "horizontal" | "vertical" | null } | null>(null);
   const suppressExternalSwipeClickRef = useRef(false);
-  const externalSwipeViewportRef = useRef<HTMLDivElement | null>(null);
-  const [externalSwipeOffset, setExternalSwipeOffset] = useState(0);
-  const [externalSwipeIncomingOffset, setExternalSwipeIncomingOffset] = useState(0);
-  const [externalSwipeIncomingEvent, setExternalSwipeIncomingEvent] = useState<ProductionEvent | null>(null);
-  const [externalSwipeDragging, setExternalSwipeDragging] = useState(false);
-  const [externalSwipeAnimating, setExternalSwipeAnimating] = useState(false);
 
   useLayoutEffect(() => {
-    setExternalSwipeOffset(0);
-    setExternalSwipeIncomingOffset(0);
-    setExternalSwipeIncomingEvent(null);
-    setExternalSwipeDragging(false);
-    setExternalSwipeAnimating(false);
     externalSwipeStartRef.current = null;
   }, [event.id]);
 
@@ -11735,44 +11664,10 @@ function ExternalContextEventDetail({
 
   function resetExternalSwipe() {
     externalSwipeStartRef.current = null;
-    setExternalSwipeOffset(0);
-    setExternalSwipeIncomingOffset(0);
-    setExternalSwipeIncomingEvent(null);
-    setExternalSwipeDragging(false);
-    setExternalSwipeAnimating(false);
-  }
-
-  function animateExternalNavigation(direction: -1 | 1, fromDrag = false) {
-    const canNavigate = direction === 1 ? hasNext : hasPrevious;
-    const incomingEvent = direction === 1 ? nextEvent : previousEvent;
-    if (!canNavigate || !incomingEvent || externalSwipeAnimating) {
-      resetExternalSwipe();
-      return;
-    }
-
-    const viewportWidth = externalSwipeViewportRef.current?.clientWidth ?? window.innerWidth;
-    const pageStep = getSwipePageStep(viewportWidth);
-    const incomingStartOffset = direction === 1 ? pageStep : -pageStep;
-    setExternalSwipeIncomingEvent(incomingEvent);
-    setExternalSwipeIncomingOffset(fromDrag ? externalSwipeIncomingOffset : incomingStartOffset);
-    setExternalSwipeDragging(false);
-    setExternalSwipeAnimating(true);
-    setExternalSwipeOffset(direction === 1 ? -pageStep : pageStep);
-    window.requestAnimationFrame(() => {
-      setExternalSwipeIncomingOffset(0);
-    });
-
-    window.setTimeout(() => {
-      if (direction === 1) {
-        goNext();
-      } else {
-        goPrevious();
-      }
-    }, PAGE_TRANSITION_MS);
   }
 
   function handleExternalSwipePointerDown(pointerEvent: ReactPointerEvent<HTMLElement>) {
-    if (externalSwipeStartRef.current || externalSwipeAnimating || pointerEvent.pointerType === "mouse" || !isExternalSwipeTarget(pointerEvent.target)) return;
+    if (externalSwipeStartRef.current || pointerEvent.pointerType === "mouse" || !isExternalSwipeTarget(pointerEvent.target)) return;
     if (typeof window !== "undefined" && !window.matchMedia("(hover: none), (pointer: coarse)").matches) return;
 
     externalSwipeStartRef.current = {
@@ -11782,7 +11677,6 @@ function ExternalContextEventDetail({
       axis: null,
     };
     suppressExternalSwipeClickRef.current = false;
-    setExternalSwipeDragging(true);
     pointerEvent.currentTarget.setPointerCapture(pointerEvent.pointerId);
   }
 
@@ -11806,22 +11700,6 @@ function ExternalContextEventDetail({
 
     pointerEvent.preventDefault();
     suppressExternalSwipeClickRef.current = true;
-    const pageStep = getSwipePageStep(pointerEvent.currentTarget.clientWidth || window.innerWidth);
-    const canNavigate = deltaX < 0 ? hasNext : hasPrevious;
-    const resistedOffset = canNavigate ? deltaX : deltaX * 0.22;
-    const boundedOffset = Math.max(-pageStep, Math.min(pageStep, resistedOffset));
-    setExternalSwipeOffset(boundedOffset);
-
-    const direction = deltaX < 0 ? 1 : -1;
-    const incomingEvent = direction === 1 ? nextEvent : previousEvent;
-    if (canNavigate && incomingEvent) {
-      const incomingStartOffset = direction === 1 ? pageStep : -pageStep;
-      setExternalSwipeIncomingEvent(incomingEvent);
-      setExternalSwipeIncomingOffset(Math.max(-pageStep, Math.min(pageStep, incomingStartOffset + deltaX)));
-    } else {
-      setExternalSwipeIncomingEvent(null);
-      setExternalSwipeIncomingOffset(0);
-    }
   }
 
   function handleExternalSwipePointerUp(pointerEvent: ReactPointerEvent<HTMLElement>) {
@@ -11833,74 +11711,43 @@ function ExternalContextEventDetail({
     const viewportWidth = pointerEvent.currentTarget.clientWidth || window.innerWidth;
     const swipeThreshold = getEventSwipeThreshold(viewportWidth);
     externalSwipeStartRef.current = null;
-    setExternalSwipeDragging(false);
 
     if (swipeStart.axis !== "horizontal" || Math.abs(deltaX) < swipeThreshold || Math.abs(deltaX) < Math.abs(deltaY) * EVENT_SWIPE_HORIZONTAL_DOMINANCE) {
-      setExternalSwipeOffset(0);
       return;
     }
 
     if (deltaX < 0 && hasNext) {
-      animateExternalNavigation(1, true);
+      goNext();
       return;
     }
 
     if (deltaX > 0 && hasPrevious) {
-      animateExternalNavigation(-1, true);
-      return;
+      goPrevious();
     }
-
-    setExternalSwipeOffset(0);
-    setExternalSwipeIncomingOffset(0);
-    setExternalSwipeIncomingEvent(null);
   }
 
   return (
-    <div ref={externalSwipeViewportRef} className="relative flex min-h-0 min-w-0 flex-1 overflow-hidden">
-      {externalSwipeIncomingEvent && (
-        <ExternalContextEventPanel
-          event={externalSwipeIncomingEvent}
-          hasPrevious={false}
-          hasNext={false}
-          goPrevious={() => {}}
-          goNext={() => {}}
-          onEditEvent={() => {}}
-          onPromote={async () => {}}
-          promoting={false}
-          permissions={{ ...permissions, canManageEvents: false }}
-          ariaHidden
-          style={{
-            transform: `translate3d(${externalSwipeIncomingOffset}px, 0, 0)`,
-            transition: externalSwipeDragging ? undefined : `transform ${PAGE_TRANSITION_MS}ms ${PAGE_TRANSITION_EASING}`,
-          }}
-        />
-      )}
-      <ExternalContextEventPanel
-        event={event}
-        hasPrevious={hasPrevious}
-        hasNext={hasNext}
-        goPrevious={() => animateExternalNavigation(-1)}
-        goNext={() => animateExternalNavigation(1)}
-        onEditEvent={onEditEvent}
-        onPromote={onPromote}
-        promoting={promoting}
-        permissions={permissions}
-        onPointerDown={handleExternalSwipePointerDown}
-        onPointerMove={handleExternalSwipePointerMove}
-        onPointerUp={handleExternalSwipePointerUp}
-        onPointerCancel={resetExternalSwipe}
-        onClickCapture={(clickEvent) => {
-          if (!suppressExternalSwipeClickRef.current) return;
-          clickEvent.preventDefault();
-          clickEvent.stopPropagation();
-          suppressExternalSwipeClickRef.current = false;
-        }}
-        style={{
-          transform: `translate3d(${externalSwipeOffset}px, 0, 0)`,
-          transition: externalSwipeDragging ? undefined : `transform ${PAGE_TRANSITION_MS}ms ${PAGE_TRANSITION_EASING}`,
-        }}
-      />
-    </div>
+    <ExternalContextEventPanel
+      event={event}
+      hasPrevious={hasPrevious}
+      hasNext={hasNext}
+      goPrevious={goPrevious}
+      goNext={goNext}
+      onEditEvent={onEditEvent}
+      onPromote={onPromote}
+      promoting={promoting}
+      permissions={permissions}
+      onPointerDown={handleExternalSwipePointerDown}
+      onPointerMove={handleExternalSwipePointerMove}
+      onPointerUp={handleExternalSwipePointerUp}
+      onPointerCancel={resetExternalSwipe}
+      onClickCapture={(clickEvent) => {
+        if (!suppressExternalSwipeClickRef.current) return;
+        clickEvent.preventDefault();
+        clickEvent.stopPropagation();
+        suppressExternalSwipeClickRef.current = false;
+      }}
+    />
   );
 }
 
@@ -11914,8 +11761,6 @@ function ExternalContextEventPanel({
   onPromote,
   promoting,
   permissions,
-  ariaHidden,
-  style,
   onPointerDown,
   onPointerMove,
   onPointerUp,
@@ -11931,8 +11776,6 @@ function ExternalContextEventPanel({
   onPromote: () => Promise<void>;
   promoting: boolean;
   permissions: AppPermissions;
-  ariaHidden?: boolean;
-  style?: React.CSSProperties;
   onPointerDown?: React.PointerEventHandler<HTMLElement>;
   onPointerMove?: React.PointerEventHandler<HTMLElement>;
   onPointerUp?: React.PointerEventHandler<HTMLElement>;
@@ -11947,14 +11790,12 @@ function ExternalContextEventPanel({
 
   return (
     <section
-      aria-hidden={ariaHidden}
-      className={cn("flex min-h-0 w-full min-w-0 touch-pan-y flex-1 flex-col gap-5 overflow-hidden", ariaHidden ? "pointer-events-none absolute inset-0 z-0" : "relative z-10")}
+      className="flex min-h-0 w-full min-w-0 touch-pan-y flex-1 flex-col gap-5 overflow-hidden"
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
       onPointerCancel={onPointerCancel}
       onClickCapture={onClickCapture}
-      style={style}
     >
       <Card className="premium-surface min-w-0 shrink-0 overflow-hidden p-5 sm:p-8">
         <div className="flex items-start justify-between gap-4">
@@ -12070,8 +11911,6 @@ function ExternalContextEventPanel({
 
 function ProductionDetail({
   event,
-  previousEvent,
-  nextEvent,
   hasPrevious,
   hasNext,
   goPrevious,
@@ -12099,13 +11938,10 @@ function ProductionDetail({
   onDownloadDocument,
   onTimelineTimeEditStart,
   onTimelineTimeEditEnd,
-  onEventDateSwipeTransitionChange,
   permissions,
   profile,
 }: {
   event: ProductionEvent;
-  previousEvent: ProductionEvent | null;
-  nextEvent: ProductionEvent | null;
   hasPrevious: boolean;
   hasNext: boolean;
   goPrevious: () => void;
@@ -12133,7 +11969,6 @@ function ProductionDetail({
   onDownloadDocument: (document: EventDocument) => Promise<void>;
   onTimelineTimeEditStart: (saveTime: () => Promise<void>) => void;
   onTimelineTimeEditEnd: () => void;
-  onEventDateSwipeTransitionChange: (transition: EventDateSwipeTransition) => void;
   permissions: AppPermissions;
   profile: UserProfile | null;
 }) {
@@ -12150,50 +11985,9 @@ function ProductionDetail({
   const detailScrollContainerRef = useRef<HTMLDivElement | null>(null);
   const detailBlockRef = useRef<HTMLDivElement | null>(null);
   const previousContextSelectionKeyRef = useRef<string | null>(null);
-  const eventSwipeViewportRef = useRef<HTMLDivElement | null>(null);
   const eventSwipeStartRef = useRef<{ pointerId: number; x: number; y: number; axis: "horizontal" | "vertical" | null } | null>(null);
-  const eventSwipeResetAfterEventChangeRef = useRef(false);
   const suppressEventSwipeClickRef = useRef(false);
-  const [eventSwipeOffset, setEventSwipeOffset] = useState(0);
-  const [eventSwipeIncomingOffset, setEventSwipeIncomingOffset] = useState(0);
-  const [eventSwipeIncomingEvent, setEventSwipeIncomingEvent] = useState<ProductionEvent | null>(null);
-  const [isEventSwipeDragging, setIsEventSwipeDragging] = useState(false);
-  const [eventSwipeAnimating, setEventSwipeAnimating] = useState(false);
   const eventDisplay = getProductionEventDisplay(event);
-
-  function publishEventDateSwipeTransition({
-    currentOffset,
-    incomingOffset,
-    incomingEvent,
-    dragging,
-  }: {
-    currentOffset: number;
-    incomingOffset: number;
-    incomingEvent: ProductionEvent | null;
-    dragging: boolean;
-  }) {
-    onEventDateSwipeTransitionChange({
-      currentOffset,
-      incomingOffset,
-      incomingDateLabel: incomingEvent ? formatFullDate(incomingEvent.date) : null,
-      dragging,
-    });
-  }
-
-  useEffect(() => {
-    onEventDateSwipeTransitionChange({
-      currentOffset: eventSwipeOffset,
-      incomingOffset: eventSwipeIncomingOffset,
-      incomingDateLabel: eventSwipeIncomingEvent ? formatFullDate(eventSwipeIncomingEvent.date) : null,
-      dragging: isEventSwipeDragging,
-    });
-  }, [
-    eventSwipeIncomingEvent,
-    eventSwipeIncomingOffset,
-    eventSwipeOffset,
-    isEventSwipeDragging,
-    onEventDateSwipeTransitionChange,
-  ]);
 
   const contextSelectionKey =
     contextSelection?.type === "option"
@@ -12286,38 +12080,6 @@ function ProductionDetail({
 
     scrollContainer.scrollTop = 0;
     scrollContainer.scrollLeft = 0;
-  }, [event.id]);
-
-  useLayoutEffect(() => {
-    if (!eventSwipeResetAfterEventChangeRef.current) return;
-
-    eventSwipeResetAfterEventChangeRef.current = false;
-    const scrollContainer = detailScrollContainerRef.current;
-    if (scrollContainer) {
-      scrollContainer.scrollTop = 0;
-      scrollContainer.scrollLeft = 0;
-    }
-    publishEventDateSwipeTransition({
-      currentOffset: 0,
-      incomingOffset: 0,
-      incomingEvent: null,
-      dragging: true,
-    });
-    setIsEventSwipeDragging(true);
-    setEventSwipeOffset(0);
-    setEventSwipeIncomingOffset(0);
-    setEventSwipeIncomingEvent(null);
-
-    window.requestAnimationFrame(() => {
-      publishEventDateSwipeTransition({
-        currentOffset: 0,
-        incomingOffset: 0,
-        incomingEvent: null,
-        dragging: false,
-      });
-      setIsEventSwipeDragging(false);
-      setEventSwipeAnimating(false);
-    });
   }, [event.id]);
 
   function selectOption(option: EventOption) {
@@ -12437,59 +12199,20 @@ function ProductionDetail({
 
   function resetEventSwipe() {
     eventSwipeStartRef.current = null;
-    publishEventDateSwipeTransition({
-      currentOffset: 0,
-      incomingOffset: 0,
-      incomingEvent: null,
-      dragging: false,
-    });
-    setIsEventSwipeDragging(false);
-    setEventSwipeOffset(0);
-    setEventSwipeIncomingOffset(0);
-    setEventSwipeIncomingEvent(null);
   }
 
-  function animateEventNavigation(direction: -1 | 1, fromDrag = false) {
+  function navigateEventByDirection(direction: -1 | 1) {
     const canNavigate = direction === 1 ? hasNext : hasPrevious;
-    const incomingEvent = direction === 1 ? nextEvent : previousEvent;
-    if (!canNavigate || !incomingEvent || eventSwipeAnimating) {
+    if (!canNavigate) {
       resetEventSwipe();
       return;
     }
 
-    const viewportWidth = eventSwipeViewportRef.current?.clientWidth ?? window.innerWidth;
-    const pageStep = getSwipePageStep(viewportWidth);
-    const exitOffset = direction === 1 ? -pageStep : pageStep;
-    const incomingStartOffset = direction === 1 ? pageStep : -pageStep;
-    eventSwipeResetAfterEventChangeRef.current = true;
-    publishEventDateSwipeTransition({
-      currentOffset: exitOffset,
-      incomingOffset: 0,
-      incomingEvent,
-      dragging: false,
-    });
-    setEventSwipeIncomingEvent(incomingEvent);
-    setEventSwipeIncomingOffset(fromDrag ? eventSwipeIncomingOffset : incomingStartOffset);
-    setIsEventSwipeDragging(false);
-    setEventSwipeAnimating(true);
-    setEventSwipeOffset(exitOffset);
-    window.requestAnimationFrame(() => {
-      setEventSwipeIncomingOffset(0);
-    });
-
-    window.setTimeout(() => {
-      const scrollContainer = detailScrollContainerRef.current;
-      if (scrollContainer) {
-        scrollContainer.scrollTop = 0;
-        scrollContainer.scrollLeft = 0;
-      }
-
-      if (direction === 1) {
-        goNext();
-      } else {
-        goPrevious();
-      }
-    }, PAGE_TRANSITION_MS);
+    if (direction === 1) {
+      goNext();
+    } else {
+      goPrevious();
+    }
   }
 
   function beginEventSwipe(pointerId: number, clientX: number, clientY: number) {
@@ -12500,18 +12223,11 @@ function ProductionDetail({
       axis: null,
     };
     suppressEventSwipeClickRef.current = false;
-    publishEventDateSwipeTransition({
-      currentOffset: 0,
-      incomingOffset: 0,
-      incomingEvent: null,
-      dragging: true,
-    });
-    setIsEventSwipeDragging(true);
   }
 
   function updateEventSwipe(pointerId: number, clientX: number, clientY: number, currentTargetWidth: number, preventDefault: () => void) {
     const swipeStart = eventSwipeStartRef.current;
-    if (!swipeStart || swipeStart.pointerId !== pointerId || eventSwipeAnimating) return;
+    if (!swipeStart || swipeStart.pointerId !== pointerId) return;
 
     const deltaX = clientX - swipeStart.x;
     const deltaY = clientY - swipeStart.y;
@@ -12529,37 +12245,6 @@ function ProductionDetail({
 
     preventDefault();
     suppressEventSwipeClickRef.current = true;
-
-    const canNavigate = deltaX < 0 ? hasNext : hasPrevious;
-    const viewportWidth = eventSwipeViewportRef.current?.clientWidth ?? currentTargetWidth;
-    const pageStep = getSwipePageStep(viewportWidth);
-    const resistedOffset = canNavigate ? deltaX : deltaX * 0.22;
-    const boundedOffset = Math.max(-pageStep, Math.min(pageStep, resistedOffset));
-    setEventSwipeOffset(boundedOffset);
-
-    const direction = deltaX < 0 ? 1 : -1;
-    const incomingEvent = direction === 1 ? nextEvent : previousEvent;
-    if (canNavigate && incomingEvent) {
-      const incomingStartOffset = direction === 1 ? pageStep : -pageStep;
-      const nextIncomingOffset = Math.max(-pageStep, Math.min(pageStep, incomingStartOffset + deltaX));
-      publishEventDateSwipeTransition({
-        currentOffset: boundedOffset,
-        incomingOffset: nextIncomingOffset,
-        incomingEvent,
-        dragging: true,
-      });
-      setEventSwipeIncomingEvent(incomingEvent);
-      setEventSwipeIncomingOffset(nextIncomingOffset);
-    } else {
-      publishEventDateSwipeTransition({
-        currentOffset: boundedOffset,
-        incomingOffset: 0,
-        incomingEvent: null,
-        dragging: true,
-      });
-      setEventSwipeIncomingEvent(null);
-      setEventSwipeIncomingOffset(0);
-    }
   }
 
   function finishEventSwipe(pointerId: number, clientX: number, clientY: number, currentTargetWidth: number) {
@@ -12568,29 +12253,17 @@ function ProductionDetail({
 
     const deltaX = clientX - swipeStart.x;
     const deltaY = clientY - swipeStart.y;
-    const viewportWidth = eventSwipeViewportRef.current?.clientWidth ?? currentTargetWidth;
+    const viewportWidth = currentTargetWidth;
     const swipeThreshold = getEventSwipeThreshold(viewportWidth);
     eventSwipeStartRef.current = null;
-    setIsEventSwipeDragging(false);
 
     if (swipeStart.axis === "horizontal" && Math.abs(deltaX) >= swipeThreshold && Math.abs(deltaX) >= Math.abs(deltaY) * EVENT_SWIPE_HORIZONTAL_DOMINANCE) {
-      animateEventNavigation(deltaX < 0 ? 1 : -1, true);
-      return;
+      navigateEventByDirection(deltaX < 0 ? 1 : -1);
     }
-
-    setEventSwipeOffset(0);
-    setEventSwipeIncomingOffset(0);
-    setEventSwipeIncomingEvent(null);
-    publishEventDateSwipeTransition({
-      currentOffset: 0,
-      incomingOffset: 0,
-      incomingEvent: null,
-      dragging: false,
-    });
   }
 
   function handleEventSwipePointerDown(pointerEvent: ReactPointerEvent<HTMLDivElement>) {
-    if (eventSwipeStartRef.current || eventSwipeAnimating || pointerEvent.pointerType === "mouse" || !isTouchEventSwipeTarget(pointerEvent.target)) return;
+    if (eventSwipeStartRef.current || pointerEvent.pointerType === "mouse" || !isTouchEventSwipeTarget(pointerEvent.target)) return;
     if (typeof window !== "undefined" && !window.matchMedia("(hover: none), (pointer: coarse)").matches) return;
 
     beginEventSwipe(pointerEvent.pointerId, pointerEvent.clientX, pointerEvent.clientY);
@@ -12606,25 +12279,9 @@ function ProductionDetail({
   }
 
   return (
-    <div
-      ref={eventSwipeViewportRef}
-      className="relative flex min-h-0 flex-1 overflow-hidden"
-    >
-      {eventSwipeIncomingEvent && (
-        <EventSwipePreview
-          event={eventSwipeIncomingEvent}
-          style={{
-            transform: `translate3d(${eventSwipeIncomingOffset}px, 0, 0)`,
-            transition: isEventSwipeDragging ? undefined : `transform ${PAGE_TRANSITION_MS}ms ${PAGE_TRANSITION_EASING}`,
-          }}
-        />
-      )}
+    <>
       <section
-        className="relative z-10 flex min-h-0 w-full touch-pan-y flex-1 flex-col gap-5 overflow-hidden"
-        style={{
-          transform: `translate3d(${eventSwipeOffset}px, 0, 0)`,
-          transition: isEventSwipeDragging ? undefined : `transform ${PAGE_TRANSITION_MS}ms ${PAGE_TRANSITION_EASING}`,
-        }}
+        className="flex min-h-0 w-full touch-pan-y flex-1 flex-col gap-5 overflow-hidden"
         onPointerDown={handleEventSwipePointerDown}
         onPointerMove={handleEventSwipePointerMove}
         onPointerUp={handleEventSwipePointerUp}
@@ -12662,10 +12319,10 @@ function ProductionDetail({
                 Modifier
               </button>
             )}
-            <button onClick={() => animateEventNavigation(-1)} disabled={!hasPrevious} className={calendarArrowClassName} aria-label="Événement précédent">
+            <button onClick={() => navigateEventByDirection(-1)} disabled={!hasPrevious} className={calendarArrowClassName} aria-label="Événement précédent">
               ←
             </button>
-            <button onClick={() => animateEventNavigation(1)} disabled={!hasNext} className={calendarArrowClassName} aria-label="Événement suivant">
+            <button onClick={() => navigateEventByDirection(1)} disabled={!hasNext} className={calendarArrowClassName} aria-label="Événement suivant">
               →
             </button>
           </div>
@@ -12964,145 +12621,7 @@ function ProductionDetail({
         onConfirm={() => void deleteSelectedGridItem()}
       />
     )}
-    </div>
-  );
-}
-
-function EventSwipePreview({ event, style }: { event: ProductionEvent; style: React.CSSProperties }) {
-  const display = getProductionEventDisplay(event);
-  return (
-    <section aria-hidden className="pointer-events-none absolute inset-0 z-0 flex min-h-0 w-full flex-col gap-5 overflow-hidden" style={style}>
-      <Card className="premium-surface shrink-0 p-5 sm:p-8">
-        <div className="flex items-start justify-between gap-4">
-          <div className="min-w-0 flex-1">
-            <div className="mb-3 flex flex-wrap items-center gap-2">
-              <EventCalendarBadge event={event} />
-            </div>
-            <h1 className="truncate text-4xl font-semibold leading-tight text-stone-950 sm:text-6xl">{display.title}</h1>
-            {display.subtitle && <p className="mt-2 truncate text-base font-medium text-stone-500">{display.subtitle}</p>}
-          </div>
-        </div>
-        <ProductionTimeline
-          event={event}
-          onUpdateTime={async () => {}}
-          onTimelineTimeEditStart={() => {}}
-          onTimelineTimeEditEnd={() => {}}
-        />
-      </Card>
-
-      <div className="no-scrollbar min-h-0 flex-1 space-y-5 overflow-hidden pb-6">
-        <Card className="premium-surface overflow-hidden p-3 sm:p-5">
-          <div className="grid grid-cols-[repeat(3,minmax(0,1fr))] gap-1.5 sm:gap-4 lg:items-start">
-            <div className="min-w-0">
-              <SectionHeader label="Options" tone="option" addLabel="Ajouter une option" onAdd={() => {}} />
-              <div className="grid grid-cols-1 gap-1.5 sm:gap-2">
-                {event.options.map((option) => {
-                const Icon = getOptionIcon(option.label);
-                const optionTone = getOptionTone(option.status);
-                const optionCompletedName = option.status === "completed" ? getCompletedByNameForDisplay(option) : null;
-                const showOptionCompletedName = Boolean(optionCompletedName);
-                return (
-                  <div
-                    key={option.id}
-                    className={cn(
-                      "group relative flex min-h-[4.75rem] items-center gap-1.5 rounded-xl border-2 sm:min-h-20 sm:gap-2",
-                      optionTone.surface,
-                      optionTone.border,
-                      optionTone.hover,
-                    )}
-                  >
-                    <div
-                      className={cn(
-                        "flex min-h-[4.75rem] min-w-0 flex-1 px-2 py-3 text-left sm:min-h-20 sm:px-3",
-                        showOptionCompletedName ? "flex-col items-start justify-between gap-2" : "items-center gap-1.5 sm:gap-2",
-                      )}
-                    >
-                      {showOptionCompletedName ? (
-                        <>
-                          <span className="inline-flex max-w-full shrink-0 rounded-full border border-emerald-300 bg-white/75 px-2 py-0.5 text-base font-bold leading-tight text-emerald-800">
-                            <span className="truncate">{optionCompletedName}</span>
-                          </span>
-                          <span className="flex w-full min-w-0 items-center gap-1.5 pr-5 sm:gap-2">
-                            <Icon className={cn("h-4 w-4 shrink-0 sm:h-5 sm:w-5", optionTone.icon)} />
-                            <span className={cn("min-w-0 flex-1 truncate text-base font-semibold", optionTone.text)}>{option.label}</span>
-                          </span>
-                        </>
-                      ) : (
-                        <>
-                          <Icon className={cn("h-4 w-4 shrink-0 sm:h-5 sm:w-5", optionTone.icon)} />
-                          <span className={cn("min-w-0 flex-1 truncate pr-5 text-base font-semibold", optionTone.text)}>{option.label}</span>
-                        </>
-                      )}
-                    </div>
-                    <span className="absolute right-1.5 top-1.5 flex h-6 w-6 items-center justify-center rounded-full text-emerald-500 opacity-100 [@media(hover:hover)]:opacity-0">
-                      <X className="h-3.5 w-3.5" />
-                    </span>
-                  </div>
-                );
-              })}
-              </div>
-            </div>
-            <div className="min-w-0">
-              <SectionHeader label="Liens" tone="link" addLabel="Ajouter un lien" onAdd={() => {}} />
-              <div className="grid grid-cols-1 gap-1.5 sm:gap-2">
-                {event.links.map((link) => {
-                const Icon = getLinkIcon(link.label);
-                const linkTone = getLinkTone(getLinkState(link));
-                return (
-                  <div
-                    key={link.id}
-                    className={cn(
-                      "group relative flex min-h-[4.75rem] items-center gap-1.5 rounded-xl border-2 sm:min-h-20 sm:gap-2",
-                      linkTone.surface,
-                      linkTone.border,
-                      linkTone.hover,
-                    )}
-                  >
-                    <div className="flex min-h-[4.75rem] min-w-0 flex-1 items-center gap-1.5 px-2 py-3 text-left sm:min-h-20 sm:gap-2 sm:px-3">
-                      <Icon className={cn("h-4 w-4 shrink-0 sm:h-5 sm:w-5", linkTone.icon)} />
-                      <span className={cn("min-w-0 flex-1 truncate pr-5 text-base font-semibold", linkTone.text)}>{link.label}</span>
-                    </div>
-                    <ExternalLink className="mr-8 hidden h-4 w-4 shrink-0 text-sky-400 sm:block" />
-                    <span className="absolute right-1.5 top-1.5 flex h-6 w-6 items-center justify-center rounded-full text-sky-500 opacity-100 [@media(hover:hover)]:opacity-0">
-                      <X className="h-3.5 w-3.5" />
-                    </span>
-                  </div>
-                );
-              })}
-              </div>
-            </div>
-            <div className="min-w-0">
-              <SectionHeader label="Documents" tone="document" addLabel="Ajouter un document" onAdd={() => {}} />
-              <div className="grid grid-cols-1 gap-1.5 sm:gap-2">
-                {event.documentGroups.map((group) => {
-                const Icon = getDocumentGroupIcon(group);
-                const documentTone = getDocumentTone(group.files.length > 0);
-                return (
-                  <div
-                    key={group.id}
-                    className={cn(
-                      "group relative flex min-h-[4.75rem] items-center gap-1.5 rounded-xl border-2 sm:min-h-20 sm:gap-2",
-                      documentTone.surface,
-                      documentTone.border,
-                      documentTone.hover,
-                    )}
-                  >
-                    <div className="flex min-h-[4.75rem] min-w-0 flex-1 items-center gap-1.5 px-2 py-3 text-left sm:min-h-20 sm:gap-2 sm:px-3">
-                      <Icon className={cn("h-4 w-4 shrink-0 sm:h-5 sm:w-5", documentTone.icon)} />
-                      <span className={cn("min-w-0 flex-1 truncate pr-5 text-base font-semibold", documentTone.text)}>{group.label}</span>
-                    </div>
-                    <span className="absolute right-1.5 top-1.5 flex h-6 w-6 items-center justify-center rounded-full text-amber-500 opacity-100 [@media(hover:hover)]:opacity-0">
-                      <X className="h-3.5 w-3.5" />
-                    </span>
-                  </div>
-                );
-              })}
-              </div>
-            </div>
-          </div>
-        </Card>
-      </div>
-    </section>
+    </>
   );
 }
 
