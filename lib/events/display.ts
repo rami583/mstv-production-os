@@ -45,11 +45,16 @@ export function isGenericExternalEventName(value: string) {
 }
 
 export function getProductionEventDisplay(event: DisplayProductionEvent) {
-  const title = event.clientName.trim() || event.eventName.trim() || "Événement";
+  const rawTitle = event.clientName.trim() || event.eventName.trim();
   const subtitle = event.eventName.trim();
 
   if (!isGoogleOrAppleImportedEvent(event)) {
-    return { title, subtitle };
+    return { title: rawTitle || "Événement", subtitle };
+  }
+
+  const title = rawTitle;
+  if (!title && (!subtitle || isGenericExternalEventName(subtitle))) {
+    return { title: "", subtitle: "" };
   }
 
   if (!subtitle || isGenericExternalEventName(subtitle) || normalizeDisplayLabel(subtitle) === normalizeDisplayLabel(title)) {

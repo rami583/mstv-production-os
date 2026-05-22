@@ -1,4 +1,4 @@
-import { getEffectiveProductionEventRole } from "@/lib/events/display";
+import { getEffectiveProductionEventRole, isGenericExternalEventName, isGoogleOrAppleImportedEvent } from "@/lib/events/display";
 
 export type EventEditorFormInput = {
   clientName: string;
@@ -116,15 +116,24 @@ export function getCurrentEditorExternalCalendarId(event: EventEditorEvent | nul
 }
 
 export function getEventEditorInitialForm(event: EventEditorEvent | null, selectedDateKey: string): EventEditorFormInput {
+  const eventName = event && isGoogleOrAppleImportedEvent(event) && isGenericExternalEventName(event.eventName) ? "" : event?.eventName ?? "";
+  const isImportedProductionWithoutOverallTimes =
+    event &&
+    isGoogleOrAppleImportedEvent(event) &&
+    getEffectiveProductionEventRole(event) === "production" &&
+    !event.clientArrivalTime &&
+    !event.endOfDayTime &&
+    Boolean(event.startTime || event.endTime);
+
   return {
     clientName: event?.clientName ?? "",
-    eventName: event?.eventName ?? "",
+    eventName,
     date: event?.date ?? selectedDateKey,
     isAllDay: event?.isAllDay ?? false,
-    clientArrivalTime: event ? toTimeInputValue(event.clientArrivalTime) : "08:30",
-    startTime: event ? toTimeInputValue(event.startTime) : "10:00",
-    endTime: event ? toTimeInputValue(event.endTime) : "11:30",
-    endOfDayTime: event ? toTimeInputValue(event.endOfDayTime) : "13:00",
+    clientArrivalTime: event ? toTimeInputValue(isImportedProductionWithoutOverallTimes ? event.startTime : event.clientArrivalTime) : "10:00",
+    startTime: event ? (isImportedProductionWithoutOverallTimes ? "" : toTimeInputValue(event.startTime)) : "",
+    endTime: event ? (isImportedProductionWithoutOverallTimes ? "" : toTimeInputValue(event.endTime)) : "",
+    endOfDayTime: event ? toTimeInputValue(isImportedProductionWithoutOverallTimes ? event.endTime : event.endOfDayTime) : "11:30",
     syncExternalCalendarId: getCurrentEditorExternalCalendarId(event),
   };
 }
@@ -177,14 +186,4 @@ export function getNormalizedEventEditorForm(input: EventEditorFormInput, showPr
           endOfDayTime: "",
         },
   );
-}
-
-export function getEditorExternalCalendarProviderLabel(providerType: EventEditorExternalCalendarProviderType) {
-  const labels: Record<EventEditorExternalCalendarProviderType, string> = {
-    google: "Google",
-    microsoft: "Outlook",
-    apple_caldav: "Apple",
-    ics_read_only: "ICS",
-  };
-  return labels[providerType];
 }

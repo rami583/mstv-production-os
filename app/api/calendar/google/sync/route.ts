@@ -83,7 +83,7 @@ function parseGoogleTime(value?: string) {
 }
 
 function parseGoogleSummary(summary?: string) {
-  const cleanSummary = summary?.trim() || "Google Calendar";
+  const cleanSummary = summary?.trim() || "";
   const separators = [" - ", " – ", " — ", " | ", " : ", " / "];
 
   for (const separator of separators) {
@@ -95,7 +95,7 @@ function parseGoogleSummary(summary?: string) {
     }
   }
 
-  return { clientName: cleanSummary, eventName: "Événement Google" };
+  return { clientName: cleanSummary, eventName: "" };
 }
 
 function normalizeGoogleTime(time: string | null) {
@@ -122,19 +122,22 @@ function getNextDate(dateKey: string) {
   return nextDate.toISOString().slice(0, 10);
 }
 
-function mapGoogleEventToMstvEvent(event: GoogleEvent) {
+function mapGoogleEventToMstvEvent(event: GoogleEvent, calendarRole: "business_primary" | "external_context" | string | null | undefined) {
   const parsedSummary = parseGoogleSummary(event.summary);
   const isAllDay = Boolean(event.start?.date);
   const date = parseGoogleDate(event.start?.date ?? event.start?.dateTime) ?? new Date().toISOString().slice(0, 10);
+  const startTime = isAllDay ? null : parseGoogleTime(event.start?.dateTime);
+  const endTime = isAllDay ? null : parseGoogleTime(event.end?.dateTime);
+  const isBusinessPrimary = calendarRole === "business_primary";
   return {
     client_name: parsedSummary.clientName,
     event_name: parsedSummary.eventName,
     date,
     is_all_day: isAllDay,
-    client_arrival_time: null,
-    start_time: isAllDay ? null : parseGoogleTime(event.start?.dateTime),
-    end_time: isAllDay ? null : parseGoogleTime(event.end?.dateTime),
-    end_of_day_time: null,
+    client_arrival_time: isBusinessPrimary ? startTime : null,
+    start_time: isBusinessPrimary ? null : startTime,
+    end_time: isBusinessPrimary ? null : endTime,
+    end_of_day_time: isBusinessPrimary ? endTime : null,
   };
 }
 
@@ -664,7 +667,7 @@ export async function POST(request: Request) {
         .maybeSingle();
 
       if (linkError) throwSupabaseSyncError("supabase_read", "lookup_external_event_link", linkError);
-      const values = mapGoogleEventToMstvEvent(googleEvent);
+      const values = mapGoogleEventToMstvEvent(googleEvent, calendar.calendar_role);
 
       if (!existingLink) {
         if (!calendar.id || !calendar.provider_calendar_id || !googleEvent.id) {

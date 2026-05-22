@@ -272,7 +272,7 @@ function parseAppleVEvents(icsText: string, metadata: { etag: string | null; hre
 }
 
 function parseAppleSummary(summary?: string) {
-  const cleanSummary = summary?.trim() || "Apple Calendar";
+  const cleanSummary = summary?.trim() || "";
   const separators = [" - ", " – ", " — ", " | ", " : ", " / "];
 
   for (const separator of separators) {
@@ -284,7 +284,7 @@ function parseAppleSummary(summary?: string) {
     }
   }
 
-  return { clientName: cleanSummary, eventName: "Événement Apple" };
+  return { clientName: cleanSummary, eventName: "" };
 }
 
 function getLocalDateKeyFromIso(isoValue: string) {
@@ -307,17 +307,20 @@ function getLocalTimeFromIso(isoValue: string | null, allDay = false) {
   return `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
 }
 
-function mapAppleEventToMstvEvent(event: AppleCalDavEvent): ProductionEventInsert {
+function mapAppleEventToMstvEvent(event: AppleCalDavEvent, calendarRole: ExternalCalendarRow["calendar_role"]): ProductionEventInsert {
   const parsedSummary = parseAppleSummary(event.summary);
+  const startTime = getLocalTimeFromIso(event.startTime, event.allDay);
+  const endTime = getLocalTimeFromIso(event.endTime, event.allDay);
+  const isBusinessPrimary = calendarRole === "business_primary";
   return {
     client_name: parsedSummary.clientName,
     event_name: parsedSummary.eventName,
     date: getLocalDateKeyFromIso(event.startTime),
     is_all_day: event.allDay,
-    client_arrival_time: null,
-    start_time: getLocalTimeFromIso(event.startTime, event.allDay),
-    end_time: getLocalTimeFromIso(event.endTime, event.allDay),
-    end_of_day_time: null,
+    client_arrival_time: isBusinessPrimary ? startTime : null,
+    start_time: isBusinessPrimary ? null : startTime,
+    end_time: isBusinessPrimary ? null : endTime,
+    end_of_day_time: isBusinessPrimary ? endTime : null,
   };
 }
 
@@ -492,7 +495,7 @@ export async function POST(request: Request) {
 
       if (linkError) throwSupabaseError("lookup_external_event_link", linkError);
 
-      const values = mapAppleEventToMstvEvent(appleEvent);
+      const values = mapAppleEventToMstvEvent(appleEvent, calendar.calendar_role);
       if (!existingLink) {
         if (!calendar.id || !calendar.provider_calendar_id || !appleEvent.externalEventId) {
           throw new Error("Apple Calendar a été lu, mais MSTV n’a pas pu enregistrer les événements.");

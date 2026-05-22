@@ -3,7 +3,6 @@
 import { useEffect, useState, type ComponentType, type FormEvent, type PointerEvent, type ReactNode } from "react";
 import {
   getCurrentEditorExternalCalendarId,
-  getEditorExternalCalendarProviderLabel,
   getEditorSelectedSyncCalendar,
   getEventEditorInitialForm,
   getNormalizedEventEditorForm,
@@ -238,7 +237,7 @@ export function EventEditorModal({
                   <option value="">MSTV uniquement</option>
                   {selectableSyncCalendars.map((calendar) => (
                     <option key={calendar.id} value={calendar.id}>
-                      {calendar.name} · {getEditorExternalCalendarProviderLabel(calendar.providerType)}
+                      {calendar.name}
                     </option>
                   ))}
                 </select>
