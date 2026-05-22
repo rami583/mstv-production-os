@@ -9420,7 +9420,7 @@ export default function Home() {
           setScreen={setScreen}
           yearLabel={yearLabel}
           detailDateLabel={screen === "detail" && selectedEvent ? formatFullDate(selectedEvent.date) : null}
-          detailDateTransition={screen === "detail" ? eventDateSwipeTransition : undefined}
+          detailDateTransition={undefined}
           onEditDetailDate={screen === "detail" && selectedEvent && headerPermissions.canManageEvents ? () => setDateEditorOpen(true) : undefined}
           goToday={goToday}
           isSelectedDateToday={isSelectedDateToday}
@@ -9521,6 +9521,8 @@ export default function Home() {
             isExternalContextProductionEvent(selectedEvent) ? (
               <ExternalContextEventDetail
                 event={selectedEvent}
+                previousEvent={chronologicalEvents[selectedEventIndex - 1] ?? null}
+                nextEvent={chronologicalEvents[selectedEventIndex + 1] ?? null}
                 hasPrevious={hasPreviousEvent}
                 hasNext={hasNextEvent}
                 goPrevious={() => navigateEvent(-1)}
@@ -11701,6 +11703,8 @@ function SwipeableCalendarEventRow({
 
 function ExternalContextEventDetail({
   event,
+  previousEvent,
+  nextEvent,
   hasPrevious,
   hasNext,
   goPrevious,
@@ -11711,6 +11715,8 @@ function ExternalContextEventDetail({
   permissions,
 }: {
   event: ProductionEvent;
+  previousEvent: ProductionEvent | null;
+  nextEvent: ProductionEvent | null;
   hasPrevious: boolean;
   hasNext: boolean;
   goPrevious: () => void;
@@ -11720,19 +11726,19 @@ function ExternalContextEventDetail({
   promoting: boolean;
   permissions: AppPermissions;
 }) {
-  const display = getProductionEventDisplay(event);
-  const details = getExternalContextDetails(event);
-  const timeRange = formatTimeRange(event.startTime, event.endTime) || "Journée";
-  const descriptionView = getExternalEventDescriptionView(details.description);
-  const wrapStyle: React.CSSProperties = { overflowWrap: "anywhere", wordBreak: "break-word" };
   const externalSwipeStartRef = useRef<{ pointerId: number; x: number; y: number; axis: "horizontal" | "vertical" | null } | null>(null);
   const suppressExternalSwipeClickRef = useRef(false);
+  const externalSwipeViewportRef = useRef<HTMLDivElement | null>(null);
   const [externalSwipeOffset, setExternalSwipeOffset] = useState(0);
+  const [externalSwipeIncomingOffset, setExternalSwipeIncomingOffset] = useState(0);
+  const [externalSwipeIncomingEvent, setExternalSwipeIncomingEvent] = useState<ProductionEvent | null>(null);
   const [externalSwipeDragging, setExternalSwipeDragging] = useState(false);
   const [externalSwipeAnimating, setExternalSwipeAnimating] = useState(false);
 
   useLayoutEffect(() => {
     setExternalSwipeOffset(0);
+    setExternalSwipeIncomingOffset(0);
+    setExternalSwipeIncomingEvent(null);
     setExternalSwipeDragging(false);
     setExternalSwipeAnimating(false);
     externalSwipeStartRef.current = null;
@@ -11745,8 +11751,39 @@ function ExternalContextEventDetail({
   function resetExternalSwipe() {
     externalSwipeStartRef.current = null;
     setExternalSwipeOffset(0);
+    setExternalSwipeIncomingOffset(0);
+    setExternalSwipeIncomingEvent(null);
     setExternalSwipeDragging(false);
     setExternalSwipeAnimating(false);
+  }
+
+  function animateExternalNavigation(direction: -1 | 1, fromDrag = false) {
+    const canNavigate = direction === 1 ? hasNext : hasPrevious;
+    const incomingEvent = direction === 1 ? nextEvent : previousEvent;
+    if (!canNavigate || !incomingEvent || externalSwipeAnimating) {
+      resetExternalSwipe();
+      return;
+    }
+
+    const viewportWidth = externalSwipeViewportRef.current?.clientWidth ?? window.innerWidth;
+    const pageStep = getSwipePageStep(viewportWidth);
+    const incomingStartOffset = direction === 1 ? pageStep : -pageStep;
+    setExternalSwipeIncomingEvent(incomingEvent);
+    setExternalSwipeIncomingOffset(fromDrag ? externalSwipeIncomingOffset : incomingStartOffset);
+    setExternalSwipeDragging(false);
+    setExternalSwipeAnimating(true);
+    setExternalSwipeOffset(direction === 1 ? -pageStep : pageStep);
+    window.requestAnimationFrame(() => {
+      setExternalSwipeIncomingOffset(0);
+    });
+
+    window.setTimeout(() => {
+      if (direction === 1) {
+        goNext();
+      } else {
+        goPrevious();
+      }
+    }, PAGE_TRANSITION_MS);
   }
 
   function handleExternalSwipePointerDown(pointerEvent: ReactPointerEvent<HTMLElement>) {
@@ -11787,7 +11824,19 @@ function ExternalContextEventDetail({
     const pageStep = getSwipePageStep(pointerEvent.currentTarget.clientWidth || window.innerWidth);
     const canNavigate = deltaX < 0 ? hasNext : hasPrevious;
     const resistedOffset = canNavigate ? deltaX : deltaX * 0.22;
-    setExternalSwipeOffset(Math.max(-pageStep, Math.min(pageStep, resistedOffset)));
+    const boundedOffset = Math.max(-pageStep, Math.min(pageStep, resistedOffset));
+    setExternalSwipeOffset(boundedOffset);
+
+    const direction = deltaX < 0 ? 1 : -1;
+    const incomingEvent = direction === 1 ? nextEvent : previousEvent;
+    if (canNavigate && incomingEvent) {
+      const incomingStartOffset = direction === 1 ? pageStep : -pageStep;
+      setExternalSwipeIncomingEvent(incomingEvent);
+      setExternalSwipeIncomingOffset(Math.max(-pageStep, Math.min(pageStep, incomingStartOffset + deltaX)));
+    } else {
+      setExternalSwipeIncomingEvent(null);
+      setExternalSwipeIncomingOffset(0);
+    }
   }
 
   function handleExternalSwipePointerUp(pointerEvent: ReactPointerEvent<HTMLElement>) {
@@ -11798,7 +11847,6 @@ function ExternalContextEventDetail({
     const deltaY = pointerEvent.clientY - swipeStart.y;
     const viewportWidth = pointerEvent.currentTarget.clientWidth || window.innerWidth;
     const swipeThreshold = getEventSwipeThreshold(viewportWidth);
-    const pageStep = getSwipePageStep(viewportWidth);
     externalSwipeStartRef.current = null;
     setExternalSwipeDragging(false);
 
@@ -11808,43 +11856,120 @@ function ExternalContextEventDetail({
     }
 
     if (deltaX < 0 && hasNext) {
-      setExternalSwipeAnimating(true);
-      setExternalSwipeOffset(-pageStep);
-      window.setTimeout(() => {
-        goNext();
-      }, PAGE_TRANSITION_MS);
+      animateExternalNavigation(1, true);
       return;
     }
 
     if (deltaX > 0 && hasPrevious) {
-      setExternalSwipeAnimating(true);
-      setExternalSwipeOffset(pageStep);
-      window.setTimeout(() => {
-        goPrevious();
-      }, PAGE_TRANSITION_MS);
+      animateExternalNavigation(-1, true);
       return;
     }
 
     setExternalSwipeOffset(0);
+    setExternalSwipeIncomingOffset(0);
+    setExternalSwipeIncomingEvent(null);
   }
 
   return (
+    <div ref={externalSwipeViewportRef} className="relative flex min-h-0 min-w-0 flex-1 overflow-hidden">
+      {externalSwipeIncomingEvent && (
+        <ExternalContextEventPanel
+          event={externalSwipeIncomingEvent}
+          hasPrevious={false}
+          hasNext={false}
+          goPrevious={() => {}}
+          goNext={() => {}}
+          onEditEvent={() => {}}
+          onPromote={async () => {}}
+          promoting={false}
+          permissions={{ ...permissions, canManageEvents: false }}
+          ariaHidden
+          style={{
+            transform: `translate3d(${externalSwipeIncomingOffset}px, 0, 0)`,
+            transition: externalSwipeDragging ? undefined : `transform ${PAGE_TRANSITION_MS}ms ${PAGE_TRANSITION_EASING}`,
+          }}
+        />
+      )}
+      <ExternalContextEventPanel
+        event={event}
+        hasPrevious={hasPrevious}
+        hasNext={hasNext}
+        goPrevious={() => animateExternalNavigation(-1)}
+        goNext={() => animateExternalNavigation(1)}
+        onEditEvent={onEditEvent}
+        onPromote={onPromote}
+        promoting={promoting}
+        permissions={permissions}
+        onPointerDown={handleExternalSwipePointerDown}
+        onPointerMove={handleExternalSwipePointerMove}
+        onPointerUp={handleExternalSwipePointerUp}
+        onPointerCancel={resetExternalSwipe}
+        onClickCapture={(clickEvent) => {
+          if (!suppressExternalSwipeClickRef.current) return;
+          clickEvent.preventDefault();
+          clickEvent.stopPropagation();
+          suppressExternalSwipeClickRef.current = false;
+        }}
+        style={{
+          transform: `translate3d(${externalSwipeOffset}px, 0, 0)`,
+          transition: externalSwipeDragging ? undefined : `transform ${PAGE_TRANSITION_MS}ms ${PAGE_TRANSITION_EASING}`,
+        }}
+      />
+    </div>
+  );
+}
+
+function ExternalContextEventPanel({
+  event,
+  hasPrevious,
+  hasNext,
+  goPrevious,
+  goNext,
+  onEditEvent,
+  onPromote,
+  promoting,
+  permissions,
+  ariaHidden,
+  style,
+  onPointerDown,
+  onPointerMove,
+  onPointerUp,
+  onPointerCancel,
+  onClickCapture,
+}: {
+  event: ProductionEvent;
+  hasPrevious: boolean;
+  hasNext: boolean;
+  goPrevious: () => void;
+  goNext: () => void;
+  onEditEvent: () => void;
+  onPromote: () => Promise<void>;
+  promoting: boolean;
+  permissions: AppPermissions;
+  ariaHidden?: boolean;
+  style?: React.CSSProperties;
+  onPointerDown?: React.PointerEventHandler<HTMLElement>;
+  onPointerMove?: React.PointerEventHandler<HTMLElement>;
+  onPointerUp?: React.PointerEventHandler<HTMLElement>;
+  onPointerCancel?: React.PointerEventHandler<HTMLElement>;
+  onClickCapture?: React.MouseEventHandler<HTMLElement>;
+}) {
+  const display = getProductionEventDisplay(event);
+  const details = getExternalContextDetails(event);
+  const timeRange = formatTimeRange(event.startTime, event.endTime) || "Journée";
+  const descriptionView = getExternalEventDescriptionView(details.description);
+  const wrapStyle: React.CSSProperties = { overflowWrap: "anywhere", wordBreak: "break-word" };
+
+  return (
     <section
-      className="flex min-h-0 w-full min-w-0 touch-pan-y flex-1 flex-col gap-5 overflow-hidden"
-      onPointerDown={handleExternalSwipePointerDown}
-      onPointerMove={handleExternalSwipePointerMove}
-      onPointerUp={handleExternalSwipePointerUp}
-      onPointerCancel={resetExternalSwipe}
-      onClickCapture={(clickEvent) => {
-        if (!suppressExternalSwipeClickRef.current) return;
-        clickEvent.preventDefault();
-        clickEvent.stopPropagation();
-        suppressExternalSwipeClickRef.current = false;
-      }}
-      style={{
-        transform: `translate3d(${externalSwipeOffset}px, 0, 0)`,
-        transition: externalSwipeDragging ? undefined : `transform ${PAGE_TRANSITION_MS}ms ${PAGE_TRANSITION_EASING}`,
-      }}
+      aria-hidden={ariaHidden}
+      className={cn("flex min-h-0 w-full min-w-0 touch-pan-y flex-1 flex-col gap-5 overflow-hidden", ariaHidden ? "pointer-events-none absolute inset-0 z-0" : "relative z-10")}
+      onPointerDown={onPointerDown}
+      onPointerMove={onPointerMove}
+      onPointerUp={onPointerUp}
+      onPointerCancel={onPointerCancel}
+      onClickCapture={onClickCapture}
+      style={style}
     >
       <Card className="premium-surface min-w-0 shrink-0 overflow-hidden p-5 sm:p-8">
         <div className="flex items-start justify-between gap-4">
@@ -12339,7 +12464,7 @@ function ProductionDetail({
     setEventSwipeIncomingEvent(null);
   }
 
-  function animateEventNavigation(direction: -1 | 1) {
+  function animateEventNavigation(direction: -1 | 1, fromDrag = false) {
     const canNavigate = direction === 1 ? hasNext : hasPrevious;
     const incomingEvent = direction === 1 ? nextEvent : previousEvent;
     if (!canNavigate || !incomingEvent || eventSwipeAnimating) {
@@ -12350,6 +12475,7 @@ function ProductionDetail({
     const viewportWidth = eventSwipeViewportRef.current?.clientWidth ?? window.innerWidth;
     const pageStep = getSwipePageStep(viewportWidth);
     const exitOffset = direction === 1 ? -pageStep : pageStep;
+    const incomingStartOffset = direction === 1 ? pageStep : -pageStep;
     eventSwipeResetAfterEventChangeRef.current = true;
     publishEventDateSwipeTransition({
       currentOffset: exitOffset,
@@ -12358,10 +12484,13 @@ function ProductionDetail({
       dragging: false,
     });
     setEventSwipeIncomingEvent(incomingEvent);
+    setEventSwipeIncomingOffset(fromDrag ? eventSwipeIncomingOffset : incomingStartOffset);
     setIsEventSwipeDragging(false);
     setEventSwipeAnimating(true);
     setEventSwipeOffset(exitOffset);
-    setEventSwipeIncomingOffset(0);
+    window.requestAnimationFrame(() => {
+      setEventSwipeIncomingOffset(0);
+    });
 
     window.setTimeout(() => {
       const scrollContainer = detailScrollContainerRef.current;
@@ -12460,7 +12589,7 @@ function ProductionDetail({
     setIsEventSwipeDragging(false);
 
     if (swipeStart.axis === "horizontal" && Math.abs(deltaX) >= swipeThreshold && Math.abs(deltaX) >= Math.abs(deltaY) * EVENT_SWIPE_HORIZONTAL_DOMINANCE) {
-      animateEventNavigation(deltaX < 0 ? 1 : -1);
+      animateEventNavigation(deltaX < 0 ? 1 : -1, true);
       return;
     }
 
@@ -12548,10 +12677,10 @@ function ProductionDetail({
                 Modifier
               </button>
             )}
-            <button onClick={goPrevious} disabled={!hasPrevious} className={calendarArrowClassName} aria-label="Événement précédent">
+            <button onClick={() => animateEventNavigation(-1)} disabled={!hasPrevious} className={calendarArrowClassName} aria-label="Événement précédent">
               ←
             </button>
-            <button onClick={goNext} disabled={!hasNext} className={calendarArrowClassName} aria-label="Événement suivant">
+            <button onClick={() => animateEventNavigation(1)} disabled={!hasNext} className={calendarArrowClassName} aria-label="Événement suivant">
               →
             </button>
           </div>
