@@ -4881,6 +4881,13 @@ export default function Home() {
       message?: string;
       stage?: string;
       status?: number;
+      details?: string | null;
+      oldHrefExists?: boolean;
+      targetCalendarId?: string | null;
+      oldExternalCalendarId?: string | null;
+      linkId?: string | null;
+      newPutStatus?: number | null;
+      oldDeleteStatus?: number | null;
       externalEventId?: string;
       synced?: number;
       warning?: string;
@@ -4902,7 +4909,8 @@ export default function Home() {
         status: response.status,
         payload,
       });
-      throw new Error(action === "move" ? `Déplacement Apple impossible : ${routeMessage}` : routeMessage);
+      const movePrefix = payload?.stage ? `${payload.stage} — ${routeMessage}` : routeMessage;
+      throw new Error(action === "move" ? `Déplacement Apple impossible : ${movePrefix}` : routeMessage);
     }
 
     return payload;
