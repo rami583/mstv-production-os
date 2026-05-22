@@ -441,6 +441,7 @@ type QuoteExtractionResult = {
   eventName: string;
   date: string;
   isAllDay: boolean;
+  isProductionMstv: boolean;
   clientArrivalTime: string;
   startTime: string;
   endTime: string;
@@ -1961,6 +1962,7 @@ function extractQuoteFields(text: string, fallbackDate: string, fileName: string
     eventName: "Événement",
     date,
     isAllDay: false,
+    isProductionMstv: true,
     clientArrivalTime: productionTimeRange.startTime,
     startTime: "",
     endTime: "",
@@ -5772,10 +5774,7 @@ export default function Home() {
 
     const normalizedInput = normalizeEventTimeInput(input);
     const eventId = createLocalId();
-    const selectedExternalCalendar = normalizedInput.syncExternalCalendarId
-      ? externalCalendars.find((calendar) => calendar.id === normalizedInput.syncExternalCalendarId) ?? null
-      : null;
-    const newEventRole: ProductionEventRole = selectedExternalCalendar?.calendarRole === "external_context" ? "external_context" : "production";
+    const newEventRole: ProductionEventRole = normalizedInput.isProductionMstv ? "production" : "external_context";
     const eventInsertPayload: Database["public"]["Tables"]["events"]["Insert"] = {
       id: eventId,
       client_name: normalizedInput.clientName,
@@ -6199,7 +6198,7 @@ export default function Home() {
     const currentExternalCalendarId = currentExternalLink?.externalCalendarId ?? null;
     const requestedExternalCalendarId = normalizedInput.syncExternalCalendarId ?? null;
     const calendarSelectionChanged = requestedExternalCalendarId !== currentExternalCalendarId;
-    const updatePayload = {
+    const updatePayload: Database["public"]["Tables"]["events"]["Update"] = {
       client_name: normalizedInput.clientName,
       event_name: normalizedInput.eventName,
       date: normalizedInput.date,
@@ -6208,6 +6207,7 @@ export default function Home() {
       start_time: normalizedInput.startTime || null,
       end_time: normalizedInput.endTime || null,
       end_of_day_time: normalizedInput.endOfDayTime || null,
+      event_role: normalizedInput.isProductionMstv ? "production" : "external_context",
     };
 
     const { data, error: updateError } = await supabase
@@ -9511,7 +9511,7 @@ function AppHeader({
   onDeleteEvent: () => void;
 }) {
   const menuWrapperRef = useRef<HTMLDivElement | null>(null);
-  const hasCreateMenuActions = canImportQuote || canImportNativeMstvCalendar || canCreateEvent || canDuplicateEvent || canDeleteEvent || canOpenTrash;
+  const hasCreateMenuActions = canImportQuote || canCreateEvent || canDuplicateEvent || canDeleteEvent || canOpenTrash;
   const unreadNotificationCount = notifications.filter((notification) => !notification.readAt && importantNotificationTypes.has(notification.type)).length;
 
   useEffect(() => {
@@ -9655,7 +9655,7 @@ function CreateMenu({
   canDeleteEvent: boolean;
   onDeleteEvent: () => void;
 }) {
-  const hasActions = canImportQuote || canImportNativeMstvCalendar || canCreateEvent || canDuplicateEvent || canDeleteEvent || canOpenTrash;
+  const hasActions = canImportQuote || canCreateEvent || canDuplicateEvent || canDeleteEvent || canOpenTrash;
 
   return (
     <div className="absolute right-1 top-14 z-40 w-56 rounded-2xl border border-stone-200 bg-white/95 p-1.5 backdrop-blur-xl">
@@ -9670,14 +9670,6 @@ function CreateMenu({
           className="block w-full rounded-xl px-4 py-3 text-right text-base font-medium text-stone-700 transition hover:bg-[#bb2720]/[0.05] hover:text-stone-950"
         >
           Importer un devis
-        </button>
-      )}
-      {canImportNativeMstvCalendar && (
-        <button
-          onClick={onImportNativeMstvCalendar}
-          className="block w-full rounded-xl px-4 py-3 text-right text-base font-medium text-stone-700 transition hover:bg-[#bb2720]/[0.05] hover:text-stone-950"
-        >
-          Importer calendrier MSTV
         </button>
       )}
       {canCreateEvent && (
@@ -13626,6 +13618,7 @@ function QuoteImportModal({
     eventName: "",
     date: selectedDateKey,
     isAllDay: false,
+    isProductionMstv: false,
     clientArrivalTime: "",
     startTime: "",
     endTime: "",
@@ -13695,6 +13688,7 @@ function QuoteImportModal({
         eventName: "Événement",
         date: extracted.date,
         isAllDay: false,
+        isProductionMstv: true,
         clientArrivalTime: extracted.startTime,
         startTime: "",
         endTime: "",

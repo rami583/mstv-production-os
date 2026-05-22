@@ -71,10 +71,7 @@ export function getProductionEventDisplayLine(event: DisplayProductionEvent) {
 
 export function getEffectiveProductionEventRole(event: DisplayProductionEvent): DisplayProductionEventRole {
   if (event.eventRole === "production") return "production";
-  if (event.externalLinks.some((link) => link.calendarRole === "business_primary")) return "production";
-  if (event.eventRole === "external_context") return "external_context";
-  if (isGoogleOrAppleImportedEvent(event)) return "external_context";
-  return "production";
+  return "external_context";
 }
 
 export function isExternalContextProductionEvent(event: DisplayProductionEvent) {

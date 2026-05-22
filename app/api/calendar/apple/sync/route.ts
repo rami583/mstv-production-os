@@ -307,20 +307,20 @@ function getLocalTimeFromIso(isoValue: string | null, allDay = false) {
   return `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
 }
 
-function mapAppleEventToMstvEvent(event: AppleCalDavEvent, calendarRole: ExternalCalendarRow["calendar_role"]): ProductionEventInsert {
+function mapAppleEventToMstvEvent(event: AppleCalDavEvent, eventRole: "production" | "external_context" | string | null | undefined): ProductionEventInsert {
   const parsedSummary = parseAppleSummary(event.summary);
   const startTime = getLocalTimeFromIso(event.startTime, event.allDay);
   const endTime = getLocalTimeFromIso(event.endTime, event.allDay);
-  const isBusinessPrimary = calendarRole === "business_primary";
+  const isProduction = eventRole === "production";
   return {
     client_name: parsedSummary.clientName,
     event_name: parsedSummary.eventName,
     date: getLocalDateKeyFromIso(event.startTime),
     is_all_day: event.allDay,
-    client_arrival_time: isBusinessPrimary ? startTime : null,
-    start_time: isBusinessPrimary ? null : startTime,
-    end_time: isBusinessPrimary ? null : endTime,
-    end_of_day_time: isBusinessPrimary ? endTime : null,
+    client_arrival_time: isProduction ? startTime : null,
+    start_time: isProduction ? null : startTime,
+    end_time: isProduction ? null : endTime,
+    end_of_day_time: isProduction ? endTime : null,
   };
 }
 
@@ -495,7 +495,6 @@ export async function POST(request: Request) {
 
       if (linkError) throwSupabaseError("lookup_external_event_link", linkError);
 
-      const values = mapAppleEventToMstvEvent(appleEvent, calendar.calendar_role);
       if (!existingLink) {
         if (!calendar.id || !calendar.provider_calendar_id || !appleEvent.externalEventId) {
           throw new Error("Apple Calendar a été lu, mais MSTV n’a pas pu enregistrer les événements.");
@@ -504,10 +503,10 @@ export async function POST(request: Request) {
         const { data: insertedEvent, error: insertError } = await supabase
           .from("events")
           .insert({
-            ...values,
+            ...mapAppleEventToMstvEvent(appleEvent, "external_context"),
             imported_from: "apple_caldav",
             external_import_id: appleEvent.externalEventId,
-            event_role: calendar.calendar_role === "business_primary" ? "production" : "external_context",
+            event_role: "external_context",
           })
           .select()
           .single();
@@ -543,6 +542,16 @@ export async function POST(request: Request) {
         unchanged += 1;
         continue;
       }
+
+      const { data: localEvent, error: localEventError } = await supabase
+        .from("events")
+        .select("event_role")
+        .eq("id", existingLink.event_id)
+        .maybeSingle();
+
+      if (localEventError) throwSupabaseError("load_linked_mstv_event_role", localEventError);
+
+      const values = mapAppleEventToMstvEvent(appleEvent, localEvent?.event_role ?? "external_context");
 
       const { data: updatedEvent, error: updateError } = await supabase
         .from("events")

@@ -122,22 +122,22 @@ function getNextDate(dateKey: string) {
   return nextDate.toISOString().slice(0, 10);
 }
 
-function mapGoogleEventToMstvEvent(event: GoogleEvent, calendarRole: "business_primary" | "external_context" | string | null | undefined) {
+function mapGoogleEventToMstvEvent(event: GoogleEvent, eventRole: "production" | "external_context" | string | null | undefined) {
   const parsedSummary = parseGoogleSummary(event.summary);
   const isAllDay = Boolean(event.start?.date);
   const date = parseGoogleDate(event.start?.date ?? event.start?.dateTime) ?? new Date().toISOString().slice(0, 10);
   const startTime = isAllDay ? null : parseGoogleTime(event.start?.dateTime);
   const endTime = isAllDay ? null : parseGoogleTime(event.end?.dateTime);
-  const isBusinessPrimary = calendarRole === "business_primary";
+  const isProduction = eventRole === "production";
   return {
     client_name: parsedSummary.clientName,
     event_name: parsedSummary.eventName,
     date,
     is_all_day: isAllDay,
-    client_arrival_time: isBusinessPrimary ? startTime : null,
-    start_time: isBusinessPrimary ? null : startTime,
-    end_time: isBusinessPrimary ? null : endTime,
-    end_of_day_time: isBusinessPrimary ? endTime : null,
+    client_arrival_time: isProduction ? startTime : null,
+    start_time: isProduction ? null : startTime,
+    end_time: isProduction ? null : endTime,
+    end_of_day_time: isProduction ? endTime : null,
   };
 }
 
@@ -667,7 +667,6 @@ export async function POST(request: Request) {
         .maybeSingle();
 
       if (linkError) throwSupabaseSyncError("supabase_read", "lookup_external_event_link", linkError);
-      const values = mapGoogleEventToMstvEvent(googleEvent, calendar.calendar_role);
 
       if (!existingLink) {
         if (!calendar.id || !calendar.provider_calendar_id || !googleEvent.id) {
@@ -687,10 +686,10 @@ export async function POST(request: Request) {
         const { data: insertedEvent, error: insertError } = await supabase
           .from("events")
           .insert({
-            ...values,
+            ...mapGoogleEventToMstvEvent(googleEvent, "external_context"),
             imported_from: "google_calendar",
             external_import_id: googleEvent.id,
-            event_role: calendar.calendar_role === "business_primary" ? "production" : "external_context",
+            event_role: "external_context",
           })
           .select()
           .single();
@@ -732,6 +731,8 @@ export async function POST(request: Request) {
         unchanged += 1;
         continue;
       }
+
+      const values = mapGoogleEventToMstvEvent(googleEvent, localEvent.event_role);
 
       const lastSyncedAt = existingLink.last_synced_at ?? existingLink.created_at;
       const providerChanged = isAfter(providerUpdatedAt, lastSyncedAt);

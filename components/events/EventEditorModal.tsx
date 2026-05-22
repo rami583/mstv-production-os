@@ -3,6 +3,7 @@
 import { useEffect, useState, type ComponentType, type FormEvent, type PointerEvent, type ReactNode } from "react";
 import {
   getCurrentEditorExternalCalendarId,
+  getDefaultProductionMstvForCalendar,
   getEditorSelectedSyncCalendar,
   getEventEditorInitialForm,
   getNormalizedEventEditorForm,
@@ -126,8 +127,7 @@ export function EventEditorModal({
     syncCalendars,
     currentExternalCalendarId,
   });
-  const selectedSyncCalendar = getEditorSelectedSyncCalendar(form.syncExternalCalendarId, selectableSyncCalendars);
-  const showProductionTimeFields = shouldShowProductionEditorTimeFields({ event, selectedSyncCalendar });
+  const showProductionTimeFields = shouldShowProductionEditorTimeFields({ isProductionMstv: form.isProductionMstv });
 
   async function handleSubmit(formEvent: FormEvent<HTMLFormElement>) {
     formEvent.preventDefault();
@@ -147,6 +147,17 @@ export function EventEditorModal({
 
   function updateField<Key extends keyof EventEditorFormInput>(key: Key, value: EventEditorFormInput[Key]) {
     setForm((current) => ({ ...current, [key]: value }));
+  }
+
+  function setProductionMstv(enabled: boolean) {
+    setForm((current) => ({
+      ...current,
+      isProductionMstv: enabled,
+      clientArrivalTime: enabled ? current.clientArrivalTime || current.startTime || "10:00" : current.clientArrivalTime,
+      endOfDayTime: enabled ? current.endOfDayTime || current.endTime || "11:30" : current.endOfDayTime,
+      startTime: enabled ? "" : current.startTime || current.clientArrivalTime || "10:00",
+      endTime: enabled ? "" : current.endTime || current.endOfDayTime || "11:30",
+    }));
   }
   useEscapeToClose(onClose);
 
@@ -181,12 +192,22 @@ export function EventEditorModal({
             />
           </label>
 
+          <label className="flex items-center justify-between gap-3 rounded-2xl border border-stone-200 bg-stone-50 px-4 py-3 text-base font-semibold text-stone-700">
+            <span>Production MSTV</span>
+            <input
+              type="checkbox"
+              checked={form.isProductionMstv}
+              onChange={(inputEvent) => setProductionMstv(inputEvent.target.checked)}
+              className="h-5 w-5 accent-[#bb2720]"
+            />
+          </label>
+
           <div className="grid gap-3 sm:grid-cols-2">
             <Field label="Événement">
-              <input required value={form.clientName} onChange={(inputEvent) => updateField("clientName", inputEvent.target.value)} className={formInputClassName} />
+              <input value={form.clientName} onChange={(inputEvent) => updateField("clientName", inputEvent.target.value)} className={formInputClassName} />
             </Field>
             <Field label="Titre">
-              <input required value={form.eventName} onChange={(inputEvent) => updateField("eventName", inputEvent.target.value)} className={formInputClassName} />
+              <input value={form.eventName} onChange={(inputEvent) => updateField("eventName", inputEvent.target.value)} className={formInputClassName} />
             </Field>
           </div>
 
@@ -229,12 +250,22 @@ export function EventEditorModal({
                   value={form.syncExternalCalendarId ?? ""}
                   onChange={(selectEvent) => {
                     const nextValue = selectEvent.target.value || null;
-                    updateField("syncExternalCalendarId", nextValue);
+                    const nextCalendar = getEditorSelectedSyncCalendar(nextValue, selectableSyncCalendars);
+                    const nextProductionMstv = isEditing ? form.isProductionMstv : getDefaultProductionMstvForCalendar(nextCalendar);
+                    setForm((current) => ({
+                      ...current,
+                      syncExternalCalendarId: nextValue,
+                      isProductionMstv: nextProductionMstv,
+                      clientArrivalTime: nextProductionMstv ? current.clientArrivalTime || current.startTime || "10:00" : current.clientArrivalTime,
+                      endOfDayTime: nextProductionMstv ? current.endOfDayTime || current.endTime || "11:30" : current.endOfDayTime,
+                      startTime: nextProductionMstv ? "" : current.startTime || current.clientArrivalTime || "10:00",
+                      endTime: nextProductionMstv ? "" : current.endTime || current.endOfDayTime || "11:30",
+                    }));
                   }}
                   disabled={!isEditing && selectableSyncCalendars.length === 0}
                   className={cn(formInputClassName, selectableSyncCalendars.length === 0 && "bg-stone-50 text-stone-400")}
                 >
-                  <option value="">MSTV uniquement</option>
+                  <option value="">Aucun calendrier externe</option>
                   {selectableSyncCalendars.map((calendar) => (
                     <option key={calendar.id} value={calendar.id}>
                       {calendar.name}

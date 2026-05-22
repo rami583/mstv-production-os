@@ -5,6 +5,7 @@ export type EventEditorFormInput = {
   eventName: string;
   date: string;
   isAllDay: boolean;
+  isProductionMstv: boolean;
   clientArrivalTime: string;
   startTime: string;
   endTime: string;
@@ -115,6 +116,19 @@ export function getCurrentEditorExternalCalendarId(event: EventEditorEvent | nul
   return externalLinks.find((link) => link.calendarSyncEnabled)?.externalCalendarId ?? null;
 }
 
+function normalizeEditorLabel(label: string) {
+  return label
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLocaleLowerCase("fr-FR")
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
+export function getDefaultProductionMstvForCalendar(calendar: EventEditorExternalCalendar | null | undefined) {
+  return calendar?.calendarRole === "business_primary" || normalizeEditorLabel(calendar?.name ?? "") === "mon studio tv";
+}
+
 export function getEventEditorInitialForm(event: EventEditorEvent | null, selectedDateKey: string): EventEditorFormInput {
   const eventName = event && isGoogleOrAppleImportedEvent(event) && isGenericExternalEventName(event.eventName) ? "" : event?.eventName ?? "";
   const isImportedProductionWithoutOverallTimes =
@@ -130,9 +144,10 @@ export function getEventEditorInitialForm(event: EventEditorEvent | null, select
     eventName,
     date: event?.date ?? selectedDateKey,
     isAllDay: event?.isAllDay ?? false,
+    isProductionMstv: event ? getEffectiveProductionEventRole(event) === "production" : false,
     clientArrivalTime: event ? toTimeInputValue(isImportedProductionWithoutOverallTimes ? event.startTime : event.clientArrivalTime) : "10:00",
-    startTime: event ? (isImportedProductionWithoutOverallTimes ? "" : toTimeInputValue(event.startTime)) : "",
-    endTime: event ? (isImportedProductionWithoutOverallTimes ? "" : toTimeInputValue(event.endTime)) : "",
+    startTime: event ? (isImportedProductionWithoutOverallTimes ? "" : toTimeInputValue(event.startTime)) : "10:00",
+    endTime: event ? (isImportedProductionWithoutOverallTimes ? "" : toTimeInputValue(event.endTime)) : "11:30",
     endOfDayTime: event ? toTimeInputValue(isImportedProductionWithoutOverallTimes ? event.endTime : event.endOfDayTime) : "11:30",
     syncExternalCalendarId: getCurrentEditorExternalCalendarId(event),
   };
@@ -168,12 +183,9 @@ export function getEditorSelectedSyncCalendar(
 }
 
 export function shouldShowProductionEditorTimeFields(input: {
-  event: EventEditorEvent | null;
-  selectedSyncCalendar: EventEditorExternalCalendar | null;
+  isProductionMstv: boolean;
 }) {
-  return input.event
-    ? getEffectiveProductionEventRole(input.event) === "production"
-    : input.selectedSyncCalendar?.calendarRole !== "external_context";
+  return input.isProductionMstv;
 }
 
 export function getNormalizedEventEditorForm(input: EventEditorFormInput, showProductionTimeFields: boolean) {
