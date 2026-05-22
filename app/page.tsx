@@ -650,6 +650,11 @@ const PAGE_TRANSITION_EASING = "cubic-bezier(0.22, 1, 0.36, 1)";
 const PAGE_SWIPE_THRESHOLD_RATIO = 0.18;
 const PAGE_SWIPE_THRESHOLD_MIN = 58;
 const PAGE_SWIPE_THRESHOLD_MAX = 124;
+const EVENT_SWIPE_THRESHOLD_RATIO = 0.12;
+const EVENT_SWIPE_THRESHOLD_MIN = 38;
+const EVENT_SWIPE_THRESHOLD_MAX = 84;
+const EVENT_SWIPE_AXIS_ACTIVATION_PX = 8;
+const EVENT_SWIPE_HORIZONTAL_DOMINANCE = 1.12;
 
 function getSwipePageStep(viewportWidth: number) {
   return viewportWidth + PAGE_GAP;
@@ -657,6 +662,10 @@ function getSwipePageStep(viewportWidth: number) {
 
 function getSwipeThreshold(viewportWidth: number) {
   return Math.min(PAGE_SWIPE_THRESHOLD_MAX, Math.max(PAGE_SWIPE_THRESHOLD_MIN, viewportWidth * PAGE_SWIPE_THRESHOLD_RATIO));
+}
+
+function getEventSwipeThreshold(viewportWidth: number) {
+  return Math.min(EVENT_SWIPE_THRESHOLD_MAX, Math.max(EVENT_SWIPE_THRESHOLD_MIN, viewportWidth * EVENT_SWIPE_THRESHOLD_RATIO));
 }
 
 function createLocalId() {
@@ -11718,6 +11727,16 @@ function ExternalContextEventDetail({
   const wrapStyle: React.CSSProperties = { overflowWrap: "anywhere", wordBreak: "break-word" };
   const externalSwipeStartRef = useRef<{ pointerId: number; x: number; y: number; axis: "horizontal" | "vertical" | null } | null>(null);
   const suppressExternalSwipeClickRef = useRef(false);
+  const [externalSwipeOffset, setExternalSwipeOffset] = useState(0);
+  const [externalSwipeDragging, setExternalSwipeDragging] = useState(false);
+  const [externalSwipeAnimating, setExternalSwipeAnimating] = useState(false);
+
+  useLayoutEffect(() => {
+    setExternalSwipeOffset(0);
+    setExternalSwipeDragging(false);
+    setExternalSwipeAnimating(false);
+    externalSwipeStartRef.current = null;
+  }, [event.id]);
 
   function isExternalSwipeTarget(target: EventTarget | null) {
     return target instanceof HTMLElement && !target.closest("input, textarea, select, button, a, [contenteditable='true'], [data-no-event-swipe]");
@@ -11725,10 +11744,13 @@ function ExternalContextEventDetail({
 
   function resetExternalSwipe() {
     externalSwipeStartRef.current = null;
+    setExternalSwipeOffset(0);
+    setExternalSwipeDragging(false);
+    setExternalSwipeAnimating(false);
   }
 
   function handleExternalSwipePointerDown(pointerEvent: ReactPointerEvent<HTMLElement>) {
-    if (externalSwipeStartRef.current || pointerEvent.pointerType === "mouse" || !isExternalSwipeTarget(pointerEvent.target)) return;
+    if (externalSwipeStartRef.current || externalSwipeAnimating || pointerEvent.pointerType === "mouse" || !isExternalSwipeTarget(pointerEvent.target)) return;
     if (typeof window !== "undefined" && !window.matchMedia("(hover: none), (pointer: coarse)").matches) return;
 
     externalSwipeStartRef.current = {
@@ -11738,6 +11760,7 @@ function ExternalContextEventDetail({
       axis: null,
     };
     suppressExternalSwipeClickRef.current = false;
+    setExternalSwipeDragging(true);
     pointerEvent.currentTarget.setPointerCapture(pointerEvent.pointerId);
   }
 
@@ -11748,7 +11771,7 @@ function ExternalContextEventDetail({
     const deltaX = pointerEvent.clientX - swipeStart.x;
     const deltaY = pointerEvent.clientY - swipeStart.y;
 
-    if (!swipeStart.axis && (Math.abs(deltaX) > 8 || Math.abs(deltaY) > 8)) {
+    if (!swipeStart.axis && (Math.abs(deltaX) > EVENT_SWIPE_AXIS_ACTIVATION_PX || Math.abs(deltaY) > EVENT_SWIPE_AXIS_ACTIVATION_PX)) {
       swipeStart.axis = Math.abs(deltaX) > Math.abs(deltaY) ? "horizontal" : "vertical";
     }
 
@@ -11761,6 +11784,10 @@ function ExternalContextEventDetail({
 
     pointerEvent.preventDefault();
     suppressExternalSwipeClickRef.current = true;
+    const pageStep = getSwipePageStep(pointerEvent.currentTarget.clientWidth || window.innerWidth);
+    const canNavigate = deltaX < 0 ? hasNext : hasPrevious;
+    const resistedOffset = canNavigate ? deltaX : deltaX * 0.22;
+    setExternalSwipeOffset(Math.max(-pageStep, Math.min(pageStep, resistedOffset)));
   }
 
   function handleExternalSwipePointerUp(pointerEvent: ReactPointerEvent<HTMLElement>) {
@@ -11769,19 +11796,36 @@ function ExternalContextEventDetail({
 
     const deltaX = pointerEvent.clientX - swipeStart.x;
     const deltaY = pointerEvent.clientY - swipeStart.y;
-    const swipeThreshold = getSwipeThreshold(pointerEvent.currentTarget.clientWidth || window.innerWidth);
+    const viewportWidth = pointerEvent.currentTarget.clientWidth || window.innerWidth;
+    const swipeThreshold = getEventSwipeThreshold(viewportWidth);
+    const pageStep = getSwipePageStep(viewportWidth);
     externalSwipeStartRef.current = null;
+    setExternalSwipeDragging(false);
 
-    if (swipeStart.axis !== "horizontal" || Math.abs(deltaX) < swipeThreshold || Math.abs(deltaX) < Math.abs(deltaY) * 1.2) return;
+    if (swipeStart.axis !== "horizontal" || Math.abs(deltaX) < swipeThreshold || Math.abs(deltaX) < Math.abs(deltaY) * EVENT_SWIPE_HORIZONTAL_DOMINANCE) {
+      setExternalSwipeOffset(0);
+      return;
+    }
 
     if (deltaX < 0 && hasNext) {
-      goNext();
+      setExternalSwipeAnimating(true);
+      setExternalSwipeOffset(-pageStep);
+      window.setTimeout(() => {
+        goNext();
+      }, PAGE_TRANSITION_MS);
       return;
     }
 
     if (deltaX > 0 && hasPrevious) {
-      goPrevious();
+      setExternalSwipeAnimating(true);
+      setExternalSwipeOffset(pageStep);
+      window.setTimeout(() => {
+        goPrevious();
+      }, PAGE_TRANSITION_MS);
+      return;
     }
+
+    setExternalSwipeOffset(0);
   }
 
   return (
@@ -11796,6 +11840,10 @@ function ExternalContextEventDetail({
         clickEvent.preventDefault();
         clickEvent.stopPropagation();
         suppressExternalSwipeClickRef.current = false;
+      }}
+      style={{
+        transform: `translate3d(${externalSwipeOffset}px, 0, 0)`,
+        transition: externalSwipeDragging ? undefined : `transform ${PAGE_TRANSITION_MS}ms ${PAGE_TRANSITION_EASING}`,
       }}
     >
       <Card className="premium-surface min-w-0 shrink-0 overflow-hidden p-5 sm:p-8">
@@ -12354,7 +12402,7 @@ function ProductionDetail({
     const deltaX = clientX - swipeStart.x;
     const deltaY = clientY - swipeStart.y;
 
-    if (!swipeStart.axis && (Math.abs(deltaX) > 8 || Math.abs(deltaY) > 8)) {
+    if (!swipeStart.axis && (Math.abs(deltaX) > EVENT_SWIPE_AXIS_ACTIVATION_PX || Math.abs(deltaY) > EVENT_SWIPE_AXIS_ACTIVATION_PX)) {
       swipeStart.axis = Math.abs(deltaX) > Math.abs(deltaY) ? "horizontal" : "vertical";
     }
 
@@ -12400,17 +12448,18 @@ function ProductionDetail({
     }
   }
 
-  function finishEventSwipe(pointerId: number, clientX: number, currentTargetWidth: number) {
+  function finishEventSwipe(pointerId: number, clientX: number, clientY: number, currentTargetWidth: number) {
     const swipeStart = eventSwipeStartRef.current;
     if (!swipeStart || swipeStart.pointerId !== pointerId) return;
 
     const deltaX = clientX - swipeStart.x;
+    const deltaY = clientY - swipeStart.y;
     const viewportWidth = eventSwipeViewportRef.current?.clientWidth ?? currentTargetWidth;
-    const swipeThreshold = getSwipeThreshold(viewportWidth);
+    const swipeThreshold = getEventSwipeThreshold(viewportWidth);
     eventSwipeStartRef.current = null;
     setIsEventSwipeDragging(false);
 
-    if (swipeStart.axis === "horizontal" && Math.abs(deltaX) >= swipeThreshold) {
+    if (swipeStart.axis === "horizontal" && Math.abs(deltaX) >= swipeThreshold && Math.abs(deltaX) >= Math.abs(deltaY) * EVENT_SWIPE_HORIZONTAL_DOMINANCE) {
       animateEventNavigation(deltaX < 0 ? 1 : -1);
       return;
     }
@@ -12439,7 +12488,7 @@ function ProductionDetail({
   }
 
   function handleEventSwipePointerUp(pointerEvent: ReactPointerEvent<HTMLDivElement>) {
-    finishEventSwipe(pointerEvent.pointerId, pointerEvent.clientX, pointerEvent.currentTarget.clientWidth);
+    finishEventSwipe(pointerEvent.pointerId, pointerEvent.clientX, pointerEvent.clientY, pointerEvent.currentTarget.clientWidth);
   }
 
   return (
