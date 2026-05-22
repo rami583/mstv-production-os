@@ -69,15 +69,6 @@ export function getProductionEventDisplayLine(event: DisplayProductionEvent) {
   return [display.title, display.subtitle].filter(Boolean).join(" - ");
 }
 
-export function getEffectiveProductionEventRole(event: DisplayProductionEvent): DisplayProductionEventRole {
-  if (event.eventRole === "production") return "production";
-  return "external_context";
-}
-
-export function isExternalContextProductionEvent(event: DisplayProductionEvent) {
-  return getEffectiveProductionEventRole(event) === "external_context";
-}
-
 function getStringFromUnknown(value: unknown) {
   return typeof value === "string" && value.trim() ? value.trim() : null;
 }

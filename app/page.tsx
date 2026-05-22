@@ -62,13 +62,11 @@ import {
   type CalendarMarker,
 } from "@/lib/calendar-markers";
 import {
-  getEffectiveProductionEventRole,
   getEventCalendarBadge,
   getExternalContextDetails,
   getPrimaryExternalEventLink,
   getProductionEventDisplay,
   getProductionEventDisplayLine,
-  isExternalContextProductionEvent,
 } from "@/lib/events/display";
 import {
   normalizeCompactTimeInput,
@@ -441,7 +439,6 @@ type QuoteExtractionResult = {
   eventName: string;
   date: string;
   isAllDay: boolean;
-  isProductionMstv: boolean;
   clientArrivalTime: string;
   startTime: string;
   endTime: string;
@@ -1582,12 +1579,9 @@ function formatTimeRange(startTime: string | null, endTime: string | null) {
   return startLabel || endLabel;
 }
 
-function formatEventTimeRange(event: Pick<ProductionEvent, "isAllDay" | "clientArrivalTime" | "startTime" | "endTime" | "endOfDayTime" | "eventRole" | "importedFrom" | "externalLinks" | "clientName" | "eventName">) {
+function formatEventTimeRange(event: Pick<ProductionEvent, "isAllDay" | "clientArrivalTime" | "startTime" | "endTime" | "endOfDayTime">) {
   if (event.isAllDay) return "Jour entier";
-  if (getEffectiveProductionEventRole(event) === "production") {
-    return formatTimeRange(event.clientArrivalTime || event.startTime, event.endOfDayTime || event.endTime);
-  }
-  return formatTimeRange(event.startTime, event.endTime);
+  return formatTimeRange(event.clientArrivalTime || event.startTime, event.endOfDayTime || event.endTime);
 }
 
 function formatFullDate(dateKey: string) {
@@ -1962,7 +1956,6 @@ function extractQuoteFields(text: string, fallbackDate: string, fileName: string
     eventName: "Événement",
     date,
     isAllDay: false,
-    isProductionMstv: true,
     clientArrivalTime: productionTimeRange.startTime,
     startTime: "",
     endTime: "",
@@ -2180,9 +2173,7 @@ async function extractPdfText(file: File) {
 }
 
 function eventSortValue(event: ProductionEvent) {
-  const primaryTime = getEffectiveProductionEventRole(event) === "production"
-    ? event.clientArrivalTime || event.startTime
-    : event.startTime;
+  const primaryTime = event.clientArrivalTime || event.startTime;
   return new Date(`${event.date}T${toTimeInputValue(primaryTime) || "00:00"}:00`).getTime();
 }
 
@@ -3345,7 +3336,6 @@ export default function Home() {
   const [activityLoading, setActivityLoading] = useState(false);
   const [activityError, setActivityError] = useState<string | null>(null);
   const [restoringActivityId, setRestoringActivityId] = useState<string | null>(null);
-  const [promotingEventId, setPromotingEventId] = useState<string | null>(null);
   const [eventDetailCarousel, setEventDetailCarousel] = useState<{ direction: -1 | 1; targetId: string } | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -3476,7 +3466,6 @@ export default function Home() {
   );
   const chronologicalEvents = useMemo(() => [...visibleProductionEvents].sort((a, b) => eventSortValue(a) - eventSortValue(b)), [visibleProductionEvents]);
   const selectedEvent = useMemo(() => chronologicalEvents.find((item) => item.id === selectedId) ?? chronologicalEvents[0] ?? null, [chronologicalEvents, selectedId]);
-  const selectedEventIsExternalContext = selectedEvent ? isExternalContextProductionEvent(selectedEvent) : false;
   const selectedEventIndex = selectedEvent ? chronologicalEvents.findIndex((item) => item.id === selectedEvent.id) : -1;
   const hasPreviousEvent = selectedEventIndex > 0;
   const hasNextEvent = selectedEventIndex >= 0 && selectedEventIndex < chronologicalEvents.length - 1;
@@ -5663,27 +5652,6 @@ export default function Home() {
     const panelHasPrevious = eventIndex > 0;
     const panelHasNext = eventIndex >= 0 && eventIndex < chronologicalEvents.length - 1;
 
-    if (isExternalContextProductionEvent(eventToRender)) {
-      return (
-        <ExternalContextEventDetail
-          event={eventToRender}
-          hasPrevious={panelHasPrevious}
-          hasNext={panelHasNext}
-          goPrevious={() => startEventDetailCarousel(-1)}
-          goNext={() => startEventDetailCarousel(1)}
-          onEditEvent={() => {
-            if (!permissions.canManageEvents) return;
-            setEditingEvent(eventToRender);
-            setEditingReturnScreen("detail");
-            setCreateModalOpen(true);
-          }}
-          onPromote={() => promoteEventToProduction(eventToRender)}
-          promoting={promotingEventId === eventToRender.id}
-          permissions={permissions}
-        />
-      );
-    }
-
     return (
       <ProductionDetail
         event={eventToRender}
@@ -5774,7 +5742,6 @@ export default function Home() {
 
     const normalizedInput = normalizeEventTimeInput(input);
     const eventId = createLocalId();
-    const newEventRole: ProductionEventRole = normalizedInput.isProductionMstv ? "production" : "external_context";
     const eventInsertPayload: Database["public"]["Tables"]["events"]["Insert"] = {
       id: eventId,
       client_name: normalizedInput.clientName,
@@ -5785,7 +5752,7 @@ export default function Home() {
       start_time: normalizedInput.startTime || null,
       end_time: normalizedInput.endTime || null,
       end_of_day_time: normalizedInput.endOfDayTime || null,
-      event_role: newEventRole,
+      event_role: "production",
       quote_reference: normalizedInput.quoteReference?.trim() || null,
       quote_version: normalizedInput.quoteVersion?.trim() || null,
       source_quote_text: normalizedInput.sourceQuoteText?.trim() || null,
@@ -5850,7 +5817,7 @@ export default function Home() {
         lastQuoteImportedAt: eventInsertPayload.last_quote_imported_at ?? null,
         importedFrom: null,
         externalImportId: null,
-        eventRole: newEventRole,
+        eventRole: "production",
         createdAt,
         updatedAt: createdAt,
         options: offlineOptions,
@@ -6207,7 +6174,6 @@ export default function Home() {
       start_time: normalizedInput.startTime || null,
       end_time: normalizedInput.endTime || null,
       end_of_day_time: normalizedInput.endOfDayTime || null,
-      event_role: normalizedInput.isProductionMstv ? "production" : "external_context",
     };
 
     const { data, error: updateError } = await supabase
@@ -6988,74 +6954,6 @@ export default function Home() {
           await reloadData(event.id, { silent: true });
         }
       }
-    }
-  }
-
-  async function promoteEventToProduction(event: ProductionEvent) {
-    assertCanManageEvents();
-    if (!supabase) {
-      throw new Error("Configuration Supabase manquante.");
-    }
-
-    setPromotingEventId(event.id);
-    try {
-      const updatedAt = new Date().toISOString();
-      const updatePayload: Database["public"]["Tables"]["events"]["Update"] = { event_role: "production" };
-
-      if (!online) {
-        setEvents((current) => current.map((item) => (item.id === event.id ? { ...item, eventRole: "production", updatedAt } : item)));
-        await enqueuePendingSyncAction({
-          actionType: "event_update",
-          entityType: "event",
-          entityId: event.id,
-          payload: {
-            values: updatePayload,
-            activity: {
-              eventId: event.id,
-              actionType: "event_role_changed",
-              entityType: "event",
-              entityId: event.id,
-              description: "Événement transformé en production MSTV",
-              previousValue: { eventRole: event.eventRole },
-              newValue: { eventRole: "production" },
-            },
-          },
-        });
-        return;
-      }
-
-      const { data, error: updateError } = await supabase
-        .from("events")
-        .update(updatePayload)
-        .eq("id", event.id)
-        .select()
-        .single();
-
-      if (updateError) throw updateError;
-
-      setEvents((current) =>
-        current.map((item) =>
-          item.id === event.id
-            ? {
-                ...item,
-                eventRole: normalizeProductionEventRole(data.event_role),
-                updatedAt: data.updated_at,
-              }
-            : item,
-        ),
-      );
-
-      await logEventActivity({
-        eventId: event.id,
-        actionType: "event_role_changed",
-        entityType: "event",
-        entityId: event.id,
-        description: "Événement transformé en production MSTV",
-        previousValue: { eventRole: event.eventRole },
-        newValue: { eventRole: "production" },
-      });
-    } finally {
-      setPromotingEventId(null);
     }
   }
 
@@ -9081,7 +8979,7 @@ export default function Home() {
           canCreateEvent={headerPermissions.canManageEvents}
           canImportQuote={headerPermissions.canManageEvents}
           canImportNativeMstvCalendar={headerPermissions.canManageEvents}
-          canDuplicateEvent={headerPermissions.canManageEvents && screen === "detail" && Boolean(selectedEvent) && !selectedEventIsExternalContext}
+          canDuplicateEvent={headerPermissions.canManageEvents && screen === "detail" && Boolean(selectedEvent)}
           onDuplicateEvent={() => {
             if (selectedEvent && !selectedEvent.deletedAt) {
               setDuplicateDatePickerEvent(selectedEvent);
@@ -11225,291 +11123,74 @@ function EventDetailCarousel({
   );
 }
 
-function ExternalContextEventDetail({
-  event,
-  hasPrevious,
-  hasNext,
-  goPrevious,
-  goNext,
-  onEditEvent,
-  onPromote,
-  promoting,
-  permissions,
-}: {
-  event: ProductionEvent;
-  hasPrevious: boolean;
-  hasNext: boolean;
-  goPrevious: () => void;
-  goNext: () => void;
-  onEditEvent: () => void;
-  onPromote: () => Promise<void>;
-  promoting: boolean;
-  permissions: AppPermissions;
-}) {
-  const externalSwipeStartRef = useRef<{ pointerId: number; x: number; y: number; axis: "horizontal" | "vertical" | null } | null>(null);
-  const suppressExternalSwipeClickRef = useRef(false);
-
-  useLayoutEffect(() => {
-    externalSwipeStartRef.current = null;
-  }, [event.id]);
-
-  function isExternalSwipeTarget(target: EventTarget | null) {
-    return target instanceof HTMLElement && !target.closest("input, textarea, select, button, a, [contenteditable='true'], [data-no-event-swipe]");
-  }
-
-  function resetExternalSwipe() {
-    externalSwipeStartRef.current = null;
-  }
-
-  function handleExternalSwipePointerDown(pointerEvent: ReactPointerEvent<HTMLElement>) {
-    if (externalSwipeStartRef.current || pointerEvent.pointerType === "mouse" || !isExternalSwipeTarget(pointerEvent.target)) return;
-    if (typeof window !== "undefined" && !window.matchMedia("(hover: none), (pointer: coarse)").matches) return;
-
-    externalSwipeStartRef.current = {
-      pointerId: pointerEvent.pointerId,
-      x: pointerEvent.clientX,
-      y: pointerEvent.clientY,
-      axis: null,
-    };
-    suppressExternalSwipeClickRef.current = false;
-    pointerEvent.currentTarget.setPointerCapture(pointerEvent.pointerId);
-  }
-
-  function handleExternalSwipePointerMove(pointerEvent: ReactPointerEvent<HTMLElement>) {
-    const swipeStart = externalSwipeStartRef.current;
-    if (!swipeStart || swipeStart.pointerId !== pointerEvent.pointerId) return;
-
-    const deltaX = pointerEvent.clientX - swipeStart.x;
-    const deltaY = pointerEvent.clientY - swipeStart.y;
-
-    if (!swipeStart.axis && (Math.abs(deltaX) > EVENT_SWIPE_AXIS_ACTIVATION_PX || Math.abs(deltaY) > EVENT_SWIPE_AXIS_ACTIVATION_PX)) {
-      swipeStart.axis = Math.abs(deltaX) > Math.abs(deltaY) ? "horizontal" : "vertical";
-    }
-
-    if (swipeStart.axis === "vertical") {
-      resetExternalSwipe();
-      return;
-    }
-
-    if (swipeStart.axis !== "horizontal") return;
-
-    pointerEvent.preventDefault();
-    suppressExternalSwipeClickRef.current = true;
-  }
-
-  function handleExternalSwipePointerUp(pointerEvent: ReactPointerEvent<HTMLElement>) {
-    const swipeStart = externalSwipeStartRef.current;
-    if (!swipeStart || swipeStart.pointerId !== pointerEvent.pointerId) return;
-
-    const deltaX = pointerEvent.clientX - swipeStart.x;
-    const deltaY = pointerEvent.clientY - swipeStart.y;
-    const viewportWidth = pointerEvent.currentTarget.clientWidth || window.innerWidth;
-    const swipeThreshold = getEventSwipeThreshold(viewportWidth);
-    externalSwipeStartRef.current = null;
-
-    if (swipeStart.axis !== "horizontal" || Math.abs(deltaX) < swipeThreshold || Math.abs(deltaX) < Math.abs(deltaY) * EVENT_SWIPE_HORIZONTAL_DOMINANCE) {
-      return;
-    }
-
-    if (deltaX < 0 && hasNext) {
-      goNext();
-      return;
-    }
-
-    if (deltaX > 0 && hasPrevious) {
-      goPrevious();
-    }
-  }
-
-  return (
-    <ExternalContextEventPanel
-      event={event}
-      hasPrevious={hasPrevious}
-      hasNext={hasNext}
-      goPrevious={goPrevious}
-      goNext={goNext}
-      onEditEvent={onEditEvent}
-      onPromote={onPromote}
-      promoting={promoting}
-      permissions={permissions}
-      onPointerDown={handleExternalSwipePointerDown}
-      onPointerMove={handleExternalSwipePointerMove}
-      onPointerUp={handleExternalSwipePointerUp}
-      onPointerCancel={resetExternalSwipe}
-      onClickCapture={(clickEvent) => {
-        if (!suppressExternalSwipeClickRef.current) return;
-        clickEvent.preventDefault();
-        clickEvent.stopPropagation();
-        suppressExternalSwipeClickRef.current = false;
-      }}
-    />
-  );
-}
-
-function ExternalContextEventPanel({
-  event,
-  hasPrevious,
-  hasNext,
-  goPrevious,
-  goNext,
-  onEditEvent,
-  onPromote,
-  promoting,
-  permissions,
-  onPointerDown,
-  onPointerMove,
-  onPointerUp,
-  onPointerCancel,
-  onClickCapture,
-}: {
-  event: ProductionEvent;
-  hasPrevious: boolean;
-  hasNext: boolean;
-  goPrevious: () => void;
-  goNext: () => void;
-  onEditEvent: () => void;
-  onPromote: () => Promise<void>;
-  promoting: boolean;
-  permissions: AppPermissions;
-  onPointerDown?: React.PointerEventHandler<HTMLElement>;
-  onPointerMove?: React.PointerEventHandler<HTMLElement>;
-  onPointerUp?: React.PointerEventHandler<HTMLElement>;
-  onPointerCancel?: React.PointerEventHandler<HTMLElement>;
-  onClickCapture?: React.MouseEventHandler<HTMLElement>;
-}) {
-  const display = getProductionEventDisplay(event);
+function ExternalInvitationDetailsCard({ event }: { event: ProductionEvent }) {
   const details = getExternalContextDetails(event);
-  const timeRange = formatEventTimeRange(event) || "Journée";
   const descriptionView = getExternalEventDescriptionView(details.description);
+  const hasInvitationDetails = Boolean(details.location || details.meetingUrl || details.description || descriptionView.usefulLines.length > 0 || details.meetingUrls.length > 0 || details.attendees.length > 0);
   const wrapStyle: React.CSSProperties = { overflowWrap: "anywhere", wordBreak: "break-word" };
 
+  if (!hasInvitationDetails) return null;
+
   return (
-    <section
-      className="flex min-h-0 w-full min-w-0 touch-pan-y flex-1 flex-col gap-5 overflow-hidden"
-      onPointerDown={onPointerDown}
-      onPointerMove={onPointerMove}
-      onPointerUp={onPointerUp}
-      onPointerCancel={onPointerCancel}
-      onClickCapture={onClickCapture}
-    >
-      <Card className="premium-surface min-w-0 shrink-0 overflow-hidden p-5 sm:p-8">
-        <div className="flex items-start justify-between gap-4">
-          <div className="min-w-0 flex-1">
-            <div className="mb-3 flex flex-wrap items-center gap-2">
-              <EventCalendarBadge event={event} />
+    <Card className="premium-surface min-w-0 space-y-4 overflow-hidden p-5 sm:p-6">
+      {details.location && (
+        <div className="min-w-0 rounded-2xl border border-stone-200 bg-white px-4 py-3">
+          <p className="text-xs font-semibold uppercase text-stone-400">Lieu</p>
+          <p className="mt-1 whitespace-pre-wrap text-base font-medium text-stone-700" style={wrapStyle}>{details.location}</p>
+        </div>
+      )}
+
+      {details.meetingUrl && (
+        <a
+          href={details.meetingUrl}
+          target="_blank"
+          rel="noreferrer"
+          className="inline-flex min-w-0 w-full items-center justify-center rounded-2xl bg-stone-950 px-4 py-3 text-center text-base font-semibold text-white transition hover:bg-stone-800"
+          style={wrapStyle}
+        >
+          Rejoindre la réunion
+        </a>
+      )}
+
+      {(descriptionView.usefulLines.length > 0 || details.description) && (
+        <div className="min-w-0 rounded-2xl border border-stone-200 bg-white px-4 py-3">
+          <p className="text-xs font-semibold uppercase text-stone-400">Description</p>
+          {descriptionView.usefulLines.length > 0 ? (
+            <div className="mobile-no-scrollbar mt-1 grid max-h-56 gap-2 overflow-y-auto overscroll-contain">
+              {descriptionView.usefulLines.map((line, index) => (
+                <p key={`${line}-${index}`} className="whitespace-pre-wrap text-base font-medium text-stone-700" style={wrapStyle}>
+                  {line}
+                </p>
+              ))}
             </div>
-            <h1 className="text-3xl font-semibold leading-tight text-stone-950 sm:text-5xl" style={wrapStyle}>{display.title}</h1>
-            {display.subtitle && <p className="mt-2 text-base font-medium text-stone-500" style={wrapStyle}>{display.subtitle}</p>}
-            {permissions.canManageEvents && (
-              <button
-                type="button"
-                onClick={onEditEvent}
-                className="mt-3 rounded-full border border-stone-200 bg-white px-3 py-2 text-sm font-semibold text-stone-600 transition hover:bg-stone-50 sm:hidden"
-              >
-                Modifier
-              </button>
-            )}
-          </div>
-          <div className="hidden items-center gap-2 sm:flex">
-            {permissions.canManageEvents && (
-              <button type="button" onClick={onEditEvent} className="rounded-full border border-stone-200 bg-white px-3 py-2 text-sm font-semibold text-stone-600 transition hover:bg-stone-50">
-                Modifier
-              </button>
-            )}
-            <button onClick={goPrevious} disabled={!hasPrevious} className={calendarArrowClassName} aria-label="Événement précédent">
-              ←
-            </button>
-            <button onClick={goNext} disabled={!hasNext} className={calendarArrowClassName} aria-label="Événement suivant">
-              →
-            </button>
+          ) : (
+            <p className="mobile-no-scrollbar mt-1 max-h-64 overflow-y-auto overscroll-contain whitespace-pre-wrap text-base font-medium text-stone-700" style={wrapStyle}>{details.description}</p>
+          )}
+          {details.meetingUrls.length > 0 && (
+            <div className="mobile-no-scrollbar mt-3 grid max-h-36 min-w-0 gap-1 overflow-y-auto overscroll-contain">
+              {details.meetingUrls.slice(0, 4).map((url) => (
+                <a key={url} href={url} target="_blank" rel="noreferrer" className="min-w-0 text-sm font-semibold text-stone-950 underline decoration-stone-300 underline-offset-4" style={wrapStyle}>
+                  {url}
+                </a>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {details.attendees.length > 0 && (
+        <div className="min-w-0 rounded-2xl border border-stone-200 bg-white px-4 py-3">
+          <p className="text-xs font-semibold uppercase text-stone-400">Participants</p>
+          <div className="mobile-no-scrollbar mt-2 flex max-h-36 min-w-0 flex-wrap gap-1.5 overflow-y-auto overscroll-contain">
+            {details.attendees.map((attendee) => (
+              <span key={attendee} className="min-w-0 rounded-full bg-stone-100 px-2.5 py-1 text-sm font-semibold text-stone-600" style={wrapStyle}>
+                {attendee}
+              </span>
+            ))}
           </div>
         </div>
-      </Card>
-
-      <div className="no-scrollbar min-h-0 min-w-0 flex-1 overflow-y-auto overscroll-contain pb-6">
-        <Card className="premium-surface min-w-0 space-y-4 overflow-hidden p-5 sm:p-6">
-          <div className="grid gap-3 sm:grid-cols-2">
-            <div className="min-w-0 rounded-2xl bg-stone-50 px-4 py-3">
-              <p className="text-xs font-semibold uppercase text-stone-400">Date</p>
-              <p className="mt-1 text-base font-semibold text-stone-900" style={wrapStyle}>{formatFullDate(event.date)}</p>
-            </div>
-            <div className="min-w-0 rounded-2xl bg-stone-50 px-4 py-3">
-              <p className="text-xs font-semibold uppercase text-stone-400">Horaire</p>
-              <p className="mt-1 text-base font-semibold text-stone-900" style={wrapStyle}>{timeRange}</p>
-            </div>
-          </div>
-
-          {details.location && (
-            <div className="min-w-0 rounded-2xl border border-stone-200 bg-white px-4 py-3">
-              <p className="text-xs font-semibold uppercase text-stone-400">Lieu</p>
-              <p className="mt-1 whitespace-pre-wrap text-base font-medium text-stone-700" style={wrapStyle}>{details.location}</p>
-            </div>
-          )}
-
-          {details.meetingUrl && (
-            <a
-              href={details.meetingUrl}
-              target="_blank"
-              rel="noreferrer"
-              className="inline-flex min-w-0 w-full items-center justify-center rounded-2xl bg-stone-950 px-4 py-3 text-center text-base font-semibold text-white transition hover:bg-stone-800"
-              style={wrapStyle}
-            >
-              Rejoindre la réunion
-            </a>
-          )}
-
-          {(descriptionView.usefulLines.length > 0 || details.description) && (
-            <div className="min-w-0 rounded-2xl border border-stone-200 bg-white px-4 py-3">
-              <p className="text-xs font-semibold uppercase text-stone-400">Description</p>
-              {descriptionView.usefulLines.length > 0 ? (
-                <div className="mobile-no-scrollbar mt-1 grid max-h-56 gap-2 overflow-y-auto overscroll-contain">
-                  {descriptionView.usefulLines.map((line, index) => (
-                    <p key={`${line}-${index}`} className="whitespace-pre-wrap text-base font-medium text-stone-700" style={wrapStyle}>
-                      {line}
-                    </p>
-                  ))}
-                </div>
-              ) : (
-                <p className="mobile-no-scrollbar mt-1 max-h-64 overflow-y-auto overscroll-contain whitespace-pre-wrap text-base font-medium text-stone-700" style={wrapStyle}>{details.description}</p>
-              )}
-              {details.meetingUrls.length > 0 && (
-                <div className="mobile-no-scrollbar mt-3 grid max-h-36 min-w-0 gap-1 overflow-y-auto overscroll-contain">
-                  {details.meetingUrls.slice(0, 4).map((url) => (
-                    <a key={url} href={url} target="_blank" rel="noreferrer" className="min-w-0 text-sm font-semibold text-stone-950 underline decoration-stone-300 underline-offset-4" style={wrapStyle}>
-                      {url}
-                    </a>
-                  ))}
-                </div>
-              )}
-            </div>
-          )}
-
-          {details.attendees.length > 0 && (
-            <div className="min-w-0 rounded-2xl border border-stone-200 bg-white px-4 py-3">
-              <p className="text-xs font-semibold uppercase text-stone-400">Participants</p>
-              <div className="mobile-no-scrollbar mt-2 flex max-h-36 min-w-0 flex-wrap gap-1.5 overflow-y-auto overscroll-contain">
-                {details.attendees.map((attendee) => (
-                  <span key={attendee} className="min-w-0 rounded-full bg-stone-100 px-2.5 py-1 text-sm font-semibold text-stone-600" style={wrapStyle}>
-                    {attendee}
-                  </span>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {permissions.canManageEvents && (
-            <button
-              type="button"
-              onClick={() => void onPromote()}
-              disabled={promoting}
-              className="w-full rounded-2xl bg-[#bb2720] px-4 py-3 text-base font-semibold text-white transition hover:bg-[#a9231d] disabled:bg-stone-300"
-            >
-              {promoting ? "Transformation..." : "Transformer en production MSTV"}
-            </button>
-          )}
-        </Card>
-      </div>
-    </section>
+      )}
+    </Card>
   );
 }
 
@@ -11931,6 +11612,7 @@ function ProductionDetail({
         <Card className="premium-surface overflow-hidden p-5 sm:p-6">
           <ProductionTimeCards event={event} />
         </Card>
+        <ExternalInvitationDetailsCard event={event} />
         <Card className="premium-surface overflow-hidden p-3 sm:p-5">
         <div className="grid grid-cols-[repeat(3,minmax(0,1fr))] gap-1.5 sm:gap-4 lg:items-start">
           <div className="min-w-0">
@@ -13618,7 +13300,6 @@ function QuoteImportModal({
     eventName: "",
     date: selectedDateKey,
     isAllDay: false,
-    isProductionMstv: false,
     clientArrivalTime: "",
     startTime: "",
     endTime: "",
@@ -13688,7 +13369,6 @@ function QuoteImportModal({
         eventName: "Événement",
         date: extracted.date,
         isAllDay: false,
-        isProductionMstv: true,
         clientArrivalTime: extracted.startTime,
         startTime: "",
         endTime: "",

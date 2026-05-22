@@ -122,22 +122,19 @@ function getNextDate(dateKey: string) {
   return nextDate.toISOString().slice(0, 10);
 }
 
-function mapGoogleEventToMstvEvent(event: GoogleEvent, eventRole: "production" | "external_context" | string | null | undefined) {
+function mapGoogleEventToMstvEvent(event: GoogleEvent) {
   const parsedSummary = parseGoogleSummary(event.summary);
   const isAllDay = Boolean(event.start?.date);
   const date = parseGoogleDate(event.start?.date ?? event.start?.dateTime) ?? new Date().toISOString().slice(0, 10);
   const startTime = isAllDay ? null : parseGoogleTime(event.start?.dateTime);
   const endTime = isAllDay ? null : parseGoogleTime(event.end?.dateTime);
-  const isProduction = eventRole === "production";
   return {
     client_name: parsedSummary.clientName,
     event_name: parsedSummary.eventName,
     date,
     is_all_day: isAllDay,
-    client_arrival_time: isProduction ? startTime : null,
-    start_time: isProduction ? null : startTime,
-    end_time: isProduction ? null : endTime,
-    end_of_day_time: isProduction ? endTime : null,
+    client_arrival_time: startTime,
+    end_of_day_time: endTime,
   };
 }
 
@@ -686,7 +683,7 @@ export async function POST(request: Request) {
         const { data: insertedEvent, error: insertError } = await supabase
           .from("events")
           .insert({
-            ...mapGoogleEventToMstvEvent(googleEvent, "external_context"),
+            ...mapGoogleEventToMstvEvent(googleEvent),
             imported_from: "google_calendar",
             external_import_id: googleEvent.id,
             event_role: "external_context",
@@ -732,7 +729,7 @@ export async function POST(request: Request) {
         continue;
       }
 
-      const values = mapGoogleEventToMstvEvent(googleEvent, localEvent.event_role);
+      const values = mapGoogleEventToMstvEvent(googleEvent);
 
       const lastSyncedAt = existingLink.last_synced_at ?? existingLink.created_at;
       const providerChanged = isAfter(providerUpdatedAt, lastSyncedAt);

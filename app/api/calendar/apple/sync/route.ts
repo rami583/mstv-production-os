@@ -307,20 +307,17 @@ function getLocalTimeFromIso(isoValue: string | null, allDay = false) {
   return `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
 }
 
-function mapAppleEventToMstvEvent(event: AppleCalDavEvent, eventRole: "production" | "external_context" | string | null | undefined): ProductionEventInsert {
+function mapAppleEventToMstvEvent(event: AppleCalDavEvent): ProductionEventInsert {
   const parsedSummary = parseAppleSummary(event.summary);
   const startTime = getLocalTimeFromIso(event.startTime, event.allDay);
   const endTime = getLocalTimeFromIso(event.endTime, event.allDay);
-  const isProduction = eventRole === "production";
   return {
     client_name: parsedSummary.clientName,
     event_name: parsedSummary.eventName,
     date: getLocalDateKeyFromIso(event.startTime),
     is_all_day: event.allDay,
-    client_arrival_time: isProduction ? startTime : null,
-    start_time: isProduction ? null : startTime,
-    end_time: isProduction ? null : endTime,
-    end_of_day_time: isProduction ? endTime : null,
+    client_arrival_time: startTime,
+    end_of_day_time: endTime,
   };
 }
 
@@ -503,7 +500,7 @@ export async function POST(request: Request) {
         const { data: insertedEvent, error: insertError } = await supabase
           .from("events")
           .insert({
-            ...mapAppleEventToMstvEvent(appleEvent, "external_context"),
+            ...mapAppleEventToMstvEvent(appleEvent),
             imported_from: "apple_caldav",
             external_import_id: appleEvent.externalEventId,
             event_role: "external_context",
@@ -543,15 +540,7 @@ export async function POST(request: Request) {
         continue;
       }
 
-      const { data: localEvent, error: localEventError } = await supabase
-        .from("events")
-        .select("event_role")
-        .eq("id", existingLink.event_id)
-        .maybeSingle();
-
-      if (localEventError) throwSupabaseError("load_linked_mstv_event_role", localEventError);
-
-      const values = mapAppleEventToMstvEvent(appleEvent, localEvent?.event_role ?? "external_context");
+      const values = mapAppleEventToMstvEvent(appleEvent);
 
       const { data: updatedEvent, error: updateError } = await supabase
         .from("events")

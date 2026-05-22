@@ -3,14 +3,11 @@
 import { useEffect, useState, type ComponentType, type FormEvent, type PointerEvent, type ReactNode } from "react";
 import {
   getCurrentEditorExternalCalendarId,
-  getDefaultProductionMstvForCalendar,
-  getEditorSelectedSyncCalendar,
   getEventEditorInitialForm,
   getNormalizedEventEditorForm,
   getSelectableEditorSyncCalendars,
   normalizeCompactTimeInput,
   sanitizeTimeDraft,
-  shouldShowProductionEditorTimeFields,
   type EventEditorEvent,
   type EventEditorExternalCalendar,
   type EventEditorFormInput,
@@ -127,15 +124,13 @@ export function EventEditorModal({
     syncCalendars,
     currentExternalCalendarId,
   });
-  const showProductionTimeFields = shouldShowProductionEditorTimeFields({ isProductionMstv: form.isProductionMstv });
-
   async function handleSubmit(formEvent: FormEvent<HTMLFormElement>) {
     formEvent.preventDefault();
     setSubmitting(true);
     setError(null);
 
     try {
-      const normalizedForm = getNormalizedEventEditorForm(form, showProductionTimeFields);
+      const normalizedForm = getNormalizedEventEditorForm(form);
       setForm(normalizedForm);
       await onSubmit(normalizedForm);
     } catch (createError) {
@@ -149,16 +144,6 @@ export function EventEditorModal({
     setForm((current) => ({ ...current, [key]: value }));
   }
 
-  function setProductionMstv(enabled: boolean) {
-    setForm((current) => ({
-      ...current,
-      isProductionMstv: enabled,
-      clientArrivalTime: enabled ? current.clientArrivalTime || current.startTime || "10:00" : current.clientArrivalTime,
-      endOfDayTime: enabled ? current.endOfDayTime || current.endTime || "11:30" : current.endOfDayTime,
-      startTime: enabled ? "" : current.startTime || current.clientArrivalTime || "10:00",
-      endTime: enabled ? "" : current.endTime || current.endOfDayTime || "11:30",
-    }));
-  }
   useEscapeToClose(onClose);
 
   return (
@@ -192,16 +177,6 @@ export function EventEditorModal({
             />
           </label>
 
-          <label className="flex items-center justify-between gap-3 rounded-2xl border border-stone-200 bg-stone-50 px-4 py-3 text-base font-semibold text-stone-700">
-            <span>Production MSTV</span>
-            <input
-              type="checkbox"
-              checked={form.isProductionMstv}
-              onChange={(inputEvent) => setProductionMstv(inputEvent.target.checked)}
-              className="h-5 w-5 accent-[#bb2720]"
-            />
-          </label>
-
           <div className="grid gap-3 sm:grid-cols-2">
             <Field label="Événement">
               <input value={form.clientName} onChange={(inputEvent) => updateField("clientName", inputEvent.target.value)} className={formInputClassName} />
@@ -215,31 +190,21 @@ export function EventEditorModal({
             <>
               <div className="grid gap-3 sm:grid-cols-2">
                 <Field label="Début">
-                  <TimeTextInput
-                    value={showProductionTimeFields ? form.clientArrivalTime : form.startTime}
-                    onChange={(value) => updateField(showProductionTimeFields ? "clientArrivalTime" : "startTime", value)}
-                    className={formInputClassName}
-                  />
+                  <TimeTextInput value={form.clientArrivalTime} onChange={(value) => updateField("clientArrivalTime", value)} className={formInputClassName} />
                 </Field>
                 <Field label="Fin">
-                  <TimeTextInput
-                    value={showProductionTimeFields ? form.endOfDayTime : form.endTime}
-                    onChange={(value) => updateField(showProductionTimeFields ? "endOfDayTime" : "endTime", value)}
-                    className={formInputClassName}
-                  />
+                  <TimeTextInput value={form.endOfDayTime} onChange={(value) => updateField("endOfDayTime", value)} className={formInputClassName} />
                 </Field>
               </div>
 
-              {showProductionTimeFields && (
-                <div className="grid gap-3 sm:grid-cols-2">
-                  <Field label="Début live/tournage">
-                    <TimeTextInput value={form.startTime} onChange={(value) => updateField("startTime", value)} className={formInputClassName} />
-                  </Field>
-                  <Field label="Fin live/tournage">
-                    <TimeTextInput value={form.endTime} onChange={(value) => updateField("endTime", value)} className={formInputClassName} />
-                  </Field>
-                </div>
-              )}
+              <div className="grid gap-3 sm:grid-cols-2">
+                <Field label="Début live/tournage">
+                  <TimeTextInput value={form.startTime} onChange={(value) => updateField("startTime", value)} className={formInputClassName} />
+                </Field>
+                <Field label="Fin live/tournage">
+                  <TimeTextInput value={form.endTime} onChange={(value) => updateField("endTime", value)} className={formInputClassName} />
+                </Field>
+              </div>
             </>
           )}
 
@@ -250,16 +215,9 @@ export function EventEditorModal({
                   value={form.syncExternalCalendarId ?? ""}
                   onChange={(selectEvent) => {
                     const nextValue = selectEvent.target.value || null;
-                    const nextCalendar = getEditorSelectedSyncCalendar(nextValue, selectableSyncCalendars);
-                    const nextProductionMstv = isEditing ? form.isProductionMstv : getDefaultProductionMstvForCalendar(nextCalendar);
                     setForm((current) => ({
                       ...current,
                       syncExternalCalendarId: nextValue,
-                      isProductionMstv: nextProductionMstv,
-                      clientArrivalTime: nextProductionMstv ? current.clientArrivalTime || current.startTime || "10:00" : current.clientArrivalTime,
-                      endOfDayTime: nextProductionMstv ? current.endOfDayTime || current.endTime || "11:30" : current.endOfDayTime,
-                      startTime: nextProductionMstv ? "" : current.startTime || current.clientArrivalTime || "10:00",
-                      endTime: nextProductionMstv ? "" : current.endTime || current.endOfDayTime || "11:30",
                     }));
                   }}
                   disabled={!isEditing && selectableSyncCalendars.length === 0}
