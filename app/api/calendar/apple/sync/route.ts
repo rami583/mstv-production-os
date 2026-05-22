@@ -18,6 +18,14 @@ export const runtime = "nodejs";
 type ProductionEventInsert = Database["public"]["Tables"]["events"]["Insert"];
 type ExternalEventLinkInsert = Database["public"]["Tables"]["external_event_links"]["Insert"];
 type ExternalCalendarRow = Database["public"]["Tables"]["external_calendars"]["Row"];
+type ExternalEventLinkRow = Database["public"]["Tables"]["external_event_links"]["Row"];
+type ExternalEventLinkWithEventRow = ExternalEventLinkRow & {
+  events?: {
+    id: string;
+    date: string | null;
+    deleted_at: string | null;
+  } | null;
+};
 
 type AppleCalDavEvent = {
   externalEventId: string;
@@ -285,6 +293,13 @@ function getLocalDateKeyFromIso(isoValue: string) {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
 }
 
+function isEventDateInSyncWindow(dateKey: string | null | undefined, syncWindow: ReturnType<typeof getAppleSyncWindow>) {
+  if (!dateKey) return false;
+  const timestamp = Date.parse(`${dateKey}T12:00:00`);
+  if (!Number.isFinite(timestamp)) return false;
+  return timestamp >= syncWindow.start.getTime() && timestamp <= syncWindow.end.getTime();
+}
+
 function getLocalTimeFromIso(isoValue: string | null, allDay = false) {
   if (!isoValue || allDay) return null;
   const date = new Date(isoValue);
@@ -310,6 +325,17 @@ function isAfter(value?: string | null, base?: string | null) {
   const valueTimestamp = Date.parse(value);
   const baseTimestamp = Date.parse(base);
   return Number.isFinite(valueTimestamp) && Number.isFinite(baseTimestamp) && valueTimestamp > baseTimestamp;
+}
+
+function shouldUpdateFromAppleEvent(appleEvent: AppleCalDavEvent, existingLink: ExternalEventLinkRow) {
+  if (existingLink.deleted_externally_at) return true;
+  if (isAfter(appleEvent.providerUpdatedAt, existingLink.last_external_updated_at ?? existingLink.last_synced_at)) return true;
+
+  const rawExternalEvent = existingLink.raw_external_event;
+  const previousEtag = rawExternalEvent && typeof rawExternalEvent === "object" && !Array.isArray(rawExternalEvent)
+    ? (rawExternalEvent as { etag?: unknown }).etag
+    : null;
+  return Boolean(appleEvent.etag && typeof previousEtag === "string" && previousEtag !== appleEvent.etag);
 }
 
 async function fetchAppleCalendarEvents(input: {
@@ -426,6 +452,9 @@ export async function POST(request: Request) {
     if (!calendar?.provider_account_id || !calendar.provider_calendar_id) {
       return appleJsonResponse({ error: "Calendrier Apple introuvable." }, { status: 404 });
     }
+    if (!calendar.sync_enabled) {
+      return appleJsonResponse({ error: "Ce calendrier Apple est désactivé dans MSTV." }, { status: 409 });
+    }
 
     const now = new Date().toISOString();
     const { error: startSyncError } = await supabase
@@ -442,10 +471,13 @@ export async function POST(request: Request) {
     const credentials = decryptAppleCredentials(account);
     const syncWindow = getAppleSyncWindow();
     const appleEvents = await fetchAppleCalendarEvents({ credentials, calendar, syncWindow });
+    const fetchedExternalEventIds = new Set(appleEvents.map((event) => event.externalEventId));
 
     let created = 0;
     let updated = 0;
     let unchanged = 0;
+    let skipped = 0;
+    let linksCreated = 0;
 
     for (const appleEvent of appleEvents) {
       const { data: existingLink, error: linkError } = await supabase
@@ -453,6 +485,7 @@ export async function POST(request: Request) {
         .select("*")
         .eq("external_calendar_id", calendar.id)
         .eq("external_event_id", appleEvent.externalEventId)
+        .is("deleted_locally_at", null)
         .limit(1)
         .maybeSingle();
 
@@ -498,10 +531,11 @@ export async function POST(request: Request) {
           payload: linkPayload,
         });
         created += 1;
+        linksCreated += 1;
         continue;
       }
 
-      if (!isAfter(appleEvent.providerUpdatedAt, existingLink.last_external_updated_at ?? existingLink.last_synced_at)) {
+      if (!shouldUpdateFromAppleEvent(appleEvent, existingLink)) {
         unchanged += 1;
         continue;
       }
@@ -524,6 +558,7 @@ export async function POST(request: Request) {
         .from("external_event_links")
         .update({
           sync_status: "synced",
+          deleted_externally_at: null,
           local_updated_at: updatedEvent.updated_at,
           last_synced_at: new Date().toISOString(),
           last_external_updated_at: appleEvent.providerUpdatedAt,
@@ -536,6 +571,75 @@ export async function POST(request: Request) {
       if (linkUpdateError) throwSupabaseError("update_external_event_link_after_pull", linkUpdateError);
       updated += 1;
     }
+
+    const { data: existingCalendarLinks, error: existingCalendarLinksError } = await supabase
+      .from("external_event_links")
+      .select("*, events (id, date, deleted_at)")
+      .eq("external_calendar_id", calendar.id)
+      .eq("provider_type", "apple_caldav")
+      .is("deleted_locally_at", null)
+      .is("deleted_externally_at", null);
+
+    if (existingCalendarLinksError) throwSupabaseError("load_existing_calendar_links_for_deletion", existingCalendarLinksError);
+
+    const activeCalendarLinks = (existingCalendarLinks ?? []) as ExternalEventLinkWithEventRow[];
+    const missingLinks = activeCalendarLinks.filter((link) => {
+      const linkedEvent = link.events;
+      if (!linkedEvent || linkedEvent.deleted_at) return false;
+      return isEventDateInSyncWindow(linkedEvent.date, syncWindow) && !fetchedExternalEventIds.has(link.external_event_id);
+    });
+    let deleted = 0;
+
+    for (const link of missingLinks) {
+      if (!link.event_id) {
+        skipped += 1;
+        continue;
+      }
+      const deletionTime = new Date().toISOString();
+      const { data: deletedEvent, error: deleteEventError } = await supabase
+        .from("events")
+        .update({
+          deleted_at: deletionTime,
+          deleted_by: "apple_caldav_deleted_externally",
+        })
+        .eq("id", link.event_id)
+        .is("deleted_at", null)
+        .select("id")
+        .maybeSingle();
+
+      if (deleteEventError) throwSupabaseError("soft_delete_mstv_event_deleted_in_apple", deleteEventError);
+
+      const { error: markLinkDeletedError } = await supabase
+        .from("external_event_links")
+        .update({
+          sync_status: "synced",
+          deleted_externally_at: deletionTime,
+          last_synced_at: deletionTime,
+          last_sync_error: null,
+          updated_at: deletionTime,
+        })
+        .eq("id", link.id);
+
+      if (markLinkDeletedError) throwSupabaseError("mark_apple_link_deleted_externally", markLinkDeletedError);
+
+      if (deletedEvent) {
+        deleted += 1;
+      } else {
+        skipped += 1;
+      }
+    }
+
+    console.info("Apple pull sync summary", {
+      calendarId: calendar.id,
+      enabledCalendars: calendar.sync_enabled ? 1 : 0,
+      fetched: appleEvents.length,
+      created,
+      updated,
+      unchanged,
+      deleted,
+      skipped,
+      linksCreated,
+    });
 
     const finishedAt = new Date().toISOString();
     const { error: finishSyncError } = await supabase
@@ -555,7 +659,13 @@ export async function POST(request: Request) {
       updated,
       unchanged,
       conflicts: 0,
-      deleted: 0,
+      deleted,
+      skipped,
+      linksCreated,
+      diagnostics: {
+        enabledAppleCalendars: calendar.sync_enabled ? 1 : 0,
+        calDavEventsFetched: appleEvents.length,
+      },
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Impossible de synchroniser Apple Calendar.";
