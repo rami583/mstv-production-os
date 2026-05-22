@@ -3821,42 +3821,6 @@ export default function Home() {
     setEventDetailCarousel(null);
   }, [screen, selectedId]);
 
-  const connectedGoogleAccountCount = useMemo(
-    () => googleCalendarAccounts.filter((account) => account.connectionStatus === "connected").length,
-    [googleCalendarAccounts],
-  );
-  const googleProviderCalendarCount = useMemo(
-    () => Object.values(googleCalendarsByAccountId).reduce((count, calendars) => count + calendars.length, 0),
-    [googleCalendarsByAccountId],
-  );
-  const writableGoogleProviderCalendarCount = useMemo(
-    () => Object.values(googleCalendarsByAccountId).reduce((count, calendars) => count + calendars.filter((calendar) => calendar.writable).length, 0),
-    [googleCalendarsByAccountId],
-  );
-
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    const providerCalendars = Object.values(googleCalendarsByAccountId).flat();
-    const writableProviderCalendars = providerCalendars.filter((calendar) => calendar.writable);
-    console.info("Google calendar write destination debug", {
-      connectedGoogleAccountCount,
-      googleProviderCalendarCount,
-      writableGoogleProviderCalendarCount,
-      syncEnabledGoogleProviderCalendarCount: writableProviderCalendars.filter((calendar) => calendar.enabled).length,
-      writableGoogleCalendarCount: writableGoogleCalendars.length,
-      writableAppleCalendarCount: writableAppleCalendars.length,
-      selectedSyncEnabledCalendars: writableExternalCalendars.map((calendar) => ({
-        id: calendar.id,
-        name: calendar.name,
-        providerType: calendar.providerType,
-        providerAccountIdPresent: Boolean(calendar.providerAccountId),
-        providerCalendarIdPresent: Boolean(calendar.providerCalendarId),
-        syncCapability: calendar.syncCapability,
-        syncEnabled: calendar.syncEnabled,
-      })),
-    });
-  }, [connectedGoogleAccountCount, googleCalendarsByAccountId, googleProviderCalendarCount, writableAppleCalendars.length, writableExternalCalendars, writableGoogleCalendars.length, writableGoogleProviderCalendarCount]);
-
   useEffect(() => {
     if (typeof window === "undefined") return;
 
@@ -9657,9 +9621,6 @@ export default function Home() {
           selectedDateKey={selectedDateKey}
           event={editingEvent}
           syncCalendars={writableExternalCalendars}
-          connectedGoogleAccountCount={connectedGoogleAccountCount}
-          googleProviderCalendarCount={googleProviderCalendarCount}
-          writableGoogleProviderCalendarCount={writableGoogleProviderCalendarCount}
           onClose={() => {
             setCreateModalOpen(false);
             setEditingEvent(null);
@@ -14004,25 +13965,17 @@ function CreateEventModal({
   selectedDateKey,
   event,
   syncCalendars,
-  connectedGoogleAccountCount,
-  googleProviderCalendarCount,
-  writableGoogleProviderCalendarCount,
   onClose,
   onSubmit,
 }: {
   selectedDateKey: string;
   event: ProductionEvent | null;
   syncCalendars: ExternalCalendar[];
-  connectedGoogleAccountCount: number;
-  googleProviderCalendarCount: number;
-  writableGoogleProviderCalendarCount: number;
   onClose: () => void;
   onSubmit: (input: CreateEventInput) => Promise<void>;
 }) {
   const isEditing = Boolean(event);
   const externalLinks = event ? getEventWritableExternalLinks(event) : [];
-  const linkedExternalCalendarIds = new Set(externalLinks.map((link) => link.externalCalendarId));
-  const linkableSyncCalendars = syncCalendars.filter((calendar) => !linkedExternalCalendarIds.has(calendar.id));
   const [form, setForm] = useState<CreateEventInput>({
     clientName: event?.clientName ?? "",
     eventName: event?.eventName ?? "",
@@ -14036,6 +13989,8 @@ function CreateEventModal({
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [datePickerOpen, setDatePickerOpen] = useState(false);
+  const selectedSyncCalendar = form.syncExternalCalendarId ? syncCalendars.find((calendar) => calendar.id === form.syncExternalCalendarId) ?? null : null;
+  const showProductionTimeFields = event ? getEffectiveProductionEventRole(event) === "production" : selectedSyncCalendar?.calendarRole !== "external_context";
 
   async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -14043,18 +13998,15 @@ function CreateEventModal({
     setError(null);
 
     try {
-      const normalizedForm = normalizeEventTimeInput(form);
-      const selectedDestination = normalizedForm.syncExternalCalendarId
-        ? syncCalendars.find((calendar) => calendar.id === normalizedForm.syncExternalCalendarId) ?? null
-        : null;
-      console.info("Create/edit event modal destination selected", {
-        isEditing,
-        selectedDestinationValue: normalizedForm.syncExternalCalendarId ?? "mstv_only",
-        selectedGoogleCalendarId: selectedDestination?.id ?? null,
-        selectedCalendarProviderType: selectedDestination?.providerType ?? null,
-        selectedCalendarSyncCapability: selectedDestination?.syncCapability ?? null,
-        selectedCalendarSyncEnabled: selectedDestination?.syncEnabled ?? null,
-      });
+      const normalizedForm = normalizeEventTimeInput(
+        showProductionTimeFields
+          ? form
+          : {
+              ...form,
+              clientArrivalTime: "",
+              endOfDayTime: "",
+            },
+      );
       setForm(normalizedForm);
       await onSubmit(normalizedForm);
     } catch (createError) {
@@ -14080,10 +14032,10 @@ function CreateEventModal({
         </div>
 
         <div className="grid gap-3 sm:grid-cols-2">
-          <Field label="Client">
+          <Field label="Événement">
             <input required value={form.clientName} onChange={(event) => updateField("clientName", event.target.value)} className={formInputClassName} />
           </Field>
-          <Field label="Événement">
+          <Field label="Titre">
             <input required value={form.eventName} onChange={(event) => updateField("eventName", event.target.value)} className={formInputClassName} />
           </Field>
           <Field label="Date">
@@ -14095,20 +14047,24 @@ function CreateEventModal({
               {formatFullDate(form.date)}
             </button>
           </Field>
-          <Field label="Arrivée client">
-            <TimeTextInput value={form.clientArrivalTime} onChange={(value) => updateField("clientArrivalTime", value)} className={formInputClassName} />
-          </Field>
+          {showProductionTimeFields && (
+            <Field label="Arrivée client">
+              <TimeTextInput value={form.clientArrivalTime} onChange={(value) => updateField("clientArrivalTime", value)} className={formInputClassName} />
+            </Field>
+          )}
           <Field label="Début">
             <TimeTextInput value={form.startTime} onChange={(value) => updateField("startTime", value)} className={formInputClassName} />
           </Field>
           <Field label="Fin">
             <TimeTextInput value={form.endTime} onChange={(value) => updateField("endTime", value)} className={formInputClassName} />
           </Field>
-          <Field label="Fin journée">
-            <TimeTextInput value={form.endOfDayTime} onChange={(value) => updateField("endOfDayTime", value)} className={formInputClassName} />
-          </Field>
+          {showProductionTimeFields && (
+            <Field label="Fin journée">
+              <TimeTextInput value={form.endOfDayTime} onChange={(value) => updateField("endOfDayTime", value)} className={formInputClassName} />
+            </Field>
+          )}
           {!isEditing && (
-            <Field label="Destination">
+            <Field label="Calendrier">
               <div className="space-y-1.5">
                 <select
                   value={form.syncExternalCalendarId ?? ""}
@@ -14125,12 +14081,7 @@ function CreateEventModal({
                 </select>
                 {syncCalendars.length === 0 ? (
                   <p className="text-sm font-semibold text-stone-400">Aucun calendrier externe bidirectionnel disponible.</p>
-                ) : (
-                  <p className="text-sm font-semibold text-stone-400">MSTV uniquement ou synchronisation vers un calendrier externe.</p>
-                )}
-                <p className="text-xs font-semibold text-stone-300">
-                  Debug temporaire: comptes Google connectés {connectedGoogleAccountCount} · calendriers Google API {googleProviderCalendarCount} · calendriers Google écriture {writableGoogleProviderCalendarCount} · destinations disponibles {syncCalendars.length}
-                </p>
+                ) : null}
               </div>
             </Field>
           )}
@@ -14140,17 +14091,13 @@ function CreateEventModal({
           <div className="mt-4 rounded-2xl border border-stone-200 bg-stone-50/70 px-4 py-3">
             <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
               <div className="min-w-0">
-                <p className="text-base font-semibold text-stone-950">Synchronisation calendrier</p>
+                <p className="text-base font-semibold text-stone-950">Calendrier</p>
                 {externalLinks.length > 0 ? (
                   <div className="mt-2 flex flex-col gap-2">
                     {externalLinks.map((link) => (
                       <div key={link.id} className="flex flex-wrap items-center gap-2">
                         <ExternalCalendarColorDot color={link.calendarColor} />
                         <span className="text-sm font-semibold text-stone-700">{link.calendarName}</span>
-                        <span className={cn("rounded-full px-2 py-0.5 text-xs font-semibold ring-1", getExternalSyncStatusClassName(link.syncStatus))}>
-                          {getExternalSyncStatusLabel(link.syncStatus)}
-                        </span>
-                        {link.lastSyncError && <span className="text-xs font-semibold text-rose-600">{link.lastSyncError}</span>}
                       </div>
                     ))}
                   </div>
@@ -14158,23 +14105,6 @@ function CreateEventModal({
                   <p className="mt-1 text-sm font-semibold text-stone-400">MSTV uniquement pour le moment.</p>
                 )}
               </div>
-              {linkableSyncCalendars.length > 0 && (
-                <label className="min-w-0 sm:w-64">
-                  <span className="mb-1.5 block text-sm font-semibold text-stone-500">Envoyer vers un calendrier externe</span>
-                  <select
-                    value={form.syncExternalCalendarId ?? ""}
-                    onChange={(selectEvent) => updateField("syncExternalCalendarId", selectEvent.target.value || null)}
-                    className="h-10 w-full rounded-xl border border-stone-200 bg-white px-3 text-sm font-semibold text-stone-700 outline-none"
-                  >
-                    <option value="">Ne pas envoyer</option>
-                    {linkableSyncCalendars.map((calendar) => (
-                      <option key={calendar.id} value={calendar.id}>
-                        {calendar.name} · {getExternalCalendarProviderLabel(calendar.providerType)}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-              )}
             </div>
           </div>
         )}
@@ -16977,7 +16907,7 @@ function TimeTextInput({
     <input
       type="text"
       inputMode="numeric"
-      placeholder="HH:mm"
+      placeholder="--:--"
       value={value}
       onChange={(event) => onChange(sanitizeTimeDraft(event.target.value))}
       onBlur={commitValue}
