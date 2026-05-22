@@ -55,6 +55,7 @@ import {
   type WheelEvent as ReactWheelEvent,
 } from "react";
 import { Card } from "@/components/ui/card";
+import { EventEditorModal } from "@/components/events/EventEditorModal";
 import type { Session } from "@supabase/supabase-js";
 import {
   publicHolidays,
@@ -70,6 +71,13 @@ import {
   getProductionEventDisplayLine,
   isExternalContextProductionEvent,
 } from "@/lib/events/display";
+import {
+  normalizeCompactTimeInput,
+  normalizeEventTimeInput,
+  sanitizeTimeDraft,
+  toTimeInputValue,
+  type EventEditorFormInput,
+} from "@/lib/events/editor";
 import {
   buildExternalCalendarVisibilityState,
   getExternalCalendarProviderKey,
@@ -426,20 +434,7 @@ type DeleteSelection =
   | { type: "link"; linkId: string }
   | { type: "document"; groupId: string };
 
-type CreateEventInput = {
-  clientName: string;
-  eventName: string;
-  date: string;
-  clientArrivalTime: string;
-  startTime: string;
-  endTime: string;
-  endOfDayTime: string;
-  syncExternalCalendarId?: string | null;
-  optionLabels?: string[];
-  quoteReference?: string | null;
-  quoteVersion?: string | null;
-  sourceQuoteText?: string | null;
-};
+type CreateEventInput = EventEditorFormInput;
 
 type QuoteExtractionResult = {
   clientName: string;
@@ -1616,46 +1611,6 @@ function getEventTimeFieldLabel(field: EventTimeField) {
   };
 
   return labels[field];
-}
-
-function toTimeInputValue(time: string | null) {
-  if (!time) return "";
-  const [hours = "00", minutes = "00"] = time.split(":");
-  return `${hours.padStart(2, "0")}:${minutes.padStart(2, "0")}`;
-}
-
-function sanitizeTimeDraft(value: string) {
-  return value.replace(/\D/g, "").slice(0, 4);
-}
-
-function normalizeCompactTimeInput(value: string) {
-  const digits = sanitizeTimeDraft(value);
-  if (!digits) return "";
-
-  const [hours, minutes] =
-    digits.length <= 2
-      ? [digits, "00"]
-      : digits.length === 3
-        ? [digits.slice(0, 1), digits.slice(1)]
-        : [digits.slice(0, 2), digits.slice(2)];
-
-  const hourNumber = Number(hours);
-  const minuteNumber = Number(minutes);
-
-  if (!Number.isInteger(hourNumber) || !Number.isInteger(minuteNumber)) return "";
-  if (hourNumber < 0 || hourNumber > 23 || minuteNumber < 0 || minuteNumber > 59) return "";
-
-  return `${String(hourNumber).padStart(2, "0")}:${String(minuteNumber).padStart(2, "0")}`;
-}
-
-function normalizeEventTimeInput(input: CreateEventInput): CreateEventInput {
-  return {
-    ...input,
-    clientArrivalTime: normalizeCompactTimeInput(input.clientArrivalTime),
-    startTime: normalizeCompactTimeInput(input.startTime),
-    endTime: normalizeCompactTimeInput(input.endTime),
-    endOfDayTime: normalizeCompactTimeInput(input.endOfDayTime),
-  };
 }
 
 function uniqueLabels(labels: string[]) {
@@ -9322,10 +9277,13 @@ export default function Home() {
       )}
 
       {createModalOpen && (
-        <CreateEventModal
+        <EventEditorModal
           selectedDateKey={selectedDateKey}
           event={editingEvent}
           syncCalendars={writableExternalCalendars}
+          DatePickerComponent={SharedDatePicker}
+          formatFullDate={formatFullDate}
+          getUserFacingErrorMessage={getUserFacingErrorMessage}
           onClose={() => {
             setCreateModalOpen(false);
             setEditingEvent(null);
@@ -13664,178 +13622,6 @@ function splitStoredDetails(details: string | null) {
     .split(/\n|,/)
     .map((detail) => detail.trim())
     .filter(Boolean);
-}
-
-function CreateEventModal({
-  selectedDateKey,
-  event,
-  syncCalendars,
-  onClose,
-  onSubmit,
-}: {
-  selectedDateKey: string;
-  event: ProductionEvent | null;
-  syncCalendars: ExternalCalendar[];
-  onClose: () => void;
-  onSubmit: (input: CreateEventInput) => Promise<void>;
-}) {
-  const isEditing = Boolean(event);
-  const externalLinks = event ? getEventWritableExternalLinks(event) : [];
-  const currentExternalCalendarId = externalLinks.filter((link) => link.calendarSyncEnabled).length === 1
-    ? externalLinks.find((link) => link.calendarSyncEnabled)?.externalCalendarId ?? null
-    : null;
-  const [form, setForm] = useState<CreateEventInput>({
-    clientName: event?.clientName ?? "",
-    eventName: event?.eventName ?? "",
-    date: event?.date ?? selectedDateKey,
-    clientArrivalTime: event ? toTimeInputValue(event.clientArrivalTime) : "08:30",
-    startTime: event ? toTimeInputValue(event.startTime) : "10:00",
-    endTime: event ? toTimeInputValue(event.endTime) : "11:30",
-    endOfDayTime: event ? toTimeInputValue(event.endOfDayTime) : "13:00",
-    syncExternalCalendarId: currentExternalCalendarId,
-  });
-  const [submitting, setSubmitting] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [datePickerOpen, setDatePickerOpen] = useState(false);
-  const currentExternalLink = currentExternalCalendarId ? externalLinks.find((link) => link.externalCalendarId === currentExternalCalendarId) ?? null : null;
-  const selectableSyncCalendars = isEditing && currentExternalLink?.providerType === "apple_caldav"
-    ? syncCalendars.filter((calendar) => calendar.providerType === "apple_caldav")
-    : isEditing && currentExternalLink?.providerType === "google"
-      ? syncCalendars.filter((calendar) => calendar.id === currentExternalCalendarId)
-      : syncCalendars;
-  const selectedSyncCalendar = form.syncExternalCalendarId ? selectableSyncCalendars.find((calendar) => calendar.id === form.syncExternalCalendarId) ?? null : null;
-  const showProductionTimeFields = event ? getEffectiveProductionEventRole(event) === "production" : selectedSyncCalendar?.calendarRole !== "external_context";
-
-  async function handleSubmit(formEvent: React.FormEvent<HTMLFormElement>) {
-    formEvent.preventDefault();
-    setSubmitting(true);
-    setError(null);
-
-    try {
-      const normalizedForm = normalizeEventTimeInput(
-        showProductionTimeFields
-          ? form
-          : {
-              ...form,
-              clientArrivalTime: "",
-              endOfDayTime: "",
-            },
-      );
-      setForm(normalizedForm);
-      await onSubmit(normalizedForm);
-    } catch (createError) {
-      setError(getUserFacingErrorMessage(createError, isEditing ? "Impossible de modifier l'événement." : "Impossible de créer l'événement."));
-    } finally {
-      setSubmitting(false);
-    }
-  }
-
-  function updateField<Key extends keyof CreateEventInput>(key: Key, value: CreateEventInput[Key]) {
-    setForm((current) => ({ ...current, [key]: value }));
-  }
-  useEscapeToClose(onClose);
-
-  return (
-    <div className={cn(modalBackdropClassName, modalSheetPositionClassName)} onPointerDown={(pointerEvent) => handleModalBackdropPointerDown(pointerEvent, onClose)}>
-      <form onSubmit={handleSubmit} className={cn(modalPanelClassName, "w-full p-5 sm:max-w-xl sm:p-6")} onPointerDown={(pointerEvent) => pointerEvent.stopPropagation()}>
-        <div className="mb-5 flex items-center justify-between gap-4">
-          <h2 className="text-base font-semibold text-stone-950">{isEditing ? "Modifier l'événement" : "Créer un événement"}</h2>
-          <button type="button" onClick={onClose} className="rounded-full border border-stone-200 px-3 py-1.5 text-base font-semibold text-stone-600">
-            Fermer
-          </button>
-        </div>
-
-        <div className="space-y-3">
-          <Field label="Date">
-            <button
-              type="button"
-              onClick={() => setDatePickerOpen(true)}
-              className={cn(formInputClassName, "flex items-center text-left")}
-            >
-              {formatFullDate(form.date)}
-            </button>
-          </Field>
-
-          <div className="grid gap-3 sm:grid-cols-2">
-            <Field label="Événement">
-              <input required value={form.clientName} onChange={(event) => updateField("clientName", event.target.value)} className={formInputClassName} />
-            </Field>
-            <Field label="Titre">
-              <input required value={form.eventName} onChange={(event) => updateField("eventName", event.target.value)} className={formInputClassName} />
-            </Field>
-          </div>
-
-          <div className="grid gap-3 sm:grid-cols-2">
-            <Field label="Début">
-              <TimeTextInput value={form.startTime} onChange={(value) => updateField("startTime", value)} className={formInputClassName} />
-            </Field>
-            <Field label="Fin">
-              <TimeTextInput value={form.endTime} onChange={(value) => updateField("endTime", value)} className={formInputClassName} />
-            </Field>
-          </div>
-
-          {showProductionTimeFields && (
-            <div className="grid gap-3 sm:grid-cols-2">
-              <Field label="Arrivée client">
-                <TimeTextInput value={form.clientArrivalTime} onChange={(value) => updateField("clientArrivalTime", value)} className={formInputClassName} />
-              </Field>
-              <Field label="Fin journée">
-                <TimeTextInput value={form.endOfDayTime} onChange={(value) => updateField("endOfDayTime", value)} className={formInputClassName} />
-              </Field>
-            </div>
-          )}
-
-          {(!isEditing || selectableSyncCalendars.length > 0 || currentExternalCalendarId) && (
-            <Field label="Calendrier">
-              <div className="space-y-1.5">
-                <select
-                  value={form.syncExternalCalendarId ?? ""}
-                  onChange={(event) => {
-                    const nextValue = event.target.value || null;
-                    updateField("syncExternalCalendarId", nextValue);
-                  }}
-                  disabled={!isEditing && selectableSyncCalendars.length === 0}
-                  className={cn(formInputClassName, selectableSyncCalendars.length === 0 && "bg-stone-50 text-stone-400")}
-                >
-                  <option value="">MSTV uniquement</option>
-                  {selectableSyncCalendars.map((calendar) => (
-                    <option key={calendar.id} value={calendar.id}>
-                      {calendar.name} · {getExternalCalendarProviderLabel(calendar.providerType)}
-                    </option>
-                  ))}
-                </select>
-                {!isEditing && selectableSyncCalendars.length === 0 ? (
-                  <p className="text-sm font-semibold text-stone-400">Aucun calendrier externe bidirectionnel disponible.</p>
-                ) : null}
-              </div>
-            </Field>
-          )}
-        </div>
-
-        {error && <div className="mt-4 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-base font-medium text-rose-700">{error}</div>}
-
-        <div className="mt-6 flex justify-end gap-2">
-          <button type="button" onClick={onClose} className="rounded-full border border-stone-200 bg-white px-4 py-2 text-base font-semibold text-stone-600">
-            Annuler
-          </button>
-          <button disabled={submitting} className="rounded-full bg-[#bb2720] px-4 py-2 text-base font-semibold text-white disabled:bg-stone-300">
-            {submitting ? (isEditing ? "Modification..." : "Création...") : isEditing ? "Modifier" : "Créer"}
-          </button>
-        </div>
-
-        {datePickerOpen && (
-          <SharedDatePicker
-            selectedDate={form.date}
-            onClose={() => setDatePickerOpen(false)}
-            onSelectDate={(date) => {
-              updateField("date", date);
-              setDatePickerOpen(false);
-            }}
-          />
-        )}
-      </form>
-    </div>
-  );
 }
 
 function NativeMstvIcsImportModal({
