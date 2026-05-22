@@ -4,6 +4,7 @@ export type EventEditorFormInput = {
   clientName: string;
   eventName: string;
   date: string;
+  isAllDay: boolean;
   clientArrivalTime: string;
   startTime: string;
   endTime: string;
@@ -40,6 +41,7 @@ export type EventEditorEvent = {
   clientName: string;
   eventName: string;
   date: string;
+  isAllDay: boolean;
   clientArrivalTime: string | null;
   startTime: string | null;
   endTime: string | null;
@@ -80,6 +82,16 @@ export function normalizeCompactTimeInput(value: string) {
 }
 
 export function normalizeEventTimeInput(input: EventEditorFormInput): EventEditorFormInput {
+  if (input.isAllDay) {
+    return {
+      ...input,
+      clientArrivalTime: "",
+      startTime: "",
+      endTime: "",
+      endOfDayTime: "",
+    };
+  }
+
   return {
     ...input,
     clientArrivalTime: normalizeCompactTimeInput(input.clientArrivalTime),
@@ -108,6 +120,7 @@ export function getEventEditorInitialForm(event: EventEditorEvent | null, select
     clientName: event?.clientName ?? "",
     eventName: event?.eventName ?? "",
     date: event?.date ?? selectedDateKey,
+    isAllDay: event?.isAllDay ?? false,
     clientArrivalTime: event ? toTimeInputValue(event.clientArrivalTime) : "08:30",
     startTime: event ? toTimeInputValue(event.startTime) : "10:00",
     endTime: event ? toTimeInputValue(event.endTime) : "11:30",

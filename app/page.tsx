@@ -400,6 +400,7 @@ type ProductionEvent = {
   clientName: string;
   eventName: string;
   date: string;
+  isAllDay: boolean;
   clientArrivalTime: string | null;
   startTime: string | null;
   endTime: string | null;
@@ -439,6 +440,7 @@ type QuoteExtractionResult = {
   clientName: string;
   eventName: string;
   date: string;
+  isAllDay: boolean;
   clientArrivalTime: string;
   startTime: string;
   endTime: string;
@@ -467,6 +469,7 @@ type NativeMstvIcsReviewEvent = {
   clientName: string;
   eventName: string;
   date: string;
+  allDay: boolean;
   startTime: string;
   endTime: string;
   location: string | null;
@@ -1328,7 +1331,7 @@ function getExternalEventDateKey(event: ExternalCalendarEvent) {
 }
 
 function formatExternalEventTimeRange(event: ExternalCalendarEvent) {
-  if (event.allDay) return "Toute la journée";
+  if (event.allDay) return "Jour entier";
 
   const formatter = new Intl.DateTimeFormat("fr-FR", {
     hour: "2-digit",
@@ -1551,6 +1554,7 @@ function buildNativeMstvIcsReviewEvents(icsText: string, existingImportIds: Set<
         clientName: parsedTitle.clientName,
         eventName: parsedTitle.eventName,
         date: getLocalDateKeyFromIso(event.startTime),
+        allDay: event.allDay,
         startTime: getLocalTimeFromIso(event.startTime, event.allDay),
         endTime: getLocalTimeFromIso(event.endTime, event.allDay),
         location: event.location,
@@ -1575,6 +1579,14 @@ function formatTimeRange(startTime: string | null, endTime: string | null) {
 
   if (startLabel && endLabel) return `${startLabel} → ${endLabel}`;
   return startLabel || endLabel;
+}
+
+function formatEventTimeRange(event: Pick<ProductionEvent, "isAllDay" | "clientArrivalTime" | "startTime" | "endTime" | "endOfDayTime" | "eventRole" | "importedFrom" | "externalLinks" | "clientName" | "eventName">) {
+  if (event.isAllDay) return "Jour entier";
+  if (getEffectiveProductionEventRole(event) === "production") {
+    return formatTimeRange(event.clientArrivalTime || event.startTime, event.endOfDayTime || event.endTime);
+  }
+  return formatTimeRange(event.startTime, event.endTime);
 }
 
 function formatFullDate(dateKey: string) {
@@ -1603,10 +1615,10 @@ function formatHistoryTimestamp(dateValue: string) {
 
 function getEventTimeFieldLabel(field: EventTimeField) {
   const labels: Record<EventTimeField, string> = {
-    clientArrivalTime: "Arrivée client",
-    startTime: "Début live",
-    endTime: "Fin live",
-    endOfDayTime: "Fin journée",
+    clientArrivalTime: "Début",
+    startTime: "Début live/tournage",
+    endTime: "Fin live/tournage",
+    endOfDayTime: "Fin",
   };
 
   return labels[field];
@@ -1948,6 +1960,7 @@ function extractQuoteFields(text: string, fallbackDate: string, fileName: string
     clientName,
     eventName: "Événement",
     date,
+    isAllDay: false,
     clientArrivalTime: "",
     startTime: productionTimeRange.startTime,
     endTime: productionTimeRange.endTime,
@@ -2165,7 +2178,10 @@ async function extractPdfText(file: File) {
 }
 
 function eventSortValue(event: ProductionEvent) {
-  return new Date(`${event.date}T${toTimeInputValue(event.startTime) || "00:00"}:00`).getTime();
+  const primaryTime = getEffectiveProductionEventRole(event) === "production"
+    ? event.clientArrivalTime || event.startTime
+    : event.startTime;
+  return new Date(`${event.date}T${toTimeInputValue(primaryTime) || "00:00"}:00`).getTime();
 }
 
 function normalizeLabel(label: string) {
@@ -2759,6 +2775,7 @@ function mapEvent(row: EventQueryRow): ProductionEvent {
     clientName: row.client_name,
     eventName: row.event_name,
     date: row.date,
+    isAllDay: Boolean(row.is_all_day),
     clientArrivalTime: toTimeInputValue(row.client_arrival_time) || null,
     startTime: toTimeInputValue(row.start_time) || null,
     endTime: toTimeInputValue(row.end_time) || null,
@@ -5764,6 +5781,7 @@ export default function Home() {
       client_name: normalizedInput.clientName,
       event_name: normalizedInput.eventName,
       date: normalizedInput.date,
+      is_all_day: normalizedInput.isAllDay,
       client_arrival_time: normalizedInput.clientArrivalTime || null,
       start_time: normalizedInput.startTime || null,
       end_time: normalizedInput.endTime || null,
@@ -5819,6 +5837,7 @@ export default function Home() {
         clientName: normalizedInput.clientName,
         eventName: normalizedInput.eventName,
         date: normalizedInput.date,
+        isAllDay: normalizedInput.isAllDay,
         clientArrivalTime: normalizedInput.clientArrivalTime || null,
         startTime: normalizedInput.startTime || null,
         endTime: normalizedInput.endTime || null,
@@ -6042,6 +6061,7 @@ export default function Home() {
         client_name: event.clientName,
         event_name: event.eventName,
         date: event.date,
+        is_all_day: event.allDay,
         client_arrival_time: null,
         start_time: event.startTime || null,
         end_time: event.endTime || null,
@@ -6087,6 +6107,7 @@ export default function Home() {
         client_name: event.clientName,
         event_name: event.eventName,
         date: event.date,
+        is_all_day: event.allDay,
         client_arrival_time: null,
         start_time: event.startTime || null,
         end_time: event.endTime || null,
@@ -6182,6 +6203,7 @@ export default function Home() {
       client_name: normalizedInput.clientName,
       event_name: normalizedInput.eventName,
       date: normalizedInput.date,
+      is_all_day: normalizedInput.isAllDay,
       client_arrival_time: normalizedInput.clientArrivalTime || null,
       start_time: normalizedInput.startTime || null,
       end_time: normalizedInput.endTime || null,
@@ -6205,6 +6227,7 @@ export default function Home() {
       clientName: data.client_name,
       eventName: data.event_name,
       date: data.date,
+      isAllDay: Boolean(data.is_all_day),
       clientArrivalTime: toTimeInputValue(data.client_arrival_time) || null,
       startTime: toTimeInputValue(data.start_time) || null,
       endTime: toTimeInputValue(data.end_time) || null,
@@ -6343,6 +6366,7 @@ export default function Home() {
       client_name: normalizedInput.clientName,
       event_name: normalizedInput.eventName,
       date: normalizedInput.date,
+      is_all_day: normalizedInput.isAllDay,
       client_arrival_time: normalizedInput.clientArrivalTime || null,
       start_time: normalizedInput.startTime || null,
       end_time: normalizedInput.endTime || null,
@@ -6414,6 +6438,7 @@ export default function Home() {
         clientName: event.clientName,
         eventName: event.eventName,
         date: event.date,
+        isAllDay: event.isAllDay,
         clientArrivalTime: event.clientArrivalTime,
         startTime: event.startTime,
         endTime: event.endTime,
@@ -6425,6 +6450,7 @@ export default function Home() {
         clientName: normalizedInput.clientName,
         eventName: normalizedInput.eventName,
         date: normalizedInput.date,
+        isAllDay: normalizedInput.isAllDay,
         clientArrivalTime: normalizedInput.clientArrivalTime || null,
         startTime: normalizedInput.startTime || null,
         endTime: normalizedInput.endTime || null,
@@ -6503,6 +6529,7 @@ export default function Home() {
         client_name: sourceEvent.clientName,
         event_name: sourceEvent.eventName,
         date: normalizedDate,
+        is_all_day: sourceEvent.isAllDay,
         client_arrival_time: sourceEvent.clientArrivalTime || null,
         start_time: sourceEvent.startTime || null,
         end_time: sourceEvent.endTime || null,
@@ -6743,6 +6770,7 @@ export default function Home() {
               startTime: toTimeInputValue(data.start_time) || null,
               endTime: toTimeInputValue(data.end_time) || null,
               endOfDayTime: toTimeInputValue(data.end_of_day_time) || null,
+              isAllDay: Boolean(data.is_all_day),
               updatedAt: data.updated_at,
             }
           : item,
@@ -9698,7 +9726,7 @@ function getEventSearchText(event: ProductionEvent) {
       display.subtitle,
       event.date,
       formatFullDate(event.date),
-      formatTimeRange(event.startTime, event.endTime),
+      formatEventTimeRange(event),
       ...event.options.map((option) => option.label),
       ...event.links.map((link) => link.label),
       ...event.documentGroups.map((group) => group.label),
@@ -9770,7 +9798,7 @@ function EventSearchOverlay({
           {results.length > 0 && (
             <div className="space-y-1.5">
               {results.map((event) => {
-                const timeRange = formatTimeRange(event.startTime, event.endTime);
+                const timeRange = formatEventTimeRange(event);
                 const display = getProductionEventDisplay(event);
                 return (
                   <button
@@ -10971,7 +10999,7 @@ function SwipeableCalendarEventRow({
   const deleteActionVisible = canDelete && visibleOffset < -1;
   const duplicateActionVisible = canDuplicate && visibleOffset > 1;
   const stableRowWidthRef = useRef(0);
-  const timeRange = formatTimeRange(event.startTime, event.endTime);
+  const timeRange = formatEventTimeRange(event);
   const externalLink = getPrimaryExternalEventLink(event);
   const externalTone = getExternalCalendarTone(externalLink?.calendarColor ?? null);
   const display = getProductionEventDisplay(event);
@@ -11359,7 +11387,7 @@ function ExternalContextEventPanel({
 }) {
   const display = getProductionEventDisplay(event);
   const details = getExternalContextDetails(event);
-  const timeRange = formatTimeRange(event.startTime, event.endTime) || "Journée";
+  const timeRange = formatEventTimeRange(event) || "Journée";
   const descriptionView = getExternalEventDescriptionView(details.description);
   const wrapStyle: React.CSSProperties = { overflowWrap: "anywhere", wordBreak: "break-word" };
 
@@ -12302,6 +12330,15 @@ function getLinkTone(state: LinkStatus) {
 }
 
 function ProductionTimeCards({ event }: { event: ProductionEvent }) {
+  if (event.isAllDay) {
+    return (
+      <div className="grid gap-3 sm:grid-cols-2">
+        <ProductionTimeCard label="Date" value={formatFullDate(event.date)} />
+        <ProductionTimeCard label="Horaire" value="Jour entier" />
+      </div>
+    );
+  }
+
   const broadStartTime = event.clientArrivalTime || event.startTime;
   const broadEndTime = event.endOfDayTime || event.endTime;
   const broadTimeRange = formatTimeRange(broadStartTime, broadEndTime) || "--:--";
@@ -13536,7 +13573,7 @@ function NativeMstvIcsImportModal({
                   </div>
                   <div className="text-left text-base font-semibold text-stone-500 sm:text-right">
                     <p>{formatFullDate(event.date)}</p>
-                    <p>{formatTimeRange(event.startTime, event.endTime) || "Journée"}</p>
+                    <p>{event.allDay ? "Jour entier" : formatTimeRange(event.startTime, event.endTime) || "Journée"}</p>
                   </div>
                 </div>
               ))}
@@ -13588,6 +13625,7 @@ function QuoteImportModal({
     clientName: "",
     eventName: "",
     date: selectedDateKey,
+    isAllDay: false,
     clientArrivalTime: "",
     startTime: "",
     endTime: "",
@@ -13656,6 +13694,7 @@ function QuoteImportModal({
         clientName: extracted.clientName,
         eventName: "Événement",
         date: extracted.date,
+        isAllDay: false,
         clientArrivalTime: "",
         startTime: extracted.startTime,
         endTime: extracted.endTime,

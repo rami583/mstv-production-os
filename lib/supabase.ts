@@ -17,6 +17,7 @@ export type Database = {
           start_time: string | null;
           end_time: string | null;
           end_of_day_time: string | null;
+          is_all_day: boolean;
           status: EventStatus;
           deleted_at: string | null;
           deleted_by: string | null;
@@ -39,6 +40,7 @@ export type Database = {
           start_time?: string | null;
           end_time?: string | null;
           end_of_day_time?: string | null;
+          is_all_day?: boolean;
           status?: EventStatus;
           deleted_at?: string | null;
           deleted_by?: string | null;

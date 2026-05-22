@@ -313,6 +313,7 @@ function mapAppleEventToMstvEvent(event: AppleCalDavEvent): ProductionEventInser
     client_name: parsedSummary.clientName,
     event_name: parsedSummary.eventName,
     date: getLocalDateKeyFromIso(event.startTime),
+    is_all_day: event.allDay,
     client_arrival_time: null,
     start_time: getLocalTimeFromIso(event.startTime, event.allDay),
     end_time: getLocalTimeFromIso(event.endTime, event.allDay),

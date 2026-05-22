@@ -116,37 +116,42 @@ function addOneHour(time: string | null) {
   return `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
 }
 
+function getNextDate(dateKey: string) {
+  const nextDate = new Date(`${dateKey}T12:00:00`);
+  nextDate.setDate(nextDate.getDate() + 1);
+  return nextDate.toISOString().slice(0, 10);
+}
+
 function mapGoogleEventToMstvEvent(event: GoogleEvent) {
   const parsedSummary = parseGoogleSummary(event.summary);
+  const isAllDay = Boolean(event.start?.date);
   const date = parseGoogleDate(event.start?.date ?? event.start?.dateTime) ?? new Date().toISOString().slice(0, 10);
   return {
     client_name: parsedSummary.clientName,
     event_name: parsedSummary.eventName,
     date,
+    is_all_day: isAllDay,
     client_arrival_time: null,
-    start_time: event.start?.date ? null : parseGoogleTime(event.start?.dateTime),
-    end_time: event.end?.date ? null : parseGoogleTime(event.end?.dateTime),
+    start_time: isAllDay ? null : parseGoogleTime(event.start?.dateTime),
+    end_time: isAllDay ? null : parseGoogleTime(event.end?.dateTime),
     end_of_day_time: null,
   };
 }
 
 function mapMstvEventToGooglePayload(event: ProductionEventRow) {
   const summary = [event.client_name, event.event_name].filter(Boolean).join(" - ");
-  const hasTimedRange = Boolean(event.start_time || event.end_time);
 
-  if (!hasTimedRange) {
-    const nextDate = new Date(`${event.date}T12:00:00`);
-    nextDate.setDate(nextDate.getDate() + 1);
+  if (event.is_all_day) {
     return {
       summary,
       description: "Synchronisé depuis MSTV Production OS.",
       start: { date: event.date },
-      end: { date: nextDate.toISOString().slice(0, 10) },
+      end: { date: getNextDate(event.date) },
     };
   }
 
-  const startTime = event.start_time ?? event.client_arrival_time ?? "09:00";
-  const endTime = event.end_time ?? addOneHour(startTime);
+  const startTime = event.client_arrival_time ?? event.start_time ?? "09:00";
+  const endTime = event.end_of_day_time ?? event.end_time ?? addOneHour(startTime);
   return {
     summary,
     description: "Synchronisé depuis MSTV Production OS.",

@@ -86,6 +86,12 @@ function addOneHour(time: string | null) {
   return `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
 }
 
+function getNextDate(dateKey: string) {
+  const nextDate = new Date(`${dateKey}T12:00:00`);
+  nextDate.setDate(nextDate.getDate() + 1);
+  return nextDate.toISOString().slice(0, 10);
+}
+
 function toIcsDate(value: string) {
   return value.replace(/-/g, "");
 }
@@ -168,15 +174,12 @@ function getAppleEventPayload(event: ProductionEventRow, uid: string) {
     `DESCRIPTION:${escapeIcsText(description)}`,
   ];
 
-  const hasTimedRange = Boolean(event.start_time || event.end_time);
-  if (!hasTimedRange) {
-    const nextDate = new Date(`${event.date}T12:00:00`);
-    nextDate.setDate(nextDate.getDate() + 1);
+  if (event.is_all_day) {
     lines.push(`DTSTART;VALUE=DATE:${toIcsDate(event.date)}`);
-    lines.push(`DTEND;VALUE=DATE:${toIcsDate(nextDate.toISOString().slice(0, 10))}`);
+    lines.push(`DTEND;VALUE=DATE:${toIcsDate(getNextDate(event.date))}`);
   } else {
-    const startTime = event.start_time ?? event.client_arrival_time ?? "09:00";
-    const endTime = event.end_time ?? addOneHour(startTime);
+    const startTime = event.client_arrival_time ?? event.start_time ?? "09:00";
+    const endTime = event.end_of_day_time ?? event.end_time ?? addOneHour(startTime);
     lines.push(`DTSTART;TZID=Europe/Paris:${toIcsLocalDateTime(event.date, startTime)}`);
     lines.push(`DTEND;TZID=Europe/Paris:${toIcsLocalDateTime(event.date, endTime)}`);
   }

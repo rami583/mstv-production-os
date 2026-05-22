@@ -40,23 +40,26 @@ function addOneHour(time: string | null) {
   return `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
 }
 
+function getNextDate(dateKey: string) {
+  const nextDate = new Date(`${dateKey}T12:00:00`);
+  nextDate.setDate(nextDate.getDate() + 1);
+  return nextDate.toISOString().slice(0, 10);
+}
+
 function toGoogleEventPayload(event: ProductionEventRow) {
   const summary = [event.client_name, event.event_name].filter(Boolean).join(" - ");
-  const hasTimedRange = Boolean(event.start_time || event.end_time);
 
-  if (!hasTimedRange) {
-    const nextDate = new Date(`${event.date}T12:00:00`);
-    nextDate.setDate(nextDate.getDate() + 1);
+  if (event.is_all_day) {
     return {
       summary,
       description: "Synchronisé depuis MSTV Production OS.",
       start: { date: event.date },
-      end: { date: nextDate.toISOString().slice(0, 10) },
+      end: { date: getNextDate(event.date) },
     };
   }
 
-  const startTime = event.start_time ?? event.client_arrival_time ?? "09:00";
-  const endTime = event.end_time ?? addOneHour(startTime);
+  const startTime = event.client_arrival_time ?? event.start_time ?? "09:00";
+  const endTime = event.end_of_day_time ?? event.end_time ?? addOneHour(startTime);
   const payload = {
     summary,
     description: "Synchronisé depuis MSTV Production OS.",

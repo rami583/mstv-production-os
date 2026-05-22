@@ -172,6 +172,16 @@ export function EventEditorModal({
             </button>
           </Field>
 
+          <label className="flex items-center justify-between gap-3 rounded-2xl border border-stone-200 bg-stone-50 px-4 py-3 text-base font-semibold text-stone-700">
+            <span>Jour entier</span>
+            <input
+              type="checkbox"
+              checked={form.isAllDay}
+              onChange={(inputEvent) => updateField("isAllDay", inputEvent.target.checked)}
+              className="h-5 w-5 accent-[#bb2720]"
+            />
+          </label>
+
           <div className="grid gap-3 sm:grid-cols-2">
             <Field label="Événement">
               <input required value={form.clientName} onChange={(inputEvent) => updateField("clientName", inputEvent.target.value)} className={formInputClassName} />
@@ -181,24 +191,36 @@ export function EventEditorModal({
             </Field>
           </div>
 
-          <div className="grid gap-3 sm:grid-cols-2">
-            <Field label="Début">
-              <TimeTextInput value={form.startTime} onChange={(value) => updateField("startTime", value)} className={formInputClassName} />
-            </Field>
-            <Field label="Fin">
-              <TimeTextInput value={form.endTime} onChange={(value) => updateField("endTime", value)} className={formInputClassName} />
-            </Field>
-          </div>
+          {!form.isAllDay && (
+            <>
+              <div className="grid gap-3 sm:grid-cols-2">
+                <Field label="Début">
+                  <TimeTextInput
+                    value={showProductionTimeFields ? form.clientArrivalTime : form.startTime}
+                    onChange={(value) => updateField(showProductionTimeFields ? "clientArrivalTime" : "startTime", value)}
+                    className={formInputClassName}
+                  />
+                </Field>
+                <Field label="Fin">
+                  <TimeTextInput
+                    value={showProductionTimeFields ? form.endOfDayTime : form.endTime}
+                    onChange={(value) => updateField(showProductionTimeFields ? "endOfDayTime" : "endTime", value)}
+                    className={formInputClassName}
+                  />
+                </Field>
+              </div>
 
-          {showProductionTimeFields && (
-            <div className="grid gap-3 sm:grid-cols-2">
-              <Field label="Arrivée client">
-                <TimeTextInput value={form.clientArrivalTime} onChange={(value) => updateField("clientArrivalTime", value)} className={formInputClassName} />
-              </Field>
-              <Field label="Fin journée">
-                <TimeTextInput value={form.endOfDayTime} onChange={(value) => updateField("endOfDayTime", value)} className={formInputClassName} />
-              </Field>
-            </div>
+              {showProductionTimeFields && (
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <Field label="Début live/tournage">
+                    <TimeTextInput value={form.startTime} onChange={(value) => updateField("startTime", value)} className={formInputClassName} />
+                  </Field>
+                  <Field label="Fin live/tournage">
+                    <TimeTextInput value={form.endTime} onChange={(value) => updateField("endTime", value)} className={formInputClassName} />
+                  </Field>
+                </div>
+              )}
+            </>
           )}
 
           {(!isEditing || selectableSyncCalendars.length > 0 || currentExternalCalendarId) && (
