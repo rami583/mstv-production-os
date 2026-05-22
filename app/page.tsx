@@ -6642,7 +6642,11 @@ export default function Home() {
     console.info("MSTV event update succeeded before Google sync", {
       eventId: event.id,
       selectedSyncExternalCalendarId: normalizedInput.syncExternalCalendarId ?? null,
-      linkedExternalEventFound: getEventGoogleLinks(event).length > 0,
+      originalExternalCalendarId: currentExternalCalendarId,
+      requestedExternalCalendarId,
+      currentExternalProviderType: currentExternalLink?.providerType ?? null,
+      calendarSelectionChanged,
+      linkedExternalEventFound: currentWritableLinks.length > 0,
     });
 
     const updatedEvent: ProductionEvent = {
@@ -6733,8 +6737,12 @@ export default function Home() {
               eventId: updatedEvent.id,
               previousExternalCalendarId: currentExternalCalendarId,
               selectedSyncExternalCalendarId: requestedExternalCalendarId,
+              routeCalled: "/api/calendar/apple/events",
             });
             syncPayload = await syncAppleEventAction("move", updatedEvent.id, requestedExternalCalendarId);
+            if (!syncPayload?.externalEventId && (syncPayload?.synced ?? 0) === 0) {
+              throw new Error("Le changement de calendrier Apple n’a pas été appliqué.");
+            }
           } else if (!currentExternalLink) {
             console.info("External calendar create/link sync requested for existing MSTV event", {
               eventId: updatedEvent.id,
@@ -14030,8 +14038,8 @@ function CreateEventModal({
   const selectedSyncCalendar = form.syncExternalCalendarId ? selectableSyncCalendars.find((calendar) => calendar.id === form.syncExternalCalendarId) ?? null : null;
   const showProductionTimeFields = event ? getEffectiveProductionEventRole(event) === "production" : selectedSyncCalendar?.calendarRole !== "external_context";
 
-  async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
-    event.preventDefault();
+  async function handleSubmit(formEvent: React.FormEvent<HTMLFormElement>) {
+    formEvent.preventDefault();
     setSubmitting(true);
     setError(null);
 
@@ -14045,6 +14053,13 @@ function CreateEventModal({
               endOfDayTime: "",
             },
       );
+      console.info("Event edit calendar submit", {
+        eventId: isEditing ? event?.id ?? null : null,
+        originalExternalCalendarId: currentExternalCalendarId,
+        selectedExternalCalendarId: normalizedForm.syncExternalCalendarId ?? null,
+        selectedProviderType: selectedSyncCalendar?.providerType ?? null,
+        calendarChanged: (normalizedForm.syncExternalCalendarId ?? null) !== currentExternalCalendarId,
+      });
       setForm(normalizedForm);
       await onSubmit(normalizedForm);
     } catch (createError) {

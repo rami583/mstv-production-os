@@ -462,23 +462,27 @@ export async function POST(request: Request) {
       return appleJsonResponse({ ok: true, externalEventId: appleEvent.id });
     }
 
-    const links = await getAppleLinks(supabase, eventId, authResult.user.id);
-    if (links.length === 0) {
-      return appleJsonResponse({ ok: true, synced: 0 });
-    }
-
     if (action === "move") {
       const externalCalendarId = body.externalCalendarId?.trim();
       if (!externalCalendarId) {
         return appleJsonResponse({ error: "Calendrier Apple manquant." }, { status: 400 });
       }
       const nextCalendar = await getOwnedAppleCalendar(supabase, externalCalendarId, authResult.user.id);
+      const links = await getAppleLinks(supabase, eventId, authResult.user.id);
+      if (links.length === 0) {
+        return appleJsonResponse({ error: "Aucun lien Apple Calendar trouvé pour cet événement." }, { status: 409 });
+      }
       const movableLink = links.find(({ calendar }) => calendar.id !== nextCalendar.id) ?? links[0];
       if (!movableLink || movableLink.calendar.id === nextCalendar.id) {
         return appleJsonResponse({ ok: true, synced: 0 });
       }
       const moveResult = await moveAppleLinkedEvent(supabase, event, movableLink.link, movableLink.calendar, nextCalendar, authResult.user.id);
       return appleJsonResponse({ ok: true, externalEventId: moveResult.id, synced: 1, warning: moveResult.warning });
+    }
+
+    const links = await getAppleLinks(supabase, eventId, authResult.user.id);
+    if (links.length === 0) {
+      return appleJsonResponse({ ok: true, synced: 0 });
     }
 
     if (action === "update") {
