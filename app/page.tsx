@@ -3065,7 +3065,22 @@ function getExternalContextDetails(event: ProductionEvent) {
 }
 
 function getPrimaryExternalEventLink(event: ProductionEvent) {
-  return event.externalLinks.find((link) => link.calendarSyncEnabled && Boolean(link.calendarColor)) ?? null;
+  return event.externalLinks.find((link) => link.calendarSyncEnabled) ?? event.externalLinks[0] ?? null;
+}
+
+function getEventCalendarBadge(event: ProductionEvent) {
+  const externalLink = getPrimaryExternalEventLink(event);
+  if (externalLink) {
+    return {
+      name: externalLink.calendarName,
+      color: externalLink.calendarColor,
+    };
+  }
+
+  return {
+    name: "Mon Studio TV",
+    color: "rose",
+  };
 }
 
 function isLikelyOrphanExternalImportEvent(event: ProductionEvent) {
@@ -11700,8 +11715,6 @@ function ExternalContextEventDetail({
   const details = getExternalContextDetails(event);
   const timeRange = formatTimeRange(event.startTime, event.endTime) || "Journée";
   const descriptionView = getExternalEventDescriptionView(details.description);
-  const externalLink = getPrimaryExternalEventLink(event);
-  const externalTone = getExternalCalendarTone(externalLink?.calendarColor ?? null);
   const wrapStyle: React.CSSProperties = { overflowWrap: "anywhere", wordBreak: "break-word" };
   const externalSwipeStartRef = useRef<{ pointerId: number; x: number; y: number; axis: "horizontal" | "vertical" | null } | null>(null);
   const suppressExternalSwipeClickRef = useRef(false);
@@ -11789,10 +11802,7 @@ function ExternalContextEventDetail({
         <div className="flex items-start justify-between gap-4">
           <div className="min-w-0 flex-1">
             <div className="mb-3 flex flex-wrap items-center gap-2">
-              <span className={cn("inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-semibold ring-1 ring-stone-200", externalTone.bg, externalTone.meta)} style={externalTone.bgStyle}>
-                <ExternalCalendarColorDot color={externalLink?.calendarColor ?? null} className="h-2.5 w-2.5" />
-                {details.sourceName ?? "Calendrier externe"}
-              </span>
+              <EventCalendarBadge event={event} />
             </div>
             <h1 className="text-3xl font-semibold leading-tight text-stone-950 sm:text-5xl" style={wrapStyle}>{display.title}</h1>
             {display.subtitle && <p className="mt-2 text-base font-medium text-stone-500" style={wrapStyle}>{display.subtitle}</p>}
@@ -11991,7 +12001,6 @@ function ProductionDetail({
   const [eventSwipeIncomingEvent, setEventSwipeIncomingEvent] = useState<ProductionEvent | null>(null);
   const [isEventSwipeDragging, setIsEventSwipeDragging] = useState(false);
   const [eventSwipeAnimating, setEventSwipeAnimating] = useState(false);
-  const writableExternalLinks = getEventWritableExternalLinks(event);
   const eventDisplay = getProductionEventDisplay(event);
 
   function publishEventDateSwipeTransition({
@@ -12469,6 +12478,9 @@ function ProductionDetail({
       >
         <div className="flex items-start justify-between gap-4">
           <div className="min-w-0 flex-1">
+            <div className="mb-3 flex flex-wrap items-center gap-2">
+              <EventCalendarBadge event={event} />
+            </div>
             <h1 className="truncate text-4xl font-semibold leading-tight text-stone-950 sm:text-6xl">{eventDisplay.title}</h1>
             {eventDisplay.subtitle && <p className="mt-2 truncate text-base font-medium text-stone-500">{eventDisplay.subtitle}</p>}
             {permissions.canManageEvents && (
@@ -12479,19 +12491,6 @@ function ProductionDetail({
               >
                 Modifier
               </button>
-            )}
-            {writableExternalLinks.length > 0 && (
-              <div className="mt-3 flex flex-wrap items-center gap-2">
-                {writableExternalLinks.map((link) => (
-                  <span key={link.id} className="inline-flex max-w-full items-center gap-1.5 rounded-full bg-white px-2.5 py-1 text-xs font-semibold text-stone-600 ring-1 ring-stone-200">
-                    <ExternalCalendarColorDot color={link.calendarColor} className="h-2.5 w-2.5" />
-                    <span className="truncate">{link.calendarName}</span>
-                    <span className={cn("rounded-full px-1.5 py-0.5 ring-1", getExternalSyncStatusClassName(link.syncStatus))}>
-                      {getExternalSyncStatusLabel(link.syncStatus)}
-                    </span>
-                  </span>
-                ))}
-              </div>
             )}
           </div>
           <div className="hidden items-center gap-2 sm:flex">
@@ -12813,6 +12812,9 @@ function EventSwipePreview({ event, style }: { event: ProductionEvent; style: Re
       <Card className="premium-surface shrink-0 p-5 sm:p-8">
         <div className="flex items-start justify-between gap-4">
           <div className="min-w-0 flex-1">
+            <div className="mb-3 flex flex-wrap items-center gap-2">
+              <EventCalendarBadge event={event} />
+            </div>
             <h1 className="truncate text-4xl font-semibold leading-tight text-stone-950 sm:text-6xl">{display.title}</h1>
             {display.subtitle && <p className="mt-2 truncate text-base font-medium text-stone-500">{display.subtitle}</p>}
           </div>
@@ -15605,6 +15607,21 @@ function ExternalCalendarColorDot({ color, className }: { color: string | null; 
   return <span style={tone.dotStyle} className={cn("h-3.5 w-3.5 shrink-0 rounded-full", tone.dot, className)} />;
 }
 
+function EventCalendarBadge({ event }: { event: ProductionEvent }) {
+  const badge = getEventCalendarBadge(event);
+  const tone = getExternalCalendarTone(badge.color);
+
+  return (
+    <span
+      className={cn("inline-flex max-w-full items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-semibold ring-1 ring-stone-200", tone.bg, tone.meta)}
+      style={tone.bgStyle}
+    >
+      <ExternalCalendarColorDot color={badge.color} className="h-2.5 w-2.5" />
+      <span className="truncate">{badge.name}</span>
+    </span>
+  );
+}
+
 function ExternalCalendarsListView({
   calendars,
   permissions,
@@ -16431,7 +16448,15 @@ function ExternalCalendarEventDetails({
       >
         <div className="mb-4 flex shrink-0 items-start justify-between gap-3">
           <div className="min-w-0">
-            <p className={cn("mb-1 text-sm font-semibold", tone.meta)}>{event.calendarName}</p>
+            <div className="mb-2 flex flex-wrap items-center gap-2">
+              <span
+                className={cn("inline-flex max-w-full items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-semibold ring-1 ring-stone-200", tone.bg, tone.meta)}
+                style={tone.bgStyle}
+              >
+                <ExternalCalendarColorDot color={event.calendarColor} className="h-2.5 w-2.5" />
+                <span className="truncate">{event.calendarName}</span>
+              </span>
+            </div>
             <h2 className="text-base font-semibold text-stone-950" style={{ overflowWrap: "anywhere" }}>
               {event.title}
             </h2>
