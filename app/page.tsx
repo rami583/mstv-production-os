@@ -11702,10 +11702,11 @@ function ExternalContextEventDetail({
   const descriptionView = getExternalEventDescriptionView(details.description);
   const externalLink = getPrimaryExternalEventLink(event);
   const externalTone = getExternalCalendarTone(externalLink?.calendarColor ?? null);
+  const wrapStyle: React.CSSProperties = { overflowWrap: "anywhere", wordBreak: "break-word" };
 
   return (
-    <section className="flex min-h-0 w-full flex-1 flex-col gap-5 overflow-hidden">
-      <Card className="premium-surface shrink-0 p-5 sm:p-8">
+    <section className="flex min-h-0 w-full min-w-0 flex-1 flex-col gap-5 overflow-hidden">
+      <Card className="premium-surface min-w-0 shrink-0 overflow-hidden p-5 sm:p-8">
         <div className="flex items-start justify-between gap-4">
           <div className="min-w-0 flex-1">
             <div className="mb-3 flex flex-wrap items-center gap-2">
@@ -11717,8 +11718,8 @@ function ExternalContextEventDetail({
                 Agenda externe
               </span>
             </div>
-            <h1 className="text-3xl font-semibold leading-tight text-stone-950 sm:text-5xl">{display.title}</h1>
-            {display.subtitle && <p className="mt-2 text-base font-medium text-stone-500">{display.subtitle}</p>}
+            <h1 className="text-3xl font-semibold leading-tight text-stone-950 sm:text-5xl" style={wrapStyle}>{display.title}</h1>
+            {display.subtitle && <p className="mt-2 text-base font-medium text-stone-500" style={wrapStyle}>{display.subtitle}</p>}
           </div>
           <div className="hidden items-center gap-2 sm:flex">
             {permissions.canManageEvents && (
@@ -11736,23 +11737,23 @@ function ExternalContextEventDetail({
         </div>
       </Card>
 
-      <div className="no-scrollbar min-h-0 flex-1 overflow-y-auto overscroll-contain pb-6">
-        <Card className="premium-surface space-y-4 p-5 sm:p-6">
+      <div className="no-scrollbar min-h-0 min-w-0 flex-1 overflow-y-auto overscroll-contain pb-6">
+        <Card className="premium-surface min-w-0 space-y-4 overflow-hidden p-5 sm:p-6">
           <div className="grid gap-3 sm:grid-cols-2">
-            <div className="rounded-2xl bg-stone-50 px-4 py-3">
+            <div className="min-w-0 rounded-2xl bg-stone-50 px-4 py-3">
               <p className="text-xs font-semibold uppercase text-stone-400">Date</p>
-              <p className="mt-1 text-base font-semibold text-stone-900">{formatFullDate(event.date)}</p>
+              <p className="mt-1 text-base font-semibold text-stone-900" style={wrapStyle}>{formatFullDate(event.date)}</p>
             </div>
-            <div className="rounded-2xl bg-stone-50 px-4 py-3">
+            <div className="min-w-0 rounded-2xl bg-stone-50 px-4 py-3">
               <p className="text-xs font-semibold uppercase text-stone-400">Horaire</p>
-              <p className="mt-1 text-base font-semibold text-stone-900">{timeRange}</p>
+              <p className="mt-1 text-base font-semibold text-stone-900" style={wrapStyle}>{timeRange}</p>
             </div>
           </div>
 
           {details.location && (
-            <div className="rounded-2xl border border-stone-200 bg-white px-4 py-3">
+            <div className="min-w-0 rounded-2xl border border-stone-200 bg-white px-4 py-3">
               <p className="text-xs font-semibold uppercase text-stone-400">Lieu</p>
-              <p className="mt-1 whitespace-pre-wrap break-words text-base font-medium text-stone-700">{details.location}</p>
+              <p className="mt-1 whitespace-pre-wrap text-base font-medium text-stone-700" style={wrapStyle}>{details.location}</p>
             </div>
           )}
 
@@ -11761,30 +11762,31 @@ function ExternalContextEventDetail({
               href={details.meetingUrl}
               target="_blank"
               rel="noreferrer"
-              className="inline-flex w-full items-center justify-center rounded-2xl bg-stone-950 px-4 py-3 text-base font-semibold text-white transition hover:bg-stone-800"
+              className="inline-flex min-w-0 w-full items-center justify-center rounded-2xl bg-stone-950 px-4 py-3 text-center text-base font-semibold text-white transition hover:bg-stone-800"
+              style={wrapStyle}
             >
               Rejoindre la réunion
             </a>
           )}
 
           {(descriptionView.usefulLines.length > 0 || details.description) && (
-            <div className="rounded-2xl border border-stone-200 bg-white px-4 py-3">
+            <div className="min-w-0 rounded-2xl border border-stone-200 bg-white px-4 py-3">
               <p className="text-xs font-semibold uppercase text-stone-400">Description</p>
               {descriptionView.usefulLines.length > 0 ? (
-                <div className="mt-1 grid gap-2">
+                <div className="mobile-no-scrollbar mt-1 grid max-h-56 gap-2 overflow-y-auto overscroll-contain">
                   {descriptionView.usefulLines.map((line, index) => (
-                    <p key={`${line}-${index}`} className="whitespace-pre-wrap break-words text-base font-medium text-stone-700">
+                    <p key={`${line}-${index}`} className="whitespace-pre-wrap text-base font-medium text-stone-700" style={wrapStyle}>
                       {line}
                     </p>
                   ))}
                 </div>
               ) : (
-                <p className="mt-1 max-h-64 overflow-y-auto whitespace-pre-wrap break-words text-base font-medium text-stone-700">{details.description}</p>
+                <p className="mobile-no-scrollbar mt-1 max-h-64 overflow-y-auto overscroll-contain whitespace-pre-wrap text-base font-medium text-stone-700" style={wrapStyle}>{details.description}</p>
               )}
               {details.meetingUrls.length > 0 && (
-                <div className="mt-3 grid gap-1">
+                <div className="mobile-no-scrollbar mt-3 grid max-h-36 min-w-0 gap-1 overflow-y-auto overscroll-contain">
                   {details.meetingUrls.slice(0, 4).map((url) => (
-                    <a key={url} href={url} target="_blank" rel="noreferrer" className="break-words text-sm font-semibold text-stone-950 underline decoration-stone-300 underline-offset-4">
+                    <a key={url} href={url} target="_blank" rel="noreferrer" className="min-w-0 text-sm font-semibold text-stone-950 underline decoration-stone-300 underline-offset-4" style={wrapStyle}>
                       {url}
                     </a>
                   ))}
@@ -11794,11 +11796,11 @@ function ExternalContextEventDetail({
           )}
 
           {details.attendees.length > 0 && (
-            <div className="rounded-2xl border border-stone-200 bg-white px-4 py-3">
+            <div className="min-w-0 rounded-2xl border border-stone-200 bg-white px-4 py-3">
               <p className="text-xs font-semibold uppercase text-stone-400">Participants</p>
-              <div className="mt-2 flex flex-wrap gap-1.5">
+              <div className="mobile-no-scrollbar mt-2 flex max-h-36 min-w-0 flex-wrap gap-1.5 overflow-y-auto overscroll-contain">
                 {details.attendees.map((attendee) => (
-                  <span key={attendee} className="rounded-full bg-stone-100 px-2.5 py-1 text-sm font-semibold text-stone-600">
+                  <span key={attendee} className="min-w-0 rounded-full bg-stone-100 px-2.5 py-1 text-sm font-semibold text-stone-600" style={wrapStyle}>
                     {attendee}
                   </span>
                 ))}
