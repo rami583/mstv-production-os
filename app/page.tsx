@@ -11703,9 +11703,88 @@ function ExternalContextEventDetail({
   const externalLink = getPrimaryExternalEventLink(event);
   const externalTone = getExternalCalendarTone(externalLink?.calendarColor ?? null);
   const wrapStyle: React.CSSProperties = { overflowWrap: "anywhere", wordBreak: "break-word" };
+  const externalSwipeStartRef = useRef<{ pointerId: number; x: number; y: number; axis: "horizontal" | "vertical" | null } | null>(null);
+  const suppressExternalSwipeClickRef = useRef(false);
+
+  function isExternalSwipeTarget(target: EventTarget | null) {
+    return target instanceof HTMLElement && !target.closest("input, textarea, select, button, a, [contenteditable='true'], [data-no-event-swipe]");
+  }
+
+  function resetExternalSwipe() {
+    externalSwipeStartRef.current = null;
+  }
+
+  function handleExternalSwipePointerDown(pointerEvent: ReactPointerEvent<HTMLElement>) {
+    if (externalSwipeStartRef.current || pointerEvent.pointerType === "mouse" || !isExternalSwipeTarget(pointerEvent.target)) return;
+    if (typeof window !== "undefined" && !window.matchMedia("(hover: none), (pointer: coarse)").matches) return;
+
+    externalSwipeStartRef.current = {
+      pointerId: pointerEvent.pointerId,
+      x: pointerEvent.clientX,
+      y: pointerEvent.clientY,
+      axis: null,
+    };
+    suppressExternalSwipeClickRef.current = false;
+    pointerEvent.currentTarget.setPointerCapture(pointerEvent.pointerId);
+  }
+
+  function handleExternalSwipePointerMove(pointerEvent: ReactPointerEvent<HTMLElement>) {
+    const swipeStart = externalSwipeStartRef.current;
+    if (!swipeStart || swipeStart.pointerId !== pointerEvent.pointerId) return;
+
+    const deltaX = pointerEvent.clientX - swipeStart.x;
+    const deltaY = pointerEvent.clientY - swipeStart.y;
+
+    if (!swipeStart.axis && (Math.abs(deltaX) > 8 || Math.abs(deltaY) > 8)) {
+      swipeStart.axis = Math.abs(deltaX) > Math.abs(deltaY) ? "horizontal" : "vertical";
+    }
+
+    if (swipeStart.axis === "vertical") {
+      resetExternalSwipe();
+      return;
+    }
+
+    if (swipeStart.axis !== "horizontal") return;
+
+    pointerEvent.preventDefault();
+    suppressExternalSwipeClickRef.current = true;
+  }
+
+  function handleExternalSwipePointerUp(pointerEvent: ReactPointerEvent<HTMLElement>) {
+    const swipeStart = externalSwipeStartRef.current;
+    if (!swipeStart || swipeStart.pointerId !== pointerEvent.pointerId) return;
+
+    const deltaX = pointerEvent.clientX - swipeStart.x;
+    const deltaY = pointerEvent.clientY - swipeStart.y;
+    const swipeThreshold = getSwipeThreshold(pointerEvent.currentTarget.clientWidth || window.innerWidth);
+    externalSwipeStartRef.current = null;
+
+    if (swipeStart.axis !== "horizontal" || Math.abs(deltaX) < swipeThreshold || Math.abs(deltaX) < Math.abs(deltaY) * 1.2) return;
+
+    if (deltaX < 0 && hasNext) {
+      goNext();
+      return;
+    }
+
+    if (deltaX > 0 && hasPrevious) {
+      goPrevious();
+    }
+  }
 
   return (
-    <section className="flex min-h-0 w-full min-w-0 flex-1 flex-col gap-5 overflow-hidden">
+    <section
+      className="flex min-h-0 w-full min-w-0 touch-pan-y flex-1 flex-col gap-5 overflow-hidden"
+      onPointerDown={handleExternalSwipePointerDown}
+      onPointerMove={handleExternalSwipePointerMove}
+      onPointerUp={handleExternalSwipePointerUp}
+      onPointerCancel={resetExternalSwipe}
+      onClickCapture={(clickEvent) => {
+        if (!suppressExternalSwipeClickRef.current) return;
+        clickEvent.preventDefault();
+        clickEvent.stopPropagation();
+        suppressExternalSwipeClickRef.current = false;
+      }}
+    >
       <Card className="premium-surface min-w-0 shrink-0 overflow-hidden p-5 sm:p-8">
         <div className="flex items-start justify-between gap-4">
           <div className="min-w-0 flex-1">
@@ -11713,9 +11792,6 @@ function ExternalContextEventDetail({
               <span className={cn("inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-semibold ring-1 ring-stone-200", externalTone.bg, externalTone.meta)} style={externalTone.bgStyle}>
                 <ExternalCalendarColorDot color={externalLink?.calendarColor ?? null} className="h-2.5 w-2.5" />
                 {details.sourceName ?? "Calendrier externe"}
-              </span>
-              <span className="rounded-full bg-stone-100 px-2.5 py-1 text-xs font-semibold text-stone-500 ring-1 ring-stone-200">
-                Agenda externe
               </span>
             </div>
             <h1 className="text-3xl font-semibold leading-tight text-stone-950 sm:text-5xl" style={wrapStyle}>{display.title}</h1>
@@ -12189,7 +12265,7 @@ function ProductionDetail({
   }
 
   function isTouchEventSwipeTarget(target: EventTarget | null) {
-    return target instanceof HTMLElement && !target.closest("input, textarea, select, button, a, [contenteditable='true']");
+    return target instanceof HTMLElement && !target.closest("input, textarea, select, button, a, [contenteditable='true'], [data-no-event-swipe]");
   }
 
   function resetEventSwipe() {
@@ -12372,14 +12448,11 @@ function ProductionDetail({
         />
       )}
       <section
-        className="relative z-10 flex min-h-0 w-full flex-1 flex-col gap-5 overflow-hidden"
+        className="relative z-10 flex min-h-0 w-full touch-pan-y flex-1 flex-col gap-5 overflow-hidden"
         style={{
           transform: `translate3d(${eventSwipeOffset}px, 0, 0)`,
           transition: isEventSwipeDragging ? undefined : `transform ${PAGE_TRANSITION_MS}ms ${PAGE_TRANSITION_EASING}`,
         }}
-      >
-      <Card
-        className="premium-surface shrink-0 touch-pan-y p-5 sm:p-8"
         onPointerDown={handleEventSwipePointerDown}
         onPointerMove={handleEventSwipePointerMove}
         onPointerUp={handleEventSwipePointerUp}
@@ -12390,6 +12463,9 @@ function ProductionDetail({
           clickEvent.stopPropagation();
           suppressEventSwipeClickRef.current = false;
         }}
+      >
+      <Card
+        className="premium-surface shrink-0 p-5 sm:p-8"
       >
         <div className="flex items-start justify-between gap-4">
           <div className="min-w-0 flex-1">
