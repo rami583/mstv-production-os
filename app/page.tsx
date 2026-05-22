@@ -2974,28 +2974,94 @@ function getStringFromUnknown(value: unknown) {
   return typeof value === "string" && value.trim() ? value.trim() : null;
 }
 
+function getStringArrayFromUnknown(value: unknown) {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((item) => getStringFromUnknown(item))
+    .filter((item): item is string => Boolean(item));
+}
+
+function getObjectFromUnknown(value: unknown) {
+  return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : null;
+}
+
+function getNestedObjectValue(source: Record<string, unknown> | null, path: string[]) {
+  let current: unknown = source;
+  for (const key of path) {
+    const object = getObjectFromUnknown(current);
+    if (!object) return null;
+    current = object[key];
+  }
+  return current;
+}
+
+function getExternalEventUrlMatches(...values: Array<string | null | undefined>) {
+  const urls = values.flatMap((value) => value?.match(/https?:\/\/[^\s<>"')\]]+/g) ?? []);
+  return Array.from(new Set(urls.map((url) => url.replace(/[.,;]+$/, ""))));
+}
+
+function getMeetingUrlPriority(url: string) {
+  const normalizedUrl = url.toLowerCase();
+  if (normalizedUrl.includes("teams.microsoft.com") || normalizedUrl.includes("teams.live.com")) return 0;
+  if (normalizedUrl.includes("meet.google.com")) return 1;
+  if (normalizedUrl.includes("zoom.us") || normalizedUrl.includes("zoom.com")) return 2;
+  return 3;
+}
+
+function getBestMeetingUrl(urls: string[]) {
+  return [...urls].sort((left, right) => getMeetingUrlPriority(left) - getMeetingUrlPriority(right))[0] ?? null;
+}
+
+function getExternalEventAttendees(raw: Record<string, unknown> | null) {
+  if (!raw) return [];
+
+  const googleAttendees = Array.isArray(raw.attendees)
+    ? raw.attendees
+        .map((attendee) => {
+          const attendeeObject = getObjectFromUnknown(attendee);
+          if (!attendeeObject) return null;
+          return getStringFromUnknown(attendeeObject.displayName) ?? getStringFromUnknown(attendeeObject.email);
+        })
+        .filter((attendee): attendee is string => Boolean(attendee))
+    : [];
+
+  const appleAttendees = getStringArrayFromUnknown(raw.ATTENDEE);
+  return Array.from(new Set([...googleAttendees, ...appleAttendees])).slice(0, 12);
+}
+
 function getExternalContextDetails(event: ProductionEvent) {
   const raw = event.externalLinks.find((link) => link.rawExternalEvent)?.rawExternalEvent ?? null;
-  if (!raw) {
-    return { description: null as string | null, location: null as string | null, sourceName: getPrimaryExternalEventLink(event)?.calendarName ?? null };
-  }
-
   const description =
-    getStringFromUnknown(raw.description) ??
-    getStringFromUnknown(raw.bodyPreview) ??
-    getStringFromUnknown(raw.notes) ??
-    getStringFromUnknown(raw.rawDescription);
-  const locationValue = raw.location;
+    getStringFromUnknown(raw?.description) ??
+    getStringFromUnknown(raw?.DESCRIPTION) ??
+    getStringFromUnknown(raw?.bodyPreview) ??
+    getStringFromUnknown(raw?.notes) ??
+    getStringFromUnknown(raw?.rawDescription);
+  const locationValue = raw?.location ?? raw?.LOCATION;
   const location =
     getStringFromUnknown(locationValue) ??
     (locationValue && typeof locationValue === "object" ? getStringFromUnknown((locationValue as Record<string, unknown>).displayName) : null);
   const sourceName = getPrimaryExternalEventLink(event)?.calendarName ?? null;
-  return { description, location, sourceName };
-}
-
-function getFirstUrl(value: string | null) {
-  if (!value) return null;
-  return value.match(/https?:\/\/[^\s<>"']+/)?.[0] ?? null;
+  const conferenceEntryPoints = Array.isArray(getNestedObjectValue(raw, ["conferenceData", "entryPoints"]))
+    ? (getNestedObjectValue(raw, ["conferenceData", "entryPoints"]) as unknown[])
+        .map((entryPoint) => getStringFromUnknown(getObjectFromUnknown(entryPoint)?.uri))
+        .filter((url): url is string => Boolean(url))
+    : [];
+  const meetingUrls = Array.from(
+    new Set([
+      ...conferenceEntryPoints,
+      ...getExternalEventUrlMatches(
+        location,
+        description,
+        getStringFromUnknown(raw?.hangoutLink),
+        getStringFromUnknown(raw?.htmlLink),
+        getStringFromUnknown(raw?.URL),
+      ),
+    ]),
+  );
+  const meetingUrl = getBestMeetingUrl(meetingUrls);
+  const attendees = getExternalEventAttendees(raw);
+  return { description, location, sourceName, meetingUrl, meetingUrls, attendees };
 }
 
 function getPrimaryExternalEventLink(event: ProductionEvent) {
@@ -11633,7 +11699,7 @@ function ExternalContextEventDetail({
   const display = getProductionEventDisplay(event);
   const details = getExternalContextDetails(event);
   const timeRange = formatTimeRange(event.startTime, event.endTime) || "Journée";
-  const meetingUrl = getFirstUrl(details.description);
+  const descriptionView = getExternalEventDescriptionView(details.description);
   const externalLink = getPrimaryExternalEventLink(event);
   const externalTone = getExternalCalendarTone(externalLink?.calendarColor ?? null);
 
@@ -11690,15 +11756,53 @@ function ExternalContextEventDetail({
             </div>
           )}
 
-          {details.description && (
+          {details.meetingUrl && (
+            <a
+              href={details.meetingUrl}
+              target="_blank"
+              rel="noreferrer"
+              className="inline-flex w-full items-center justify-center rounded-2xl bg-stone-950 px-4 py-3 text-base font-semibold text-white transition hover:bg-stone-800"
+            >
+              Rejoindre la réunion
+            </a>
+          )}
+
+          {(descriptionView.usefulLines.length > 0 || details.description) && (
             <div className="rounded-2xl border border-stone-200 bg-white px-4 py-3">
               <p className="text-xs font-semibold uppercase text-stone-400">Description</p>
-              <p className="mt-1 max-h-64 overflow-y-auto whitespace-pre-wrap break-words text-base font-medium text-stone-700">{details.description}</p>
-              {meetingUrl && (
-                <a href={meetingUrl} target="_blank" rel="noreferrer" className="mt-3 inline-flex rounded-full bg-stone-950 px-3 py-1.5 text-sm font-semibold text-white">
-                  Ouvrir le lien
-                </a>
+              {descriptionView.usefulLines.length > 0 ? (
+                <div className="mt-1 grid gap-2">
+                  {descriptionView.usefulLines.map((line, index) => (
+                    <p key={`${line}-${index}`} className="whitespace-pre-wrap break-words text-base font-medium text-stone-700">
+                      {line}
+                    </p>
+                  ))}
+                </div>
+              ) : (
+                <p className="mt-1 max-h-64 overflow-y-auto whitespace-pre-wrap break-words text-base font-medium text-stone-700">{details.description}</p>
               )}
+              {details.meetingUrls.length > 0 && (
+                <div className="mt-3 grid gap-1">
+                  {details.meetingUrls.slice(0, 4).map((url) => (
+                    <a key={url} href={url} target="_blank" rel="noreferrer" className="break-words text-sm font-semibold text-stone-950 underline decoration-stone-300 underline-offset-4">
+                      {url}
+                    </a>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
+          {details.attendees.length > 0 && (
+            <div className="rounded-2xl border border-stone-200 bg-white px-4 py-3">
+              <p className="text-xs font-semibold uppercase text-stone-400">Participants</p>
+              <div className="mt-2 flex flex-wrap gap-1.5">
+                {details.attendees.map((attendee) => (
+                  <span key={attendee} className="rounded-full bg-stone-100 px-2.5 py-1 text-sm font-semibold text-stone-600">
+                    {attendee}
+                  </span>
+                ))}
+              </div>
             </div>
           )}
 

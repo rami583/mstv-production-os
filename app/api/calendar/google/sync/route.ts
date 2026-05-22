@@ -51,6 +51,13 @@ type GoogleEvent = {
   summary?: string;
   description?: string;
   location?: string;
+  hangoutLink?: string;
+  htmlLink?: string;
+  conferenceData?: {
+    entryPoints?: Array<{ uri?: string; label?: string; entryPointType?: string }>;
+    conferenceSolution?: { name?: string };
+  };
+  attendees?: Array<{ displayName?: string; email?: string; responseStatus?: string }>;
   updated?: string;
   status?: string;
   start?: { date?: string; dateTime?: string; timeZone?: string };
@@ -202,6 +209,7 @@ async function fetchGoogleEvents(accessToken: string, providerCalendarId: string
     url.searchParams.set("timeMin", syncWindow.timeMin.toISOString());
     url.searchParams.set("timeMax", syncWindow.timeMax.toISOString());
     url.searchParams.set("orderBy", "startTime");
+    url.searchParams.set("conferenceDataVersion", "1");
     if (pageToken) url.searchParams.set("pageToken", pageToken);
 
     const response = await fetch(url, {

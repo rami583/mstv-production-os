@@ -26,6 +26,8 @@ type AppleCalDavEvent = {
   summary: string;
   description: string | null;
   location: string | null;
+  url: string | null;
+  attendees: string[];
   startTime: string;
   endTime: string | null;
   allDay: boolean;
@@ -168,6 +170,8 @@ function parseAppleVEvents(icsText: string, metadata: { etag: string | null; hre
         let summary = "";
         let description: string | null = null;
         let location: string | null = null;
+        let eventUrl: string | null = null;
+        const attendees: string[] = [];
         let startTime = "";
         let endTime: string | null = null;
         let allDay = false;
@@ -177,13 +181,29 @@ function parseAppleVEvents(icsText: string, metadata: { etag: string | null; hre
         for (const eventLine of currentLines) {
           const property = parseIcsProperty(eventLine);
           if (!property) continue;
-          raw[property.name] = property.value;
+          const rawValue = property.name === "DESCRIPTION" || property.name === "LOCATION" || property.name === "SUMMARY"
+            ? unescapeIcsValue(property.value)
+            : property.value;
+          if (property.name === "ATTENDEE") {
+            const currentAttendees = Array.isArray(raw.ATTENDEE) ? raw.ATTENDEE : [];
+            raw.ATTENDEE = [...currentAttendees, rawValue];
+          } else if (property.name === "URL") {
+            raw.URL = property.value.trim();
+          } else {
+            raw[property.name] = rawValue;
+          }
 
           if (property.name === "UID") uid = property.value.trim();
           if (property.name === "RECURRENCE-ID") recurrenceId = property.value.trim();
           if (property.name === "SUMMARY") summary = unescapeIcsValue(property.value);
           if (property.name === "DESCRIPTION") description = unescapeIcsValue(property.value);
           if (property.name === "LOCATION") location = unescapeIcsValue(property.value);
+          if (property.name === "URL") eventUrl = property.value.trim();
+          if (property.name === "ATTENDEE") {
+            const commonName = property.params.CN;
+            const attendeeValue = unescapeIcsValue(property.value).replace(/^mailto:/i, "");
+            attendees.push(commonName ? `${commonName} (${attendeeValue})` : attendeeValue);
+          }
           if (property.name === "LAST-MODIFIED") lastModified = property.value.trim();
           if (property.name === "DTSTAMP") dtStamp = property.value.trim();
           if (property.name === "DTSTART") {
@@ -216,6 +236,8 @@ function parseAppleVEvents(icsText: string, metadata: { etag: string | null; hre
             summary,
             description,
             location,
+            url: eventUrl,
+            attendees,
             startTime,
             endTime,
             allDay,
