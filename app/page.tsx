@@ -1196,7 +1196,7 @@ const modalPanelClassName = "rounded-3xl border border-stone-200 bg-white shadow
 const calendarArrowClassName =
   "flex h-9 w-9 items-center justify-center rounded-full text-base text-[#bb2720] transition hover:bg-[#bb2720]/[0.08] disabled:cursor-not-allowed disabled:text-stone-300 disabled:hover:bg-transparent";
 const weekendColumnTintStyle: React.CSSProperties = {
-  backgroundImage: "linear-gradient(rgba(68, 64, 60, 0.045), rgba(68, 64, 60, 0.045))",
+  backgroundImage: "linear-gradient(rgba(92, 119, 146, 0.032), rgba(92, 119, 146, 0.032))",
 };
 const localCacheWarningThrottleMs = 60_000;
 const maxCachedProductionEvents = 600;
@@ -10131,6 +10131,13 @@ function YearOverviewOverlay({
   }
 
   function handleWheel(wheelEvent: ReactWheelEvent<HTMLDivElement>) {
+    const scrollableYearPage = (wheelEvent.target as HTMLElement).closest<HTMLElement>("[data-year-overview-page]");
+    if (scrollableYearPage && scrollableYearPage.scrollHeight > scrollableYearPage.clientHeight + 1) {
+      const canScrollDown = wheelEvent.deltaY > 0 && scrollableYearPage.scrollTop + scrollableYearPage.clientHeight < scrollableYearPage.scrollHeight - 1;
+      const canScrollUp = wheelEvent.deltaY < 0 && scrollableYearPage.scrollTop > 1;
+      if (canScrollDown || canScrollUp) return;
+    }
+
     if (wheelLockRef.current || Math.abs(wheelEvent.deltaY) < 36 || Math.abs(wheelEvent.deltaY) < Math.abs(wheelEvent.deltaX)) return;
     animateYearChange(wheelEvent.deltaY > 0 ? 1 : -1);
     wheelLockRef.current = window.setTimeout(() => {
@@ -10258,8 +10265,8 @@ function YearOverviewPage({
   onSelectMonth: (year: number, monthIndex: number) => void;
 }) {
   return (
-    <section className="flex w-full shrink-0 flex-col" style={{ height: pageHeight ? `${pageHeight}px` : "100%" }}>
-      <div className="grid min-h-0 flex-1 grid-cols-3 content-start gap-x-4 gap-y-4 px-1 py-2 sm:gap-x-7 sm:gap-y-6 sm:px-2 sm:py-3 lg:gap-x-9 lg:gap-y-7 xl:grid-cols-4 xl:gap-x-12 xl:gap-y-8">
+    <section data-year-overview-page className="no-scrollbar flex w-full shrink-0 flex-col overflow-y-auto overscroll-contain" style={{ height: pageHeight ? `${pageHeight}px` : "100%" }}>
+      <div className="grid grid-cols-3 content-start gap-x-4 gap-y-4 px-1 py-2 sm:gap-x-7 sm:gap-y-6 sm:px-2 sm:py-3 lg:gap-x-9 lg:gap-y-7 xl:grid-cols-4 xl:gap-x-12 xl:gap-y-8">
         {monthNames.map((monthName, monthIndex) => (
           <YearOverviewMiniMonth
             key={`${year}-${monthName}`}
@@ -10307,12 +10314,12 @@ function YearOverviewMiniMonth({
       data-year={year}
       data-month-index={monthIndex}
       onClick={onSelect}
-      className="flex min-h-0 min-w-0 flex-col overflow-visible p-1 text-left sm:p-1.5"
+      className="flex min-h-[132px] min-w-0 flex-col overflow-visible p-1 text-left sm:min-h-[148px] sm:p-1.5 lg:min-h-[168px]"
     >
       <span
         className={cn(
-          "flex w-full min-w-0 flex-col overflow-visible rounded-[1.15rem] px-1.5 pb-2 pt-2 transition hover:bg-white/70 sm:rounded-[1.2rem] sm:px-2.5 sm:pb-2.5 sm:pt-2.5 lg:px-3.5 lg:pb-3.5 lg:pt-3.5",
-          isVisibleMonth && "bg-white/90 ring-1 ring-[#bb2720]/25 ring-offset-2 ring-offset-[#f7f9fb]/95",
+          "flex w-full min-w-0 flex-1 flex-col overflow-visible rounded-[1.15rem] px-1.5 pb-2 pt-2 transition-colors hover:bg-white/[0.28] sm:rounded-[1.2rem] sm:px-2.5 sm:pb-2.5 sm:pt-2.5 lg:px-3.5 lg:pb-3.5 lg:pt-3.5",
+          isVisibleMonth && "bg-white/[0.58]",
         )}
       >
       <span className={cn("mb-2 block truncate text-xs font-semibold leading-none sm:mb-2.5 sm:text-sm lg:mb-3", isVisibleMonth ? "text-[#bb2720]" : "text-stone-950")}>
