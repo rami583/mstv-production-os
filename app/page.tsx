@@ -1196,7 +1196,7 @@ const modalPanelClassName = "rounded-3xl border border-stone-200 bg-white shadow
 const calendarArrowClassName =
   "flex h-9 w-9 items-center justify-center rounded-full text-base text-[#bb2720] transition hover:bg-[#bb2720]/[0.08] disabled:cursor-not-allowed disabled:text-stone-300 disabled:hover:bg-transparent";
 const weekendColumnTintStyle: React.CSSProperties = {
-  backgroundImage: "linear-gradient(rgba(92, 119, 146, 0.032), rgba(92, 119, 146, 0.032))",
+  backgroundImage: "linear-gradient(rgba(47, 143, 229, 0.026), rgba(47, 143, 229, 0.026))",
 };
 const localCacheWarningThrottleMs = 60_000;
 const maxCachedProductionEvents = 600;
