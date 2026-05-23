@@ -10141,7 +10141,7 @@ function YearOverviewOverlay({
   const yearPageStep = getYearPageStep();
 
   return (
-    <div className="fixed inset-0 z-50 overflow-hidden bg-[#f7f9fb]/95 px-4 pb-[calc(1.15rem+env(safe-area-inset-bottom))] pt-[calc(1.25rem+env(safe-area-inset-top))] backdrop-blur-xl sm:px-6 sm:pb-[calc(1rem+env(safe-area-inset-bottom))] sm:pt-[calc(1.25rem+env(safe-area-inset-top))] lg:px-8">
+    <div className="fixed inset-0 z-50 overflow-hidden bg-[#f7f9fb]/95 px-2 pb-[calc(1.15rem+env(safe-area-inset-bottom))] pt-[calc(1.25rem+env(safe-area-inset-top))] backdrop-blur-xl sm:px-6 sm:pb-[calc(1rem+env(safe-area-inset-bottom))] sm:pt-[calc(1.25rem+env(safe-area-inset-top))] lg:px-8">
       <div className="mx-auto flex h-full max-w-7xl flex-col">
         <AppHeader
           screen="calendar"
@@ -10186,7 +10186,7 @@ function YearOverviewOverlay({
         />
       <div
         ref={yearPagerRef}
-        className="mx-auto min-h-0 w-full max-w-5xl flex-1 overflow-hidden"
+        className="mx-auto min-h-0 w-full max-w-7xl flex-1 overflow-hidden px-0.5 sm:px-1 lg:px-2"
         style={{
           fontFamily: '"SF Pro Rounded", ui-rounded, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
           touchAction: "none",
@@ -10259,7 +10259,7 @@ function YearOverviewPage({
 }) {
   return (
     <section className="flex w-full shrink-0 flex-col" style={{ height: pageHeight ? `${pageHeight}px` : "100%" }}>
-      <div className="grid min-h-0 flex-1 grid-cols-3 grid-rows-4 gap-x-2 gap-y-2 pt-1.5 sm:gap-x-4 sm:gap-y-2 sm:pt-2 lg:gap-x-5 lg:gap-y-2">
+      <div className="grid min-h-0 flex-1 grid-cols-3 content-start gap-x-4 gap-y-4 px-1 py-2 sm:gap-x-7 sm:gap-y-6 sm:px-2 sm:py-3 lg:gap-x-9 lg:gap-y-7 xl:grid-cols-4 xl:gap-x-12 xl:gap-y-8">
         {monthNames.map((monthName, monthIndex) => (
           <YearOverviewMiniMonth
             key={`${year}-${monthName}`}
@@ -10307,45 +10307,47 @@ function YearOverviewMiniMonth({
       data-year={year}
       data-month-index={monthIndex}
       onClick={onSelect}
-      className="flex min-h-0 min-w-0 flex-col overflow-visible text-left"
+      className="flex min-h-0 min-w-0 flex-col overflow-visible p-1 text-left sm:p-1.5"
     >
       <span
         className={cn(
-          "flex w-full min-w-0 -translate-y-0.5 flex-col overflow-hidden rounded-[1.1rem] px-1.5 pb-1 pt-1.5 transition hover:bg-white/70 sm:rounded-[1rem] sm:px-1.5 sm:pb-1 sm:pt-1.5 lg:px-2 lg:pb-1.5 lg:pt-2",
-          isVisibleMonth && "-translate-y-1 bg-white/90 pb-0.5 pt-1 ring-1 ring-[#bb2720]/20 sm:pb-0.5 sm:pt-1 lg:pb-1 lg:pt-1.5",
+          "flex w-full min-w-0 flex-col overflow-visible rounded-[1.15rem] px-1.5 pb-2 pt-2 transition hover:bg-white/70 sm:rounded-[1.2rem] sm:px-2.5 sm:pb-2.5 sm:pt-2.5 lg:px-3.5 lg:pb-3.5 lg:pt-3.5",
+          isVisibleMonth && "bg-white/90 ring-1 ring-[#bb2720]/25 ring-offset-2 ring-offset-[#f7f9fb]/95",
         )}
       >
-      <span className={cn("mb-1 block truncate text-xs font-semibold leading-none sm:mb-1 sm:text-sm", isVisibleMonth ? "text-[#bb2720]" : "text-stone-950")}>
+      <span className={cn("mb-2 block truncate text-xs font-semibold leading-none sm:mb-2.5 sm:text-sm lg:mb-3", isVisibleMonth ? "text-[#bb2720]" : "text-stone-950")}>
         {monthName}
       </span>
-      <span className="grid min-h-0 grid-cols-7 content-start gap-y-0.5 sm:gap-y-0">
+      <span className="grid min-h-0 grid-cols-7 content-start gap-x-0.5 gap-y-1.5 sm:gap-x-1 sm:gap-y-1.5 lg:gap-x-1.5 lg:gap-y-2">
         {weekdays.map((weekday, index) => (
-          <span key={`${weekday}-${index}`} className="text-center text-[0.48rem] font-semibold leading-none text-stone-300 sm:text-[0.5rem] lg:text-[0.55rem]">
+          <span key={`${weekday}-${index}`} className={cn("text-center text-[0.5rem] font-semibold leading-none sm:text-[0.55rem] lg:text-[0.6rem]", index >= 5 ? "text-stone-300" : "text-stone-400")}>
             {weekday}
           </span>
         ))}
         {Array.from({ length: monthData.leadingEmptyDays }).map((_, index) => (
-          <span key={`empty-start-${index}`} className="aspect-square sm:h-3.5 sm:aspect-auto lg:h-4" />
+          <span key={`empty-start-${index}`} className="aspect-square sm:h-4 sm:aspect-auto lg:h-5" />
         ))}
-        {monthData.calendarDays.map((day) => {
+        {monthData.calendarDays.map((day, index) => {
+          const position = monthData.leadingEmptyDays + index;
+          const isWeekend = position % 7 >= 5;
           const isToday = day.dateKey === todayKey;
           const hasEvents = day.events.length > 0;
           return (
-            <span key={day.dateKey} className="relative flex aspect-square min-w-0 items-center justify-center sm:h-3.5 sm:aspect-auto lg:h-4">
+            <span key={day.dateKey} className="relative flex aspect-square min-w-0 items-center justify-center sm:h-4 sm:aspect-auto lg:h-5">
               <span
                 className={cn(
-                  "flex h-4 w-4 items-center justify-center rounded-full text-[0.56rem] font-semibold leading-none sm:h-3.5 sm:w-3.5 sm:text-[0.54rem] lg:h-4 lg:w-4 lg:text-[0.62rem]",
-                  isToday ? "bg-[#bb2720] text-white" : "text-stone-700",
+                  "flex h-4 w-4 items-center justify-center rounded-full text-[0.62rem] font-semibold leading-none sm:h-4 sm:w-4 sm:text-[0.6rem] lg:h-5 lg:w-5 lg:text-[0.7rem]",
+                  isToday ? "bg-[#bb2720] text-white" : isWeekend ? "text-stone-400" : "text-stone-700",
                 )}
               >
                 {day.day}
               </span>
-              {hasEvents && <span className={cn("absolute bottom-0 h-0.5 w-0.5 rounded-full sm:h-1 sm:w-1", isToday ? "bg-[#bb2720]" : "bg-stone-400")} />}
+              {hasEvents && <span className={cn("absolute bottom-0 h-1 w-1 rounded-full", isToday ? "bg-[#bb2720]" : "bg-stone-400")} />}
             </span>
           );
         })}
         {Array.from({ length: monthData.trailingEmptyDays }).map((_, index) => (
-          <span key={`empty-end-${index}`} className="aspect-square sm:h-3.5 sm:aspect-auto lg:h-4" />
+          <span key={`empty-end-${index}`} className="aspect-square sm:h-4 sm:aspect-auto lg:h-5" />
         ))}
       </span>
       </span>
