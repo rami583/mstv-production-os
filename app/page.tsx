@@ -4314,7 +4314,7 @@ export default function Home() {
       void refreshExternalCalendarSettings({ silent: true });
 
       if (nextAccounts.length === 0) {
-        setExternalCalendarSettingsError("Compte Google non connecté.");
+        setExternalCalendarSettingsError(null);
       } else {
         const connectedAccounts = nextAccounts.filter((account) => account.connectionStatus === "connected");
         const loadedCalendarCount = connectedAccounts.reduce((count, account) => count + (nextCalendarsByAccountId[account.id]?.length ?? 0), 0);
@@ -14637,6 +14637,10 @@ function ExternalCalendarsListView({
     <div className="space-y-2">
       <div className="space-y-3">
         <div className="mt-3 space-y-2">
+          {!appleConnected && !googleConnected && !error && (
+            <p className="px-1 text-sm font-medium text-stone-500">Synchronisez vos calendriers Apple ou Google.</p>
+          )}
+
           {appleConnectOpen && (
             <div className="rounded-2xl border border-stone-200 bg-stone-50 px-3 py-3">
               <div className="grid gap-2">
@@ -14705,9 +14709,6 @@ function ExternalCalendarsListView({
                 </button>
               </div>
               {appleLoading && <div className="rounded-2xl bg-stone-50 px-3 py-2 text-sm font-semibold text-stone-400">Chargement Apple Calendar...</div>}
-              {!appleLoading && !appleConnected && (
-                <div className="rounded-2xl bg-stone-50 px-3 py-2 text-sm font-semibold text-stone-400">Aucun compte Apple Calendar connecté.</div>
-              )}
               <div className="space-y-2">
                 {connectedAppleAccounts.map((account) => (
                   <div key={account.id} className="space-y-2">
@@ -14793,9 +14794,6 @@ function ExternalCalendarsListView({
                 </button>
               </div>
               {googleLoading && <div className="rounded-2xl bg-stone-50 px-3 py-2 text-sm font-semibold text-stone-400">Chargement Google Calendar...</div>}
-              {!googleLoading && !googleConnected && (
-                <div className="rounded-2xl bg-stone-50 px-3 py-2 text-sm font-semibold text-stone-400">Aucun compte Google connecté.</div>
-              )}
               <div className="space-y-2">
                 {connectedGoogleAccounts.map((account) => (
                   <div key={account.id} className="space-y-2">
@@ -14864,9 +14862,6 @@ function ExternalCalendarsListView({
             </section>
           </div>
 
-          {!googleConnected && !appleConnected && !error && (
-            <div className="rounded-2xl bg-stone-50 px-4 py-3 text-base font-medium text-stone-500">Aucun calendrier pour le moment.</div>
-          )}
         </div>
       </div>
       {disconnectRequest && (
