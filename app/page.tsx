@@ -358,6 +358,47 @@ type ExternalEventLink = {
   rawExternalEvent: Record<string, unknown> | null;
 };
 
+function areExternalCalendarsEqual(left: ExternalCalendar, right: ExternalCalendar) {
+  return (
+    left.id === right.id &&
+    left.name === right.name &&
+    left.icsUrl === right.icsUrl &&
+    left.color === right.color &&
+    left.visibility === right.visibility &&
+    left.providerType === right.providerType &&
+    left.providerAccountId === right.providerAccountId &&
+    left.providerCalendarId === right.providerCalendarId &&
+    left.syncCapability === right.syncCapability &&
+    left.syncEnabled === right.syncEnabled &&
+    left.calendarRole === right.calendarRole &&
+    left.lastSyncStatus === right.lastSyncStatus &&
+    left.lastSyncError === right.lastSyncError &&
+    left.lastSyncFinishedAt === right.lastSyncFinishedAt &&
+    left.createdByProfileId === right.createdByProfileId &&
+    left.createdByName === right.createdByName &&
+    left.createdAt === right.createdAt
+  );
+}
+
+function mergeExternalCalendarList(current: ExternalCalendar[], next: ExternalCalendar[]) {
+  const currentById = new Map(current.map((calendar) => [calendar.id, calendar]));
+  let changed = current.length !== next.length;
+  const merged = next.map((nextCalendar) => {
+    const existingCalendar = currentById.get(nextCalendar.id);
+    if (existingCalendar && areExternalCalendarsEqual(existingCalendar, nextCalendar)) {
+      return existingCalendar;
+    }
+    changed = true;
+    return nextCalendar;
+  });
+
+  if (!changed && merged.every((calendar, index) => calendar === current[index])) {
+    return current;
+  }
+
+  return merged;
+}
+
 type GoogleCalendarAccount = {
   id: string;
   email: string | null;
@@ -3851,7 +3892,7 @@ export default function Home() {
     if (googleStatus === "connected") {
       setExternalCalendarSettingsError(null);
       void refreshGoogleCalendarAccounts();
-      void refreshExternalCalendarSettings();
+      void refreshExternalCalendarSettings({ silent: true });
     } else {
       setExternalCalendarSettingsError(searchParams.get("message") || "Connexion Google Calendar impossible.");
     }
@@ -3928,7 +3969,7 @@ export default function Home() {
 
   useEffect(() => {
     if (!externalCalendarSettingsOpen) return;
-    void refreshExternalCalendarSettings();
+    void refreshExternalCalendarSettings({ silent: externalCalendars.length > 0 });
     void refreshGoogleCalendarAccounts();
     void refreshAppleCalendarAccounts();
   }, [externalCalendarSettingsOpen]);
@@ -3989,7 +4030,7 @@ export default function Home() {
             }
 
             if (externalCalendarSettingsOpen) {
-              await refreshExternalCalendarSettings();
+              await refreshExternalCalendarSettings({ silent: true });
             }
           } catch (realtimeError) {
             if (isSessionExpiredError(realtimeError)) {
@@ -4050,7 +4091,7 @@ export default function Home() {
         });
       }
       setEvents(nextEvents);
-      setExternalCalendars(nextExternalCalendars);
+      setExternalCalendars((current) => mergeExternalCalendarList(current, nextExternalCalendars));
       setExternalCalendarEvents(nextExternalEvents);
       setSelectedId((current) => {
         if (nextSelectedId !== undefined) return nextSelectedId;
@@ -4110,8 +4151,10 @@ export default function Home() {
     }
   }
 
-  async function refreshExternalCalendarSettings() {
-    setExternalCalendarSettingsLoading(true);
+  async function refreshExternalCalendarSettings(options: { silent?: boolean } = {}) {
+    if (!options.silent) {
+      setExternalCalendarSettingsLoading(true);
+    }
     setExternalCalendarSettingsError(null);
 
     try {
@@ -4119,13 +4162,15 @@ export default function Home() {
         fetchExternalCalendars(),
         fetchExternalCalendarEvents(),
       ]);
-      setExternalCalendars(nextCalendars);
+      setExternalCalendars((current) => mergeExternalCalendarList(current, nextCalendars));
       setExternalCalendarEvents(nextEvents);
     } catch (calendarError) {
       console.error("Failed to load external calendars. Apply supabase/migrations/023_external_calendars.sql if needed.", calendarError);
       setExternalCalendarSettingsError("Impossible de charger les calendriers.");
     } finally {
-      setExternalCalendarSettingsLoading(false);
+      if (!options.silent) {
+        setExternalCalendarSettingsLoading(false);
+      }
     }
   }
 
@@ -4244,7 +4289,7 @@ export default function Home() {
       const nextCalendarsByAccountId = payload?.calendarsByAccountId ?? {};
       setGoogleCalendarAccounts(nextAccounts);
       setGoogleCalendarsByAccountId(nextCalendarsByAccountId);
-      void refreshExternalCalendarSettings();
+      void refreshExternalCalendarSettings({ silent: true });
 
       if (nextAccounts.length === 0) {
         setExternalCalendarSettingsError("Compte Google non connecté.");
@@ -4286,7 +4331,7 @@ export default function Home() {
 
       setAppleCalendarAccounts(payload?.accounts ?? []);
       setAppleCalendarsByAccountId(payload?.calendarsByAccountId ?? {});
-      void refreshExternalCalendarSettings();
+      void refreshExternalCalendarSettings({ silent: true });
     } catch (appleError) {
       setExternalCalendarSettingsError(getUserFacingErrorMessage(appleError, "Impossible de charger Apple Calendar."));
     } finally {
@@ -4316,7 +4361,7 @@ export default function Home() {
       }
 
       await refreshAppleCalendarAccounts();
-      await refreshExternalCalendarSettings();
+      await refreshExternalCalendarSettings({ silent: true });
     } catch (connectError) {
       setExternalCalendarSettingsError(getUserFacingErrorMessage(connectError, "Impossible de connecter Apple Calendar."));
     } finally {
@@ -4359,7 +4404,7 @@ export default function Home() {
 
       removeLocalStorageKey(`${cachedAppDataKeyPrefix}${authSession.user.id}`);
       await refreshAppleCalendarAccounts();
-      await refreshExternalCalendarSettings();
+      await refreshExternalCalendarSettings({ silent: true });
       await reloadData(selectedId, { silent: true });
     } catch (disconnectError) {
       setExternalCalendarSettingsError(getUserFacingErrorMessage(disconnectError, "Impossible de déconnecter Apple Calendar."));
@@ -4431,7 +4476,7 @@ export default function Home() {
       }
       removeLocalStorageKey(`${cachedAppDataKeyPrefix}${authSession.user.id}`);
       await refreshGoogleCalendarAccounts();
-      await refreshExternalCalendarSettings();
+      await refreshExternalCalendarSettings({ silent: true });
       await reloadData(selectedId, { silent: true });
     } catch (disconnectError) {
       setExternalCalendarSettingsError(getUserFacingErrorMessage(disconnectError, "Impossible de déconnecter Google Calendar."));
@@ -4571,7 +4616,7 @@ export default function Home() {
       });
 
     if (insertError) throw insertError;
-    await refreshExternalCalendarSettings();
+    await refreshExternalCalendarSettings({ silent: true });
   }
 
   async function updateExternalCalendar(
@@ -4609,7 +4654,7 @@ export default function Home() {
         throw new Error(payload?.error ?? "Impossible de modifier ce calendrier.");
       }
       if (payload?.calendar) mergeRefetchedExternalCalendar(payload.calendar);
-      await refreshExternalCalendarSettings();
+      await refreshExternalCalendarSettings({ silent: true });
       if (calendar.providerType === "google") {
         await refreshGoogleCalendarAccounts();
       } else {
@@ -4634,7 +4679,7 @@ export default function Home() {
       .eq("id", calendar.id);
 
     if (updateError) throw updateError;
-    await refreshExternalCalendarSettings();
+    await refreshExternalCalendarSettings({ silent: true });
     if (calendar.providerType === "google") {
       await refreshGoogleCalendarAccounts();
     } else if (calendar.providerType === "apple_caldav") {
@@ -4696,7 +4741,7 @@ export default function Home() {
           });
           throw new Error(syncPayload?.message?.trim() || "Impossible de synchroniser Google Calendar.");
         }
-        await refreshExternalCalendarSettings();
+        await refreshExternalCalendarSettings({ silent: true });
         await reloadData(selectedId, { silent: true });
         return {
           synced: syncPayload?.synced ?? 0,
@@ -4726,7 +4771,7 @@ export default function Home() {
           });
           throw new Error(syncPayload?.message?.trim() || "Impossible de synchroniser Apple Calendar.");
         }
-        await refreshExternalCalendarSettings();
+        await refreshExternalCalendarSettings({ silent: true });
         await reloadData(selectedId, { silent: true });
         return {
           synced: syncPayload?.synced ?? 0,
@@ -4863,7 +4908,7 @@ export default function Home() {
         });
       }
 
-      await refreshExternalCalendarSettings();
+      await refreshExternalCalendarSettings({ silent: true });
       if (rows.length >= 100) {
         await createNotification({
           type: "external_calendar_sync_completed",
@@ -5013,7 +5058,7 @@ export default function Home() {
         throw new Error(payload?.error ?? "Impossible de retirer ce calendrier.");
       }
       if (payload?.calendar) mergeRefetchedExternalCalendar(payload.calendar);
-      await refreshExternalCalendarSettings();
+      await refreshExternalCalendarSettings({ silent: true });
       if (calendar.providerType === "google") {
         await refreshGoogleCalendarAccounts();
       } else {
@@ -5029,7 +5074,7 @@ export default function Home() {
       .eq("id", calendar.id);
 
     if (deleteError) throw deleteError;
-    await refreshExternalCalendarSettings();
+    await refreshExternalCalendarSettings({ silent: true });
   }
 
   async function fetchActivityLog(eventId: string) {
@@ -14549,7 +14594,7 @@ function ExternalCalendarsListView({
                         const googleEnabled = storedCalendar?.syncEnabled ?? calendar.enabled;
                         return (
                           <CalendarSettingsListRow
-                            key={calendar.providerCalendarId}
+                            key={storedCalendar?.id ?? calendar.providerCalendarId}
                             name={calendar.summary}
                             color={storedCalendar?.color ?? calendar.color}
                             enabled={googleEnabled}
@@ -14601,7 +14646,7 @@ function ExternalCalendarsListView({
                         const appleEnabled = storedCalendar?.syncEnabled ?? calendar.enabled;
                         return (
                           <CalendarSettingsListRow
-                            key={calendar.providerCalendarId}
+                            key={storedCalendar?.id ?? calendar.providerCalendarId}
                             name={calendar.name}
                             color={storedCalendar?.color ?? calendar.color}
                             enabled={appleEnabled}
