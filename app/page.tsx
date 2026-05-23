@@ -77,11 +77,13 @@ import {
 } from "@/lib/events/editor";
 import {
   buildExternalCalendarVisibilityState,
+  canViewCalendar,
   getExternalCalendarProviderKey,
   isExternalEventLinkVisible as isExternalEventLinkVisibleByCalendarState,
   isLegacyExternalCalendarEventVisible,
   isProductionEventVisible as isProductionEventVisibleByCalendarState,
   normalizeProviderCalendarKey,
+  type CalendarVisibilityViewer,
 } from "@/lib/events/visibility";
 import { cn } from "@/lib/utils";
 import {
@@ -354,6 +356,8 @@ type ExternalEventLink = {
   calendarProviderType: ExternalCalendarProviderType;
   calendarSyncCapability: ExternalCalendarSyncCapability;
   calendarSyncEnabled: boolean;
+  calendarVisibility: ExternalCalendarVisibility;
+  calendarCreatedByProfileId: string | null;
   calendarRole: ExternalCalendarRole;
   rawExternalEvent: Record<string, unknown> | null;
 };
@@ -1066,8 +1070,15 @@ function sanitizeExternalCalendarEventForCache(event: ExternalCalendarEvent): Ex
   };
 }
 
-function prepareCachedAppData(data: Omit<CachedAppData, "cachedAt">): Omit<CachedAppData, "cachedAt"> {
-  const visibilityState = buildExternalCalendarVisibilityState(data.externalCalendars);
+function getCalendarVisibilityViewer(profile: UserProfile | null, fallbackId?: string | null): CalendarVisibilityViewer {
+  return {
+    id: profile?.id ?? fallbackId ?? null,
+    role: profile?.role ?? null,
+  };
+}
+
+function prepareCachedAppData(data: Omit<CachedAppData, "cachedAt">, viewer: CalendarVisibilityViewer): Omit<CachedAppData, "cachedAt"> {
+  const visibilityState = buildExternalCalendarVisibilityState(data.externalCalendars, viewer);
   const sortedProductionEvents = data.events
     .filter((event) => isProductionEventVisibleByCalendarState(event, visibilityState, { nativeMstvIcsImportSource }))
     .sort((a, b) => eventSortValue(a) - eventSortValue(b));
@@ -1085,8 +1096,8 @@ function prepareCachedAppData(data: Omit<CachedAppData, "cachedAt">): Omit<Cache
   };
 }
 
-function cacheAppData(userId: string, data: Omit<CachedAppData, "cachedAt">) {
-  const cachePayload = prepareCachedAppData(data);
+function cacheAppData(userId: string, data: Omit<CachedAppData, "cachedAt">, profile: UserProfile | null = getCachedUserProfile(userId)) {
+  const cachePayload = prepareCachedAppData(data, getCalendarVisibilityViewer(profile, userId));
   setLocalStorageJson(`${cachedAppDataKeyPrefix}${userId}`, {
     ...cachePayload,
     cachedAt: new Date().toISOString(),
@@ -1104,7 +1115,7 @@ function getCachedAppData(userId: string) {
   }
 
   return {
-    ...prepareCachedAppData(cachedData),
+    ...prepareCachedAppData(cachedData, getCalendarVisibilityViewer(getCachedUserProfile(userId), userId)),
     cachedAt: cachedData.cachedAt,
   } satisfies CachedAppData;
 }
@@ -1168,7 +1179,7 @@ const cachedProfileKeyPrefix = "mstv.cachedProfile.";
 const cachedProfileMetaKeyPrefix = "mstv.cachedProfileMeta.";
 const cachedAppDataKeyPrefix = "mstv.cachedAppData.";
 const cachedNotificationsKeyPrefix = "mstv.cachedNotifications.";
-const cachedAppDataVersion = 2;
+const cachedAppDataVersion = 3;
 const importantNotificationTypes = new Set([
   "event_created",
   "event_date_changed",
@@ -2667,9 +2678,9 @@ function normalizeExternalCalendarIcsUrl(value: string) {
 
 function getExternalCalendarVisibilityLabel(visibility: ExternalCalendarVisibility) {
   const labels: Record<ExternalCalendarVisibility, string> = {
-    admin_only: "Admin",
-    team: "Team",
-    private: "Privé",
+    admin_only: "Admins uniquement",
+    team: "Toute l’équipe",
+    private: "Moi uniquement",
   };
   return labels[visibility];
 }
@@ -2682,12 +2693,6 @@ function getExternalCalendarProviderLabel(providerType: ExternalCalendarProvider
     ics_read_only: "ICS",
   };
   return labels[providerType];
-}
-
-function canViewExternalCalendar(permissions: AppPermissions, profile: UserProfile | null, calendar: Pick<ExternalCalendar, "visibility" | "createdByProfileId">) {
-  if (permissions.canManageEvents) return true;
-  if (calendar.visibility === "team") return true;
-  return calendar.visibility === "private" && Boolean(profile?.id) && calendar.createdByProfileId === profile?.id;
 }
 
 function canManageExternalCalendar(permissions: AppPermissions, profile: UserProfile | null, calendar: Pick<ExternalCalendar, "createdByProfileId">) {
@@ -2887,6 +2892,8 @@ function mapExternalEventLink(row: ExternalEventLinkQueryRow): ExternalEventLink
     calendarProviderType: normalizeExternalCalendarProviderType(calendar?.provider_type ?? row.provider_type),
     calendarSyncCapability: normalizeExternalCalendarSyncCapability(calendar?.sync_capability ?? "read_only"),
     calendarSyncEnabled: Boolean(calendar?.sync_enabled ?? false),
+    calendarVisibility: normalizeExternalCalendarVisibility(calendar?.visibility),
+    calendarCreatedByProfileId: calendar?.created_by_profile_id ?? null,
     calendarRole: normalizeExternalCalendarRole(calendar?.calendar_role),
     rawExternalEvent: row.raw_external_event ?? null,
   };
@@ -3509,21 +3516,16 @@ export default function Home() {
   const headerCanOpenTrash = headerPermissions.canRestoreEvents || headerPermissions.canPermanentDeleteEvents;
   const actorName = getProfileDisplayName(profile);
   const externalCalendarVisibilityState = useMemo(
-    () => buildExternalCalendarVisibilityState(externalCalendars),
-    [externalCalendars],
+    () => buildExternalCalendarVisibilityState(externalCalendars, getCalendarVisibilityViewer(profile, authSession?.user.id ?? null)),
+    [authSession?.user.id, externalCalendars, profile?.id, profile?.role],
   );
   const isExternalEventLinkVisible = useCallback(
     (link: ExternalEventLink) => isExternalEventLinkVisibleByCalendarState(link, externalCalendarVisibilityState),
     [externalCalendarVisibilityState],
   );
   const isExternalCalendarEventVisible = useCallback(
-    (event: ExternalCalendarEvent) =>
-      isLegacyExternalCalendarEventVisible(event, externalCalendarVisibilityState) &&
-      canViewExternalCalendar(permissions, profile, {
-        visibility: event.calendarVisibility,
-        createdByProfileId: event.calendarCreatedByProfileId,
-      }),
-    [externalCalendarVisibilityState, permissions, profile],
+    (event: ExternalCalendarEvent) => isLegacyExternalCalendarEventVisible(event, externalCalendarVisibilityState),
+    [externalCalendarVisibilityState],
   );
   const isProductionEventVisible = useCallback(
     (event: ProductionEvent) => isProductionEventVisibleByCalendarState(event, externalCalendarVisibilityState, { nativeMstvIcsImportSource }),
@@ -4088,7 +4090,7 @@ export default function Home() {
           events: nextEvents,
           externalCalendars: nextExternalCalendars,
           externalCalendarEvents: nextExternalEvents,
-        });
+        }, profile);
       }
       setEvents(nextEvents);
       setExternalCalendars((current) => mergeExternalCalendarList(current, nextExternalCalendars));
@@ -4209,6 +4211,8 @@ export default function Home() {
                 calendarProviderType: mappedCalendar.providerType,
                 calendarSyncCapability: mappedCalendar.syncCapability,
                 calendarSyncEnabled: mappedCalendar.syncEnabled,
+                calendarVisibility: mappedCalendar.visibility,
+                calendarCreatedByProfileId: mappedCalendar.createdByProfileId,
               }
             : link
         )),
@@ -14272,6 +14276,7 @@ function ExternalCalendarsSheet({
           {view === "list" && (
             <ExternalCalendarsListView
               calendars={calendars}
+              profile={profile}
               googleAccounts={googleAccounts}
               googleCalendarsByAccountId={googleCalendarsByAccountId}
               googleLoading={googleLoading}
@@ -14386,6 +14391,7 @@ function CalendarSettingsListRow({
 
 function ExternalCalendarsListView({
   calendars,
+  profile,
   googleAccounts,
   googleCalendarsByAccountId,
   googleLoading,
@@ -14403,6 +14409,7 @@ function ExternalCalendarsListView({
   onOpenCalendarDetail,
 }: {
   calendars: ExternalCalendar[];
+  profile: UserProfile | null;
   googleAccounts: GoogleCalendarAccount[];
   googleCalendarsByAccountId: Record<string, GoogleProviderCalendar[]>;
   googleLoading: boolean;
@@ -14504,6 +14511,11 @@ function ExternalCalendarsListView({
     return appleCalendarsByAccountId[accountId] ?? [];
   }
 
+  function isStoredCalendarVisible(calendar: ExternalCalendar | null) {
+    if (!calendar) return true;
+    return canViewCalendar(calendar, getCalendarVisibilityViewer(profile));
+  }
+
   if (loading) {
     return <div className="rounded-2xl bg-stone-50 px-4 py-3 text-base font-medium text-stone-500">Chargement...</div>;
   }
@@ -14591,6 +14603,7 @@ function ExternalCalendarsListView({
                     <div className="overflow-hidden rounded-2xl border border-stone-200 bg-white">
                       {getVisibleGoogleProviderCalendars(account.id).map((calendar) => {
                         const storedCalendar = getGoogleStoredCalendar(calendar);
+                        if (!isStoredCalendarVisible(storedCalendar)) return null;
                         const googleEnabled = storedCalendar?.syncEnabled ?? calendar.enabled;
                         return (
                           <CalendarSettingsListRow
@@ -14643,6 +14656,7 @@ function ExternalCalendarsListView({
                     <div className="overflow-hidden rounded-2xl border border-stone-200 bg-white">
                       {getVisibleAppleProviderCalendars(account.id).map((calendar) => {
                         const storedCalendar = getAppleStoredCalendar(calendar);
+                        if (!isStoredCalendarVisible(storedCalendar)) return null;
                         const appleEnabled = storedCalendar?.syncEnabled ?? calendar.enabled;
                         return (
                           <CalendarSettingsListRow
@@ -14774,9 +14788,9 @@ function ExternalCalendarAddView({
             onChange={(event) => onChange((current) => ({ ...current, visibility: event.target.value as ExternalCalendarVisibility }))}
             className="h-10 rounded-xl border border-stone-200 bg-white px-3 text-base font-semibold text-stone-700 outline-none"
           >
-            {permissions.canManageEvents && <option value="admin_only">Admin uniquement</option>}
-            {permissions.canManageEvents && <option value="team">Toute l'équipe</option>}
-            <option value="private">Privé</option>
+            {permissions.canManageEvents && <option value="admin_only">Admins uniquement</option>}
+            {permissions.canManageEvents && <option value="team">Toute l’équipe</option>}
+            <option value="private">Moi uniquement</option>
           </select>
         </div>
         <button
@@ -14963,16 +14977,16 @@ function ExternalCalendarSettingsDetail({
           />
           </div>
           <label>
-            <span className="mb-1.5 block text-xs font-semibold uppercase text-stone-400">Confidentialité</span>
+            <span className="mb-1.5 block text-xs font-semibold uppercase text-stone-400">Visible par</span>
           <select
             value={draft.visibility}
             onChange={(event) => setDraft((current) => ({ ...current, visibility: event.target.value as ExternalCalendarVisibility }))}
             disabled={!canManage || !permissions.canManageEvents}
             className="h-10 w-full rounded-xl border border-stone-200 bg-white px-3 text-base font-semibold text-stone-700 outline-none"
           >
-            {permissions.canManageEvents && <option value="admin_only">Admin uniquement</option>}
-            {permissions.canManageEvents && <option value="team">Toute l'équipe</option>}
-            <option value="private">Privé</option>
+            {permissions.canManageEvents && <option value="admin_only">Admins uniquement</option>}
+            {permissions.canManageEvents && <option value="team">Toute l’équipe</option>}
+            <option value="private">Moi uniquement</option>
           </select>
           </label>
         </div>

@@ -1,4 +1,10 @@
 export type VisibilityExternalCalendarProviderType = "google" | "microsoft" | "apple_caldav" | "ics_read_only";
+export type CalendarVisibility = "team" | "admin_only" | "private";
+
+export type CalendarVisibilityViewer = {
+  id: string | null | undefined;
+  role: string | null | undefined;
+};
 
 export type VisibilityExternalCalendar = {
   id: string;
@@ -6,6 +12,8 @@ export type VisibilityExternalCalendar = {
   providerAccountId: string | null;
   providerCalendarId: string | null;
   syncEnabled: boolean;
+  visibility: CalendarVisibility;
+  createdByProfileId: string | null;
 };
 
 export type VisibilityExternalEventLink = {
@@ -15,6 +23,8 @@ export type VisibilityExternalEventLink = {
   calendarProviderAccountId: string | null;
   calendarProviderType: VisibilityExternalCalendarProviderType;
   calendarSyncEnabled: boolean;
+  calendarVisibility: CalendarVisibility;
+  calendarCreatedByProfileId: string | null;
 };
 
 export type VisibilityProductionEvent = {
@@ -28,11 +38,16 @@ export type VisibilityProductionEvent = {
 export type LegacyExternalCalendarEvent = {
   externalCalendarId: string;
   calendarSyncEnabled: boolean;
+  calendarVisibility: CalendarVisibility;
+  calendarCreatedByProfileId: string | null;
 };
 
 export type ExternalCalendarVisibilityState = {
   enabledById: Map<string, boolean>;
   enabledByProviderKey: Map<string, boolean>;
+  visibleById: Map<string, boolean>;
+  visibleByProviderKey: Map<string, boolean>;
+  viewer: CalendarVisibilityViewer;
 };
 
 function normalizeVisibilityLabel(label: string) {
@@ -65,12 +80,25 @@ export function getExternalCalendarProviderKey(input: {
   return `${input.providerType}:${input.providerAccountId}:${normalizeProviderCalendarKey(input.providerCalendarId)}`;
 }
 
-export function buildExternalCalendarVisibilityState(externalCalendars: VisibilityExternalCalendar[]): ExternalCalendarVisibilityState {
+export function canViewCalendar(calendar: Pick<VisibilityExternalCalendar, "visibility" | "createdByProfileId">, viewer: CalendarVisibilityViewer) {
+  if (viewer.role === "admin") return true;
+  if (calendar.visibility === "team") return Boolean(viewer.id);
+  if (calendar.visibility === "admin_only") return false;
+  return Boolean(viewer.id && calendar.createdByProfileId === viewer.id);
+}
+
+export function buildExternalCalendarVisibilityState(
+  externalCalendars: VisibilityExternalCalendar[],
+  viewer: CalendarVisibilityViewer = { id: null, role: null },
+): ExternalCalendarVisibilityState {
   const enabledById = new Map<string, boolean>();
   const enabledByProviderKey = new Map<string, boolean>();
+  const visibleById = new Map<string, boolean>();
+  const visibleByProviderKey = new Map<string, boolean>();
 
   for (const calendar of externalCalendars) {
     enabledById.set(calendar.id, calendar.syncEnabled);
+    visibleById.set(calendar.id, canViewCalendar(calendar, viewer));
 
     const providerKey = getExternalCalendarProviderKey({
       providerType: calendar.providerType,
@@ -80,24 +108,38 @@ export function buildExternalCalendarVisibilityState(externalCalendars: Visibili
     if (!providerKey) continue;
 
     enabledByProviderKey.set(providerKey, (enabledByProviderKey.get(providerKey) ?? true) && calendar.syncEnabled);
+    visibleByProviderKey.set(providerKey, (visibleByProviderKey.get(providerKey) ?? true) && canViewCalendar(calendar, viewer));
   }
 
-  return { enabledById, enabledByProviderKey };
+  return { enabledById, enabledByProviderKey, visibleById, visibleByProviderKey, viewer };
 }
 
 export function isExternalEventLinkVisible(link: VisibilityExternalEventLink, state: ExternalCalendarVisibilityState) {
   const exactEnabled = state.enabledById.get(link.externalCalendarId);
+  const exactVisible = state.visibleById.get(link.externalCalendarId);
   const providerKey = getExternalCalendarProviderKey({
     providerType: link.calendarProviderType ?? link.providerType,
     providerAccountId: link.calendarProviderAccountId,
     providerCalendarId: link.providerCalendarId,
   });
   const providerEnabled = providerKey ? state.enabledByProviderKey.get(providerKey) : undefined;
+  const providerVisible = providerKey ? state.visibleByProviderKey.get(providerKey) : undefined;
+  const linkVisible = canViewCalendar(
+    {
+      visibility: link.calendarVisibility,
+      createdByProfileId: link.calendarCreatedByProfileId,
+    },
+    state.viewer,
+  );
 
   if (exactEnabled === false) return false;
-  if (exactEnabled === true) return true;
   if (providerEnabled === false) return false;
-  return providerEnabled ?? link.calendarSyncEnabled;
+  if (exactVisible === false) return false;
+  if (providerVisible === false) return false;
+
+  const enabled = exactEnabled ?? providerEnabled ?? link.calendarSyncEnabled;
+  const visible = exactVisible ?? providerVisible ?? linkVisible;
+  return enabled && visible;
 }
 
 export function isLikelyOrphanExternalImportEvent(
@@ -132,5 +174,15 @@ export function isProductionEventVisible(
 // Legacy ICS/Webcal read-only events still use external_calendar_events.
 // Google/Apple/Microsoft provider sync should use events + external_event_links instead.
 export function isLegacyExternalCalendarEventVisible(event: LegacyExternalCalendarEvent, state: ExternalCalendarVisibilityState) {
-  return state.enabledById.get(event.externalCalendarId) ?? event.calendarSyncEnabled;
+  const enabled = state.enabledById.get(event.externalCalendarId) ?? event.calendarSyncEnabled;
+  const visible =
+    state.visibleById.get(event.externalCalendarId) ??
+    canViewCalendar(
+      {
+        visibility: event.calendarVisibility,
+        createdByProfileId: event.calendarCreatedByProfileId,
+      },
+      state.viewer,
+    );
+  return enabled && visible;
 }
