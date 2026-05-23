@@ -54,6 +54,7 @@ const modalSheetPositionClassName = "items-end p-3 sm:items-center sm:justify-ce
 const modalPanelClassName = "rounded-3xl border border-stone-200 bg-white shadow-xl shadow-black/10";
 const formInputClassName =
   "h-11 w-full rounded-2xl border border-stone-200 bg-white px-3 text-base font-medium text-stone-950 outline-none transition focus:border-[#bb2720]/50";
+const editorSectionClassName = "rounded-2xl border border-stone-200 bg-stone-50/60";
 
 function useEscapeToClose(onClose: () => void, enabled = true) {
   useEffect(() => {
@@ -114,8 +115,8 @@ function TimeTextInput({
 
 function Field({ label, children }: { label: string; children: ReactNode }) {
   return (
-    <label className="block text-base font-semibold text-stone-500">
-      <span className="mb-1.5 block">{label}</span>
+    <label className="block text-sm font-semibold text-stone-500">
+      <span className="mb-1 block">{label}</span>
       {children}
     </label>
   );
@@ -141,15 +142,15 @@ function CollapsibleSection({
   children: ReactNode;
 }) {
   return (
-    <section className="rounded-2xl border border-stone-200 bg-stone-50/70">
+    <section className={editorSectionClassName}>
       <button
         type="button"
         onClick={onToggle}
-        className="flex w-full items-center justify-between gap-3 px-4 py-3 text-left text-base font-semibold text-stone-700"
+        className="flex w-full items-center justify-between gap-3 px-4 py-2.5 text-left text-base font-semibold text-stone-700"
         aria-expanded={open}
       >
         <span>{title}</span>
-        <span className="text-lg leading-none text-stone-400">{open ? "-" : "+"}</span>
+        <span className="flex h-7 w-7 items-center justify-center rounded-full bg-white text-lg leading-none text-stone-400">{open ? "-" : "+"}</span>
       </button>
       {open && <div className="space-y-3 border-t border-stone-200 px-4 py-3">{children}</div>}
     </section>
@@ -262,7 +263,7 @@ export function EventEditorModal({
     <div className={cn(modalBackdropClassName, modalSheetPositionClassName)} onPointerDown={(pointerEvent) => handleModalBackdropPointerDown(pointerEvent, onClose)}>
       <form
         onSubmit={handleSubmit}
-        className={cn(modalPanelClassName, "flex max-h-[calc(100dvh-1.5rem)] w-full flex-col p-5 sm:max-h-[calc(100dvh-3rem)] sm:max-w-xl sm:p-6")}
+        className={cn(modalPanelClassName, "flex max-h-[calc(100dvh-1.5rem)] w-full flex-col p-4 sm:max-h-[calc(100dvh-3rem)] sm:max-w-xl sm:p-6")}
         onPointerDown={(pointerEvent) => pointerEvent.stopPropagation()}
       >
         <div className="mb-4 flex shrink-0 items-center justify-between gap-4">
@@ -283,7 +284,7 @@ export function EventEditorModal({
             </button>
           </Field>
 
-          <label className="flex items-center justify-between gap-3 rounded-2xl border border-stone-200 bg-stone-50 px-4 py-3 text-base font-semibold text-stone-700">
+          <label className={cn(editorSectionClassName, "flex items-center justify-between gap-3 px-4 py-2.5 text-base font-semibold text-stone-700")}>
             <span>Jour entier</span>
             <input
               type="checkbox"

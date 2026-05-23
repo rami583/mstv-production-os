@@ -9744,10 +9744,13 @@ function EventSearchOverlay({
       className={cn(modalBackdropClassName, "p-3 sm:p-6")}
       onPointerDown={(pointerEvent) => handleModalBackdropPointerDown(pointerEvent, onClose)}
     >
-      <div className="mx-auto flex h-full w-full max-w-2xl flex-col" onPointerDown={(pointerEvent) => pointerEvent.stopPropagation()}>
-        <div className={cn(modalPanelClassName, "p-3")}>
+      <div
+        className={cn(modalPanelClassName, "mx-auto flex h-full w-full max-w-2xl flex-col overflow-hidden p-3 sm:h-auto sm:max-h-[min(760px,calc(100dvh-3rem))]")}
+        onPointerDown={(pointerEvent) => pointerEvent.stopPropagation()}
+      >
+        <div className="shrink-0 border-b border-stone-100 pb-3">
           <div className="flex items-center gap-2">
-            <div className="flex h-12 min-w-0 flex-1 items-center gap-3 rounded-2xl border border-stone-200 bg-[#f7f9fb] px-4">
+            <div className="flex h-11 min-w-0 flex-1 items-center gap-3 rounded-2xl border border-stone-200 bg-stone-50 px-4">
               <Search className="h-4 w-4 shrink-0 text-stone-400" />
               <input
                 ref={inputRef}
@@ -9760,19 +9763,26 @@ function EventSearchOverlay({
             <button
               type="button"
               onClick={onClose}
-              className="h-12 rounded-2xl px-3 text-base font-semibold text-stone-500 transition hover:bg-stone-100 hover:text-stone-800"
+              className="h-11 rounded-2xl px-3 text-base font-semibold text-stone-500 transition hover:bg-stone-100 hover:text-stone-800"
             >
               Annuler
             </button>
           </div>
         </div>
 
-        <div className={cn(modalPanelClassName, "no-scrollbar mt-3 min-h-0 flex-1 overflow-y-auto overscroll-contain p-2")}>
+        <div className="no-scrollbar min-h-0 flex-1 overflow-y-auto overscroll-contain pt-3">
           {!normalizedQuery && (
-            <div className="px-4 py-8 text-center text-base font-medium text-stone-400">Rechercher un client, un événement ou une date.</div>
+            <div className="grid min-h-52 place-items-center rounded-2xl bg-stone-50 px-6 py-8 text-center">
+              <div>
+                <Search className="mx-auto h-5 w-5 text-stone-300" />
+                <p className="mt-3 text-base font-semibold text-stone-500">Rechercher un client, un événement ou une date.</p>
+              </div>
+            </div>
           )}
           {normalizedQuery && results.length === 0 && (
-            <div className="px-4 py-8 text-center text-base font-medium text-stone-400">Aucun résultat</div>
+            <div className="grid min-h-52 place-items-center rounded-2xl bg-stone-50 px-6 py-8 text-center">
+              <p className="text-base font-semibold text-stone-500">Aucun résultat</p>
+            </div>
           )}
           {results.length > 0 && (
             <div className="space-y-1.5">
@@ -11225,9 +11235,9 @@ function ExternalInvitationDetailsCard({ event }: { event: ProductionEvent }) {
   if (!hasInvitationDetails) return null;
 
   return (
-    <Card className="premium-surface min-w-0 space-y-4 overflow-hidden p-5 sm:p-6">
+    <Card className="premium-surface min-w-0 space-y-3 overflow-hidden p-4 sm:p-5">
       {details.location && (
-        <div className="min-w-0 rounded-2xl border border-stone-200 bg-white px-4 py-3">
+        <div className="min-w-0 rounded-2xl bg-stone-50 px-4 py-3">
           <p className="text-xs font-semibold uppercase text-stone-400">Lieu</p>
           <p className="mt-1 whitespace-pre-wrap text-base font-medium text-stone-700" style={wrapStyle}>{details.location}</p>
         </div>
@@ -11246,7 +11256,7 @@ function ExternalInvitationDetailsCard({ event }: { event: ProductionEvent }) {
       )}
 
       {notesText && (
-        <div className="min-w-0 rounded-2xl border border-stone-200 bg-white px-4 py-3">
+        <div className="min-w-0 rounded-2xl bg-stone-50 px-4 py-3">
           <p className="text-xs font-semibold uppercase text-stone-400">Notes</p>
           <div
             className="mobile-no-scrollbar mt-1 max-h-64 overflow-y-auto overscroll-contain whitespace-pre-wrap text-base font-medium text-stone-700"
@@ -11268,7 +11278,7 @@ function ExternalInvitationDetailsCard({ event }: { event: ProductionEvent }) {
       )}
 
       {details.attendees.length > 0 && (
-        <div className="min-w-0 rounded-2xl border border-stone-200 bg-white px-4 py-3">
+        <div className="min-w-0 rounded-2xl bg-stone-50 px-4 py-3">
           <p className="text-xs font-semibold uppercase text-stone-400">Participants</p>
           <div className="mobile-no-scrollbar mt-2 flex max-h-36 min-w-0 flex-wrap gap-1.5 overflow-y-auto overscroll-contain">
             {details.attendees.map((attendee) => (
@@ -11652,14 +11662,14 @@ function ProductionDetail({
         }}
       >
       <Card
-        className="premium-surface shrink-0 p-5 sm:p-8"
+        className="premium-surface shrink-0 p-4 sm:p-6"
       >
         <div className="flex items-start justify-between gap-4">
           <div className="min-w-0 flex-1">
             <div className="mb-3 flex flex-wrap items-center gap-2">
               <EventCalendarBadge event={event} />
             </div>
-            <h1 className="truncate text-4xl font-semibold leading-tight text-stone-950 sm:text-6xl">{eventDisplay.title}</h1>
+            <h1 className="truncate text-3xl font-semibold leading-tight text-stone-950 sm:text-5xl">{eventDisplay.title}</h1>
             {eventDisplay.subtitle && <p className="mt-2 truncate text-base font-medium text-stone-500">{eventDisplay.subtitle}</p>}
             {permissions.canManageEvents && (
               <button
@@ -11687,12 +11697,12 @@ function ProductionDetail({
         </div>
       </Card>
 
-      <div key={event.id} ref={detailScrollContainerRef} className="no-scrollbar min-h-0 flex-1 space-y-5 overflow-y-auto overscroll-contain pb-6">
-        <Card className="premium-surface overflow-hidden p-5 sm:p-6">
+      <div key={event.id} ref={detailScrollContainerRef} className="no-scrollbar min-h-0 flex-1 space-y-4 overflow-y-auto overscroll-contain pb-6">
+        <Card className="premium-surface overflow-hidden p-4 sm:p-5">
           <ProductionTimeCards event={event} />
         </Card>
         <ExternalInvitationDetailsCard event={event} />
-        <Card className="premium-surface overflow-hidden p-3 sm:p-5">
+        <Card className="premium-surface overflow-hidden p-3 sm:p-4">
         <div className="grid grid-cols-[repeat(3,minmax(0,1fr))] gap-1.5 sm:gap-4 lg:items-start">
           <div className="min-w-0">
             <SectionHeader
@@ -12046,7 +12056,7 @@ function getLinkTone(state: LinkStatus) {
 function ProductionTimeCards({ event }: { event: ProductionEvent }) {
   if (event.isAllDay) {
     return (
-      <div className="grid gap-3 sm:grid-cols-2">
+      <div className="grid gap-2.5 sm:grid-cols-2">
         <ProductionTimeCard label="Date" value={formatFullDate(event.date)} />
         <ProductionTimeCard label="Horaire" value="Jour entier" />
       </div>
@@ -12065,7 +12075,7 @@ function ProductionTimeCards({ event }: { event: ProductionEvent }) {
   );
 
   return (
-    <div className={cn("grid gap-3", showLiveCard ? "sm:grid-cols-3" : "sm:grid-cols-2")}>
+    <div className={cn("grid gap-2.5", showLiveCard ? "sm:grid-cols-3" : "sm:grid-cols-2")}>
       <ProductionTimeCard label="Date" value={formatFullDate(event.date)} />
       <ProductionTimeCard label="Horaire" value={broadTimeRange} />
       {showLiveCard && <ProductionTimeCard label="Live / tournage" value={liveTimeRange || "--:--"} />}
