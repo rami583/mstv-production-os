@@ -403,6 +403,7 @@ type ProductionEvent = {
   startTime: string | null;
   endTime: string | null;
   endOfDayTime: string | null;
+  location: string | null;
   status: EventStatus;
   deletedAt: string | null;
   deletedBy: string | null;
@@ -2800,6 +2801,7 @@ function mapEvent(row: EventQueryRow): ProductionEvent {
     startTime: toTimeInputValue(row.start_time) || null,
     endTime: toTimeInputValue(row.end_time) || null,
     endOfDayTime: toTimeInputValue(row.end_of_day_time) || null,
+    location: row.location ?? null,
     status: row.status,
     deletedAt: row.deleted_at ?? null,
     deletedBy: row.deleted_by ?? null,
@@ -5780,6 +5782,7 @@ export default function Home() {
       start_time: normalizedInput.startTime || null,
       end_time: normalizedInput.endTime || null,
       end_of_day_time: normalizedInput.endOfDayTime || null,
+      location: normalizedInput.location.trim() || null,
       event_role: "production",
       quote_reference: normalizedInput.quoteReference?.trim() || null,
       quote_version: normalizedInput.quoteVersion?.trim() || null,
@@ -5836,6 +5839,7 @@ export default function Home() {
         startTime: normalizedInput.startTime || null,
         endTime: normalizedInput.endTime || null,
         endOfDayTime: normalizedInput.endOfDayTime || null,
+        location: normalizedInput.location.trim() || null,
         status: "Brouillon",
         deletedAt: null,
         deletedBy: null,
@@ -6102,6 +6106,7 @@ export default function Home() {
         start_time: null,
         end_time: null,
         end_of_day_time: event.endTime || null,
+        location: event.location,
         imported_from: nativeMstvIcsImportSource,
         external_import_id: event.externalImportId,
       } satisfies Database["public"]["Tables"]["events"]["Insert"];
@@ -6148,6 +6153,7 @@ export default function Home() {
         start_time: null,
         end_time: null,
         end_of_day_time: event.endTime || null,
+        location: event.location,
         imported_from: nativeMstvIcsImportSource,
         external_import_id: event.externalImportId,
       })) satisfies Database["public"]["Tables"]["events"]["Insert"][];
@@ -6244,6 +6250,7 @@ export default function Home() {
       start_time: normalizedInput.startTime || null,
       end_time: normalizedInput.endTime || null,
       end_of_day_time: normalizedInput.endOfDayTime || null,
+      location: normalizedInput.location.trim() || null,
     };
 
     const { data, error: updateError } = await supabase
@@ -6268,6 +6275,7 @@ export default function Home() {
       startTime: toTimeInputValue(data.start_time) || null,
       endTime: toTimeInputValue(data.end_time) || null,
       endOfDayTime: toTimeInputValue(data.end_of_day_time) || null,
+      location: data.location ?? null,
       status: data.status,
       deletedAt: data.deleted_at ?? null,
       deletedBy: data.deleted_by ?? null,
@@ -6407,6 +6415,7 @@ export default function Home() {
       start_time: normalizedInput.startTime || null,
       end_time: normalizedInput.endTime || null,
       end_of_day_time: normalizedInput.endOfDayTime || null,
+      location: normalizedInput.location.trim() || null,
       quote_reference: normalizedInput.quoteReference?.trim() || event.quoteReference,
       quote_version: normalizedInput.quoteVersion?.trim() || event.quoteVersion,
       source_quote_text: normalizedInput.sourceQuoteText?.trim() || event.sourceQuoteText,
@@ -6570,6 +6579,7 @@ export default function Home() {
         start_time: sourceEvent.startTime || null,
         end_time: sourceEvent.endTime || null,
         end_of_day_time: sourceEvent.endOfDayTime || null,
+        location: sourceEvent.location || null,
         status: sourceEvent.status,
       })
       .select()
@@ -13367,6 +13377,7 @@ function QuoteImportModal({
     startTime: "",
     endTime: "",
     endOfDayTime: "",
+    location: "",
     optionLabels: [],
   });
   const [serviceText, setServiceText] = useState("");
@@ -13436,6 +13447,7 @@ function QuoteImportModal({
         startTime: "",
         endTime: "",
         endOfDayTime: extracted.endTime,
+        location: "",
         optionLabels: extracted.services,
         quoteReference: extracted.quoteReference || null,
         quoteVersion: extracted.quoteVersion || null,

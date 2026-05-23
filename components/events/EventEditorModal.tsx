@@ -258,6 +258,10 @@ export function EventEditorModal({
             </Field>
           </div>
 
+          <Field label="Lieu">
+            <input value={form.location} onChange={(inputEvent) => updateField("location", inputEvent.target.value)} className={formInputClassName} />
+          </Field>
+
           {!form.isAllDay && (
             <>
               <div className="grid gap-3 sm:grid-cols-2">
@@ -324,6 +328,7 @@ export function EventEditorModal({
                 ["end_time", submitDiagnostic.end_time],
                 ["event/client field", submitDiagnostic.event_client_field],
                 ["title field", submitDiagnostic.title_field],
+                ["location", form.location],
                 ["stage", submitDiagnostic.stage],
                 ["route called", submitDiagnostic.routeCalled],
                 ["response status", submitDiagnostic.responseStatus],

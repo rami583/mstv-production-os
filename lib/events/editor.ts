@@ -1,4 +1,4 @@
-import { isGenericExternalEventName, isGoogleOrAppleImportedEvent } from "@/lib/events/display";
+import { getExternalContextDetails, isGenericExternalEventName, isGoogleOrAppleImportedEvent } from "@/lib/events/display";
 
 export type EventEditorFormInput = {
   clientName: string;
@@ -9,6 +9,7 @@ export type EventEditorFormInput = {
   startTime: string;
   endTime: string;
   endOfDayTime: string;
+  location: string;
   syncExternalCalendarId?: string | null;
   optionLabels?: string[];
   quoteReference?: string | null;
@@ -46,6 +47,7 @@ export type EventEditorEvent = {
   startTime: string | null;
   endTime: string | null;
   endOfDayTime: string | null;
+  location: string | null;
   importedFrom: string | null;
   eventRole: "production" | "external_context";
   externalLinks: EventEditorExternalLink[];
@@ -118,6 +120,7 @@ export function getCurrentEditorExternalCalendarId(event: EventEditorEvent | nul
 export function getEventEditorInitialForm(event: EventEditorEvent | null, selectedDateKey: string): EventEditorFormInput {
   const eventName = event && isGoogleOrAppleImportedEvent(event) && isGenericExternalEventName(event.eventName) ? "" : event?.eventName ?? "";
   const hasOverallTimes = Boolean(event?.clientArrivalTime || event?.endOfDayTime);
+  const location = event?.location ?? (event ? getExternalContextDetails(event).location : null);
 
   return {
     clientName: event?.clientName ?? "",
@@ -128,6 +131,7 @@ export function getEventEditorInitialForm(event: EventEditorEvent | null, select
     startTime: event && hasOverallTimes ? toTimeInputValue(event.startTime) : "",
     endTime: event && hasOverallTimes ? toTimeInputValue(event.endTime) : "",
     endOfDayTime: event ? toTimeInputValue(event.endOfDayTime ?? event.endTime) : "11:30",
+    location: location ?? "",
     syncExternalCalendarId: getCurrentEditorExternalCalendarId(event),
   };
 }

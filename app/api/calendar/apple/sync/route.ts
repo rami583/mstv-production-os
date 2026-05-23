@@ -318,6 +318,7 @@ function mapAppleEventToMstvEvent(event: AppleCalDavEvent): ProductionEventInser
     is_all_day: event.allDay,
     client_arrival_time: startTime,
     end_of_day_time: endTime,
+    location: event.location,
   };
 }
 

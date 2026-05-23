@@ -135,6 +135,7 @@ function mapGoogleEventToMstvEvent(event: GoogleEvent) {
     is_all_day: isAllDay,
     client_arrival_time: startTime,
     end_of_day_time: endTime,
+    location: event.location?.trim() || null,
   };
 }
 
@@ -145,6 +146,7 @@ function mapMstvEventToGooglePayload(event: ProductionEventRow) {
     return {
       summary,
       description: "Synchronisé depuis MSTV Production OS.",
+      location: event.location ?? undefined,
       start: { date: event.date },
       end: { date: getNextDate(event.date) },
     };
@@ -155,6 +157,7 @@ function mapMstvEventToGooglePayload(event: ProductionEventRow) {
   return {
     summary,
     description: "Synchronisé depuis MSTV Production OS.",
+    location: event.location ?? undefined,
     start: {
       dateTime: getParisDateTime(event.date, startTime),
       timeZone: "Europe/Paris",

@@ -173,6 +173,9 @@ function getAppleEventPayload(event: ProductionEventRow, uid: string) {
     `SUMMARY:${escapeIcsText(summary)}`,
     `DESCRIPTION:${escapeIcsText(description)}`,
   ];
+  if (event.location?.trim()) {
+    lines.push(`LOCATION:${escapeIcsText(event.location.trim())}`);
+  }
 
   if (event.is_all_day) {
     lines.push(`DTSTART;VALUE=DATE:${toIcsDate(event.date)}`);

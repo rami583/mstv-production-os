@@ -14,6 +14,7 @@ export type DisplayExternalEventLink = {
 export type DisplayProductionEvent = {
   clientName: string;
   eventName: string;
+  location?: string | null;
   importedFrom: string | null;
   eventRole: DisplayProductionEventRole;
   externalLinks: DisplayExternalEventLink[];
@@ -142,6 +143,7 @@ export function getExternalContextDetails(event: DisplayProductionEvent) {
     getStringFromUnknown(raw?.rawDescription);
   const locationValue = raw?.location ?? raw?.LOCATION;
   const location =
+    getStringFromUnknown(event.location) ??
     getStringFromUnknown(locationValue) ??
     (locationValue && typeof locationValue === "object" ? getStringFromUnknown((locationValue as Record<string, unknown>).displayName) : null);
   const sourceName = getPrimaryExternalEventLink(event)?.calendarName ?? null;

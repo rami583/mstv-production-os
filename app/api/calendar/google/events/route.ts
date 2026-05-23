@@ -53,6 +53,7 @@ function toGoogleEventPayload(event: ProductionEventRow) {
     return {
       summary,
       description: "Synchronisé depuis MSTV Production OS.",
+      location: event.location ?? undefined,
       start: { date: event.date },
       end: { date: getNextDate(event.date) },
     };
@@ -63,6 +64,7 @@ function toGoogleEventPayload(event: ProductionEventRow) {
   const payload = {
     summary,
     description: "Synchronisé depuis MSTV Production OS.",
+    location: event.location ?? undefined,
     start: {
       dateTime: getParisDateTime(event.date, startTime),
       timeZone: "Europe/Paris",
