@@ -32,6 +32,7 @@ export type VisibilityProductionEvent = {
   importedFrom: string | null;
   externalImportId: string | null;
   deletedAt: string | null;
+  createdByProfileId: string | null;
   externalLinks: VisibilityExternalEventLink[];
 };
 
@@ -168,6 +169,10 @@ export function isProductionEventVisible(
 ) {
   if (event.deletedAt) return false;
   if (isLikelyOrphanExternalImportEvent(event, options)) return false;
+  if (event.externalLinks.length === 0) {
+    if (state.viewer.role === "admin") return true;
+    return Boolean(state.viewer.id && event.createdByProfileId === state.viewer.id);
+  }
   return event.externalLinks.every((link) => isExternalEventLinkVisible(link, state));
 }
 

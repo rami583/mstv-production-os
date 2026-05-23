@@ -463,6 +463,9 @@ type ProductionEvent = {
   eventRole: ProductionEventRole;
   createdAt: string;
   updatedAt: string;
+  createdByProfileId: string | null;
+  createdByRole: UserRole | null;
+  createdByName: string | null;
   options: EventOption[];
   links: EventLink[];
   documentGroups: EventDocumentGroup[];
@@ -572,6 +575,8 @@ type PendingActivityPayload = {
 
 type CachedAppData = {
   cacheVersion?: number;
+  viewerProfileId?: string | null;
+  viewerRole?: string | null;
   events: ProductionEvent[];
   externalCalendars: ExternalCalendar[];
   externalCalendarEvents: ExternalCalendarEvent[];
@@ -1091,6 +1096,8 @@ function prepareCachedAppData(data: Omit<CachedAppData, "cachedAt">, viewer: Cal
 
   return {
     cacheVersion: cachedAppDataVersion,
+    viewerProfileId: viewer.id ?? null,
+    viewerRole: viewer.role ?? null,
     events: recentProductionEvents.map(sanitizeEventForCache),
     externalCalendars: data.externalCalendars,
     externalCalendarEvents: recentExternalEvents.map(sanitizeExternalCalendarEventForCache),
@@ -1115,8 +1122,14 @@ function getCachedAppData(userId: string) {
     return null;
   }
 
+  const cachedProfile = getCachedUserProfile(userId);
+  if (cachedData.viewerRole && cachedProfile?.role && cachedData.viewerRole !== cachedProfile.role) {
+    removeLocalStorageKey(key);
+    return null;
+  }
+
   return {
-    ...prepareCachedAppData(cachedData, getCalendarVisibilityViewer(getCachedUserProfile(userId), userId)),
+    ...prepareCachedAppData(cachedData, getCalendarVisibilityViewer(cachedProfile, userId)),
     cachedAt: cachedData.cachedAt,
   } satisfies CachedAppData;
 }
@@ -1180,7 +1193,7 @@ const cachedProfileKeyPrefix = "mstv.cachedProfile.";
 const cachedProfileMetaKeyPrefix = "mstv.cachedProfileMeta.";
 const cachedAppDataKeyPrefix = "mstv.cachedAppData.";
 const cachedNotificationsKeyPrefix = "mstv.cachedNotifications.";
-const cachedAppDataVersion = 3;
+const cachedAppDataVersion = 4;
 const importantNotificationTypes = new Set([
   "event_created",
   "event_date_changed",
@@ -2867,6 +2880,7 @@ function mapEvent(row: EventQueryRow): ProductionEvent {
     eventRole: normalizeProductionEventRole(row.event_role),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+    ...mapCreatorMetadata(row),
     options,
     links,
     documentGroups: [],
@@ -5845,6 +5859,7 @@ export default function Home() {
       quote_version: normalizedInput.quoteVersion?.trim() || null,
       source_quote_text: normalizedInput.sourceQuoteText?.trim() || null,
       last_quote_imported_at: normalizedInput.sourceQuoteText || normalizedInput.quoteReference ? new Date().toISOString() : null,
+      ...getCreatorInsertPayload(profile),
     };
     const optionDefinitions = uniqueLabels(normalizedInput.optionLabels ?? []).map((label) => {
       const defaultOption = defaultOptions.find((option) => normalizeLabel(option.label) === normalizeLabel(label));
@@ -5910,6 +5925,11 @@ export default function Home() {
         eventRole: "production",
         createdAt,
         updatedAt: createdAt,
+        ...mapCreatorMetadata({
+          created_by_profile_id: eventInsertPayload.created_by_profile_id ?? null,
+          created_by_role: eventInsertPayload.created_by_role ?? null,
+          created_by_name: eventInsertPayload.created_by_name ?? null,
+        }),
         options: offlineOptions,
         links: [],
         documentGroups: [],

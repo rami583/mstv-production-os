@@ -30,6 +30,9 @@ export type Database = {
           imported_from: string | null;
           external_import_id: string | null;
           event_role: "production" | "external_context";
+          created_by_profile_id: string | null;
+          created_by_role: string | null;
+          created_by_name: string | null;
           created_at: string;
           updated_at: string;
         };
@@ -55,6 +58,9 @@ export type Database = {
           imported_from?: string | null;
           external_import_id?: string | null;
           event_role?: "production" | "external_context";
+          created_by_profile_id?: string | null;
+          created_by_role?: string | null;
+          created_by_name?: string | null;
           created_at?: string;
           updated_at?: string;
         };
