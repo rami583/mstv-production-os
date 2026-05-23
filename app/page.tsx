@@ -14356,35 +14356,49 @@ function CalendarSettingsListRow({
   color,
   enabled,
   disabled = false,
+  compact = false,
   onOpen,
 }: {
   name: string;
   color: string | null;
   enabled: boolean;
   disabled?: boolean;
+  compact?: boolean;
   onOpen: () => void;
 }) {
   return (
     <div
       className={cn(
-        "flex min-w-0 items-center gap-3 rounded-2xl px-3 py-2.5 transition",
-        enabled ? "bg-white hover:bg-stone-50" : "bg-stone-50 text-stone-400",
+        "flex min-w-0 items-center gap-3 rounded-2xl transition",
+        compact ? "px-3 py-1.5" : "px-3 py-2.5",
+        enabled ? "bg-white hover:bg-stone-50" : "bg-stone-50/70 text-stone-400",
       )}
     >
-      <ExternalCalendarColorDot color={color} className={cn(!enabled && "opacity-35")} />
+      <ExternalCalendarColorDot color={color} className={cn(!enabled && "opacity-30")} />
       <div className="min-w-0 flex-1">
-        <p className={cn("truncate text-base font-semibold", enabled ? "text-stone-900" : "text-stone-400")}>{name}</p>
+        <p className={cn("truncate font-semibold", compact ? "text-sm" : "text-base", enabled ? "text-stone-900" : "text-stone-400")}>{name}</p>
       </div>
       <span className={cn("shrink-0 text-xs font-semibold", enabled ? "text-emerald-600" : "text-stone-400")}>{enabled ? "Actif" : "Inactif"}</span>
       <button
         type="button"
         onClick={onOpen}
         disabled={disabled}
-        className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-stone-400 transition hover:bg-stone-100 hover:text-stone-700 disabled:cursor-default disabled:opacity-30 disabled:hover:bg-transparent"
+        className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-stone-300 transition hover:bg-stone-100 hover:text-stone-700 disabled:cursor-default disabled:opacity-30 disabled:hover:bg-transparent"
         aria-label={`Réglages de ${name}`}
       >
-        <CircleHelp className="h-4 w-4" />
+        <ChevronRight className="h-4 w-4" />
       </button>
+    </div>
+  );
+}
+
+function CalendarSettingsListGroup({ label, rows }: { label: string; rows: ReactNode[] }) {
+  if (rows.length === 0) return null;
+
+  return (
+    <div className="space-y-1.5">
+      <p className="px-1 text-[0.68rem] font-semibold uppercase tracking-[0.08em] text-stone-400">{label}</p>
+      <div className="space-y-1">{rows}</div>
     </div>
   );
 }
@@ -14600,27 +14614,62 @@ function ExternalCalendarsListView({
                   <div key={account.id} className="space-y-2">
                     <div className="truncate px-1 text-sm font-semibold text-stone-500">{account.email || account.displayName || "Compte Apple"}</div>
                     {account.lastError && <div className="px-1 text-xs font-semibold text-rose-600">{account.lastError}</div>}
-                    <div className="overflow-hidden rounded-2xl border border-stone-200 bg-white">
-                      {getVisibleAppleProviderCalendars(account.id).map((calendar) => {
-                        const storedCalendar = getAppleStoredCalendar(calendar);
-                        if (!isStoredCalendarVisible(storedCalendar)) return null;
-                        const appleEnabled = storedCalendar?.syncEnabled ?? calendar.enabled;
+                    <div className="space-y-3 rounded-2xl border border-stone-200 bg-white px-2.5 py-2.5">
+                      {(() => {
+                        const rows = getVisibleAppleProviderCalendars(account.id)
+                          .map((calendar) => {
+                            const storedCalendar = getAppleStoredCalendar(calendar);
+                            if (!isStoredCalendarVisible(storedCalendar)) return null;
+                            return {
+                              calendar,
+                              storedCalendar,
+                              enabled: storedCalendar?.syncEnabled ?? calendar.enabled,
+                            };
+                          })
+                          .filter((row): row is NonNullable<typeof row> => Boolean(row));
+                        const activeRows = rows.filter((row) => row.enabled);
+                        const availableRows = rows.filter((row) => !row.enabled);
+
+                        if (rows.length === 0) {
+                          return <div className="px-1 py-1 text-sm font-semibold text-stone-400">Aucun calendrier Apple chargé.</div>;
+                        }
+
                         return (
-                          <CalendarSettingsListRow
-                            key={storedCalendar?.id ?? calendar.providerCalendarId}
-                            name={calendar.name}
-                            color={storedCalendar?.color ?? calendar.color}
-                            enabled={appleEnabled}
-                            disabled={!storedCalendar}
-                            onOpen={() => {
-                              if (storedCalendar) onOpenCalendarDetail(storedCalendar);
-                            }}
-                          />
+                          <>
+                            <CalendarSettingsListGroup
+                              label="Actifs"
+                              rows={activeRows.map(({ calendar, storedCalendar, enabled }) => (
+                                <CalendarSettingsListRow
+                                  key={storedCalendar?.id ?? calendar.providerCalendarId}
+                                  name={calendar.name}
+                                  color={storedCalendar?.color ?? calendar.color}
+                                  enabled={enabled}
+                                  disabled={!storedCalendar}
+                                  onOpen={() => {
+                                    if (storedCalendar) onOpenCalendarDetail(storedCalendar);
+                                  }}
+                                />
+                              ))}
+                            />
+                            <CalendarSettingsListGroup
+                              label="Disponibles"
+                              rows={availableRows.map(({ calendar, storedCalendar, enabled }) => (
+                                <CalendarSettingsListRow
+                                  key={storedCalendar?.id ?? calendar.providerCalendarId}
+                                  name={calendar.name}
+                                  color={storedCalendar?.color ?? calendar.color}
+                                  enabled={enabled}
+                                  disabled={!storedCalendar}
+                                  compact
+                                  onOpen={() => {
+                                    if (storedCalendar) onOpenCalendarDetail(storedCalendar);
+                                  }}
+                                />
+                              ))}
+                            />
+                          </>
                         );
-                      })}
-                      {getVisibleAppleProviderCalendars(account.id).length === 0 && (
-                        <div className="px-3 py-2.5 text-sm font-semibold text-stone-400">Aucun calendrier Apple chargé.</div>
-                      )}
+                      })()}
                     </div>
                   </div>
                 ))}
@@ -14653,27 +14702,62 @@ function ExternalCalendarsListView({
                   <div key={account.id} className="space-y-2">
                     <div className="truncate px-1 text-sm font-semibold text-stone-500">{account.email || account.displayName || "Compte Google"}</div>
                     {account.lastError && <div className="px-1 text-xs font-semibold text-rose-600">{account.lastError}</div>}
-                    <div className="overflow-hidden rounded-2xl border border-stone-200 bg-white">
-                      {getVisibleGoogleProviderCalendars(account.id).map((calendar) => {
-                        const storedCalendar = getGoogleStoredCalendar(calendar);
-                        if (!isStoredCalendarVisible(storedCalendar)) return null;
-                        const googleEnabled = storedCalendar?.syncEnabled ?? calendar.enabled;
+                    <div className="space-y-3 rounded-2xl border border-stone-200 bg-white px-2.5 py-2.5">
+                      {(() => {
+                        const rows = getVisibleGoogleProviderCalendars(account.id)
+                          .map((calendar) => {
+                            const storedCalendar = getGoogleStoredCalendar(calendar);
+                            if (!isStoredCalendarVisible(storedCalendar)) return null;
+                            return {
+                              calendar,
+                              storedCalendar,
+                              enabled: storedCalendar?.syncEnabled ?? calendar.enabled,
+                            };
+                          })
+                          .filter((row): row is NonNullable<typeof row> => Boolean(row));
+                        const activeRows = rows.filter((row) => row.enabled);
+                        const availableRows = rows.filter((row) => !row.enabled);
+
+                        if (rows.length === 0) {
+                          return <div className="px-1 py-1 text-sm font-semibold text-stone-400">Aucun calendrier Google chargé.</div>;
+                        }
+
                         return (
-                          <CalendarSettingsListRow
-                            key={storedCalendar?.id ?? calendar.providerCalendarId}
-                            name={calendar.summary}
-                            color={storedCalendar?.color ?? calendar.color}
-                            enabled={googleEnabled}
-                            disabled={!storedCalendar}
-                            onOpen={() => {
-                              if (storedCalendar) onOpenCalendarDetail(storedCalendar);
-                            }}
-                          />
+                          <>
+                            <CalendarSettingsListGroup
+                              label="Actifs"
+                              rows={activeRows.map(({ calendar, storedCalendar, enabled }) => (
+                                <CalendarSettingsListRow
+                                  key={storedCalendar?.id ?? calendar.providerCalendarId}
+                                  name={calendar.summary}
+                                  color={storedCalendar?.color ?? calendar.color}
+                                  enabled={enabled}
+                                  disabled={!storedCalendar}
+                                  onOpen={() => {
+                                    if (storedCalendar) onOpenCalendarDetail(storedCalendar);
+                                  }}
+                                />
+                              ))}
+                            />
+                            <CalendarSettingsListGroup
+                              label="Disponibles"
+                              rows={availableRows.map(({ calendar, storedCalendar, enabled }) => (
+                                <CalendarSettingsListRow
+                                  key={storedCalendar?.id ?? calendar.providerCalendarId}
+                                  name={calendar.summary}
+                                  color={storedCalendar?.color ?? calendar.color}
+                                  enabled={enabled}
+                                  disabled={!storedCalendar}
+                                  compact
+                                  onOpen={() => {
+                                    if (storedCalendar) onOpenCalendarDetail(storedCalendar);
+                                  }}
+                                />
+                              ))}
+                            />
+                          </>
                         );
-                      })}
-                      {getVisibleGoogleProviderCalendars(account.id).length === 0 && (
-                        <div className="px-3 py-2.5 text-sm font-semibold text-stone-400">Aucun calendrier Google chargé.</div>
-                      )}
+                      })()}
                     </div>
                   </div>
                 ))}
