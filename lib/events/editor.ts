@@ -90,8 +90,8 @@ export function normalizeEventTimeInput(input: EventEditorFormInput): EventEdito
     return {
       ...input,
       clientArrivalTime: "",
-      startTime: "",
-      endTime: "",
+      startTime: normalizeCompactTimeInput(input.startTime),
+      endTime: normalizeCompactTimeInput(input.endTime),
       endOfDayTime: "",
     };
   }
