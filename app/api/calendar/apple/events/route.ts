@@ -160,7 +160,6 @@ function getAppleHref(input: { credentialsServerUrl: string; calendar: ExternalC
 
 function getAppleEventPayload(event: ProductionEventRow, uid: string) {
   const summary = [event.client_name, event.event_name].filter(Boolean).join(" - ") || "Événement";
-  const description = "Synchronisé depuis MSTV Production OS.";
   const dtstamp = toUtcIcsDateTime(new Date());
   const lines = [
     "BEGIN:VCALENDAR",
@@ -171,8 +170,10 @@ function getAppleEventPayload(event: ProductionEventRow, uid: string) {
     `UID:${escapeIcsText(uid)}`,
     `DTSTAMP:${dtstamp}`,
     `SUMMARY:${escapeIcsText(summary)}`,
-    `DESCRIPTION:${escapeIcsText(description)}`,
   ];
+  if (event.notes?.trim()) {
+    lines.push(`DESCRIPTION:${escapeIcsText(event.notes.trim())}`);
+  }
   if (event.location?.trim()) {
     lines.push(`LOCATION:${escapeIcsText(event.location.trim())}`);
   }

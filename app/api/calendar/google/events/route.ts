@@ -52,7 +52,7 @@ function toGoogleEventPayload(event: ProductionEventRow) {
   if (event.is_all_day) {
     return {
       summary,
-      description: "Synchronisé depuis MSTV Production OS.",
+      description: event.notes ?? undefined,
       location: event.location ?? undefined,
       start: { date: event.date },
       end: { date: getNextDate(event.date) },
@@ -63,7 +63,7 @@ function toGoogleEventPayload(event: ProductionEventRow) {
   const endTime = event.end_of_day_time ?? event.end_time ?? addOneHour(startTime);
   const payload = {
     summary,
-    description: "Synchronisé depuis MSTV Production OS.",
+    description: event.notes ?? undefined,
     location: event.location ?? undefined,
     start: {
       dateTime: getParisDateTime(event.date, startTime),

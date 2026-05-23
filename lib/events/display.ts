@@ -15,6 +15,7 @@ export type DisplayProductionEvent = {
   clientName: string;
   eventName: string;
   location?: string | null;
+  notes?: string | null;
   importedFrom: string | null;
   eventRole: DisplayProductionEventRole;
   externalLinks: DisplayExternalEventLink[];
@@ -136,6 +137,7 @@ export function getPrimaryExternalEventLink(event: DisplayProductionEvent) {
 export function getExternalContextDetails(event: DisplayProductionEvent) {
   const raw = event.externalLinks.find((link) => link.rawExternalEvent)?.rawExternalEvent ?? null;
   const description =
+    getStringFromUnknown(event.notes) ??
     getStringFromUnknown(raw?.description) ??
     getStringFromUnknown(raw?.DESCRIPTION) ??
     getStringFromUnknown(raw?.bodyPreview) ??

@@ -262,6 +262,14 @@ export function EventEditorModal({
             <input value={form.location} onChange={(inputEvent) => updateField("location", inputEvent.target.value)} className={formInputClassName} />
           </Field>
 
+          <Field label="Notes">
+            <textarea
+              value={form.notes}
+              onChange={(inputEvent) => updateField("notes", inputEvent.target.value)}
+              className={cn(formInputClassName, "min-h-24 resize-none py-3")}
+            />
+          </Field>
+
           {!form.isAllDay && (
             <>
               <div className="grid gap-3 sm:grid-cols-2">
@@ -329,6 +337,7 @@ export function EventEditorModal({
                 ["event/client field", submitDiagnostic.event_client_field],
                 ["title field", submitDiagnostic.title_field],
                 ["location", form.location],
+                ["notes", form.notes],
                 ["stage", submitDiagnostic.stage],
                 ["route called", submitDiagnostic.routeCalled],
                 ["response status", submitDiagnostic.responseStatus],

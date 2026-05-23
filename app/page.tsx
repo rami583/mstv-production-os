@@ -404,6 +404,7 @@ type ProductionEvent = {
   endTime: string | null;
   endOfDayTime: string | null;
   location: string | null;
+  notes: string | null;
   status: EventStatus;
   deletedAt: string | null;
   deletedBy: string | null;
@@ -1002,6 +1003,7 @@ function sanitizeEventForCache(event: ProductionEvent): ProductionEvent {
   return {
     ...event,
     sourceQuoteText: null,
+    notes: event.notes && event.notes.length > 800 ? `${event.notes.slice(0, 800)}...` : event.notes,
     options: event.options.slice(0, maxCachedOptionsPerEvent).map((option) => ({
       ...option,
       details: null,
@@ -2802,6 +2804,7 @@ function mapEvent(row: EventQueryRow): ProductionEvent {
     endTime: toTimeInputValue(row.end_time) || null,
     endOfDayTime: toTimeInputValue(row.end_of_day_time) || null,
     location: row.location ?? null,
+    notes: row.notes ?? null,
     status: row.status,
     deletedAt: row.deleted_at ?? null,
     deletedBy: row.deleted_by ?? null,
@@ -5783,6 +5786,7 @@ export default function Home() {
       end_time: normalizedInput.endTime || null,
       end_of_day_time: normalizedInput.endOfDayTime || null,
       location: normalizedInput.location.trim() || null,
+      notes: normalizedInput.notes.trim() || null,
       event_role: "production",
       quote_reference: normalizedInput.quoteReference?.trim() || null,
       quote_version: normalizedInput.quoteVersion?.trim() || null,
@@ -5840,6 +5844,7 @@ export default function Home() {
         endTime: normalizedInput.endTime || null,
         endOfDayTime: normalizedInput.endOfDayTime || null,
         location: normalizedInput.location.trim() || null,
+        notes: normalizedInput.notes.trim() || null,
         status: "Brouillon",
         deletedAt: null,
         deletedBy: null,
@@ -6107,6 +6112,7 @@ export default function Home() {
         end_time: null,
         end_of_day_time: event.endTime || null,
         location: event.location,
+        notes: event.description,
         imported_from: nativeMstvIcsImportSource,
         external_import_id: event.externalImportId,
       } satisfies Database["public"]["Tables"]["events"]["Insert"];
@@ -6154,6 +6160,7 @@ export default function Home() {
         end_time: null,
         end_of_day_time: event.endTime || null,
         location: event.location,
+        notes: event.description,
         imported_from: nativeMstvIcsImportSource,
         external_import_id: event.externalImportId,
       })) satisfies Database["public"]["Tables"]["events"]["Insert"][];
@@ -6251,6 +6258,7 @@ export default function Home() {
       end_time: normalizedInput.endTime || null,
       end_of_day_time: normalizedInput.endOfDayTime || null,
       location: normalizedInput.location.trim() || null,
+      notes: normalizedInput.notes.trim() || null,
     };
 
     const { data, error: updateError } = await supabase
@@ -6276,6 +6284,7 @@ export default function Home() {
       endTime: toTimeInputValue(data.end_time) || null,
       endOfDayTime: toTimeInputValue(data.end_of_day_time) || null,
       location: data.location ?? null,
+      notes: data.notes ?? null,
       status: data.status,
       deletedAt: data.deleted_at ?? null,
       deletedBy: data.deleted_by ?? null,
@@ -6416,6 +6425,7 @@ export default function Home() {
       end_time: normalizedInput.endTime || null,
       end_of_day_time: normalizedInput.endOfDayTime || null,
       location: normalizedInput.location.trim() || null,
+      notes: normalizedInput.notes.trim() || null,
       quote_reference: normalizedInput.quoteReference?.trim() || event.quoteReference,
       quote_version: normalizedInput.quoteVersion?.trim() || event.quoteVersion,
       source_quote_text: normalizedInput.sourceQuoteText?.trim() || event.sourceQuoteText,
@@ -6580,6 +6590,7 @@ export default function Home() {
         end_time: sourceEvent.endTime || null,
         end_of_day_time: sourceEvent.endOfDayTime || null,
         location: sourceEvent.location || null,
+        notes: sourceEvent.notes || null,
         status: sourceEvent.status,
       })
       .select()
@@ -9693,6 +9704,8 @@ function getEventSearchText(event: ProductionEvent) {
       event.date,
       formatFullDate(event.date),
       formatEventTimeRange(event),
+      event.location,
+      event.notes,
       ...event.options.map((option) => option.label),
       ...event.links.map((link) => link.label),
       ...event.documentGroups.map((group) => group.label),
@@ -11202,7 +11215,11 @@ function EventDetailCarousel({
 function ExternalInvitationDetailsCard({ event }: { event: ProductionEvent }) {
   const details = getExternalContextDetails(event);
   const descriptionView = getExternalEventDescriptionView(details.description);
-  const hasInvitationDetails = Boolean(details.location || details.meetingUrl || details.description || descriptionView.usefulLines.length > 0 || details.meetingUrls.length > 0 || details.attendees.length > 0);
+  const notesText = (descriptionView.notesText ?? descriptionView.usefulLines.join("\n")).trim();
+  const secondaryMeetingUrls = details.meetingUrls
+    .filter((url) => url !== details.meetingUrl && (!notesText || !notesText.includes(url)))
+    .slice(0, 3);
+  const hasInvitationDetails = Boolean(details.location || details.meetingUrl || notesText || secondaryMeetingUrls.length > 0 || details.attendees.length > 0);
   const wrapStyle: React.CSSProperties = { overflowWrap: "anywhere", wordBreak: "break-word" };
 
   if (!hasInvitationDetails) return null;
@@ -11228,26 +11245,25 @@ function ExternalInvitationDetailsCard({ event }: { event: ProductionEvent }) {
         </a>
       )}
 
-      {(descriptionView.usefulLines.length > 0 || details.meetingUrls.length > 0) && (
-        <div className="min-w-0 px-1 py-1">
-          {descriptionView.usefulLines.length > 0 && (
-            <div className="mobile-no-scrollbar mt-1 grid max-h-56 gap-2 overflow-y-auto overscroll-contain">
-              {descriptionView.usefulLines.map((line, index) => (
-                <p key={`${line}-${index}`} className="whitespace-pre-wrap text-base font-medium text-stone-700" style={wrapStyle}>
-                  {line}
-                </p>
-              ))}
-            </div>
-          )}
-          {details.meetingUrls.length > 0 && (
-            <div className="mobile-no-scrollbar mt-3 grid max-h-36 min-w-0 gap-1 overflow-y-auto overscroll-contain">
-              {details.meetingUrls.slice(0, 4).map((url) => (
-                <a key={url} href={url} target="_blank" rel="noreferrer" className="min-w-0 text-sm font-semibold text-stone-950 underline decoration-stone-300 underline-offset-4" style={wrapStyle}>
-                  {url}
-                </a>
-              ))}
-            </div>
-          )}
+      {notesText && (
+        <div className="min-w-0 rounded-2xl border border-stone-200 bg-white px-4 py-3">
+          <p className="text-xs font-semibold uppercase text-stone-400">Notes</p>
+          <div
+            className="mobile-no-scrollbar mt-1 max-h-64 overflow-y-auto overscroll-contain whitespace-pre-wrap text-base font-medium text-stone-700"
+            style={wrapStyle}
+          >
+            {notesText}
+          </div>
+        </div>
+      )}
+
+      {secondaryMeetingUrls.length > 0 && (
+        <div className="mobile-no-scrollbar grid max-h-36 min-w-0 gap-1 overflow-y-auto overscroll-contain px-1">
+          {secondaryMeetingUrls.map((url) => (
+            <a key={url} href={url} target="_blank" rel="noreferrer" className="min-w-0 text-sm font-semibold text-stone-950 underline decoration-stone-300 underline-offset-4" style={wrapStyle}>
+              {url}
+            </a>
+          ))}
         </div>
       )}
 
@@ -13329,6 +13345,7 @@ function QuoteImportModal({
     endTime: "",
     endOfDayTime: "",
     location: "",
+    notes: "",
     optionLabels: [],
   });
   const [serviceText, setServiceText] = useState("");
@@ -13399,6 +13416,7 @@ function QuoteImportModal({
         endTime: "",
         endOfDayTime: extracted.endTime,
         location: "",
+        notes: "",
         optionLabels: extracted.services,
         quoteReference: extracted.quoteReference || null,
         quoteVersion: extracted.quoteVersion || null,
