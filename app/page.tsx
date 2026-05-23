@@ -14189,10 +14189,12 @@ function ExternalCalendarsSheet({
         {isMobileFormView && (
           <div className="mb-5 flex items-center justify-between sm:hidden">
             <button type="button" onClick={cancelForm} className="rounded-full px-1 py-1 text-base font-semibold text-stone-500">
-              Annuler
+              {view === "detail" ? "Retour" : "Annuler"}
             </button>
             <h2 className="text-base font-semibold text-stone-950">{view === "detail" ? "Modifier le calendrier" : "Ajouter un calendrier"}</h2>
-            <span className="w-[58px]" aria-hidden="true" />
+            <button type="button" onClick={onClose} className="rounded-full px-1 py-1 text-base font-semibold text-stone-500">
+              Fermer
+            </button>
           </div>
         )}
 
@@ -14225,8 +14227,6 @@ function ExternalCalendarsSheet({
           {view === "list" && (
             <ExternalCalendarsListView
               calendars={calendars}
-              permissions={permissions}
-              profile={profile}
               googleAccounts={googleAccounts}
               googleCalendarsByAccountId={googleCalendarsByAccountId}
               googleLoading={googleLoading}
@@ -14237,13 +14237,14 @@ function ExternalCalendarsSheet({
               connectingApple={connectingApple}
               loading={loading}
               error={error}
-              syncingCalendarId={syncingCalendarId}
               onConnectGoogle={onConnectGoogle}
               onDisconnectGoogle={onDisconnectGoogle}
               onConnectApple={onConnectApple}
               onDisconnectApple={onDisconnectApple}
-              onUpdate={onUpdate}
-              onSync={onSync}
+              onOpenCalendarDetail={(calendar) => {
+                setSelectedCalendarId(calendar.id);
+                setView("detail");
+              }}
             />
           )}
 
@@ -14300,10 +14301,46 @@ function EventCalendarBadge({ event }: { event: ProductionEvent }) {
   );
 }
 
+function CalendarSettingsListRow({
+  name,
+  color,
+  enabled,
+  disabled = false,
+  onOpen,
+}: {
+  name: string;
+  color: string | null;
+  enabled: boolean;
+  disabled?: boolean;
+  onOpen: () => void;
+}) {
+  return (
+    <div
+      className={cn(
+        "flex min-w-0 items-center gap-3 rounded-2xl px-3 py-2.5 transition",
+        enabled ? "bg-white hover:bg-stone-50" : "bg-stone-50 text-stone-400",
+      )}
+    >
+      <ExternalCalendarColorDot color={color} className={cn(!enabled && "opacity-35")} />
+      <div className="min-w-0 flex-1">
+        <p className={cn("truncate text-base font-semibold", enabled ? "text-stone-900" : "text-stone-400")}>{name}</p>
+      </div>
+      <span className={cn("shrink-0 text-xs font-semibold", enabled ? "text-emerald-600" : "text-stone-400")}>{enabled ? "Actif" : "Inactif"}</span>
+      <button
+        type="button"
+        onClick={onOpen}
+        disabled={disabled}
+        className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-stone-400 transition hover:bg-stone-100 hover:text-stone-700 disabled:cursor-default disabled:opacity-30 disabled:hover:bg-transparent"
+        aria-label={`Réglages de ${name}`}
+      >
+        <CircleHelp className="h-4 w-4" />
+      </button>
+    </div>
+  );
+}
+
 function ExternalCalendarsListView({
   calendars,
-  permissions,
-  profile,
   googleAccounts,
   googleCalendarsByAccountId,
   googleLoading,
@@ -14314,17 +14351,13 @@ function ExternalCalendarsListView({
   connectingApple,
   loading,
   error,
-  syncingCalendarId,
   onConnectGoogle,
   onDisconnectGoogle,
   onConnectApple,
   onDisconnectApple,
-  onUpdate,
-  onSync,
+  onOpenCalendarDetail,
 }: {
   calendars: ExternalCalendar[];
-  permissions: AppPermissions;
-  profile: UserProfile | null;
   googleAccounts: GoogleCalendarAccount[];
   googleCalendarsByAccountId: Record<string, GoogleProviderCalendar[]>;
   googleLoading: boolean;
@@ -14335,19 +14368,15 @@ function ExternalCalendarsListView({
   connectingApple: boolean;
   loading: boolean;
   error: string | null;
-  syncingCalendarId: string | null;
   onConnectGoogle: () => Promise<void>;
   onDisconnectGoogle: (account: GoogleCalendarAccount) => Promise<void>;
   onConnectApple: (input: { appleId: string; appPassword: string }) => Promise<void>;
   onDisconnectApple: (account: AppleCalendarAccount) => Promise<void>;
-  onUpdate: (calendar: ExternalCalendar, input: { name: string; icsUrl: string; color: string; visibility: ExternalCalendarVisibility; syncEnabled?: boolean }) => Promise<void>;
-  onSync: (calendar: ExternalCalendar) => Promise<ExternalCalendarSyncResult>;
+  onOpenCalendarDetail: (calendar: ExternalCalendar) => void;
 }) {
-  const [googleSyncErrorByCalendarId, setGoogleSyncErrorByCalendarId] = useState<Record<string, string>>({});
   const [appleConnectOpen, setAppleConnectOpen] = useState(false);
   const [appleDraft, setAppleDraft] = useState({ appleId: "", appPassword: "" });
   const [appleConnectError, setAppleConnectError] = useState<string | null>(null);
-  const [calendarActionErrorById, setCalendarActionErrorById] = useState<Record<string, string>>({});
   const [disconnectRequest, setDisconnectRequest] = useState<"google" | "apple" | null>(null);
   const [disconnectingProvider, setDisconnectingProvider] = useState<"google" | "apple" | null>(null);
   const connectedGoogleAccounts = googleAccounts.filter((account) => account.connectionStatus === "connected");
@@ -14368,32 +14397,6 @@ function ExternalCalendarsListView({
       setAppleConnectOpen(false);
     } catch (connectError) {
       setAppleConnectError(getUserFacingErrorMessage(connectError, "Impossible de connecter Apple Calendar."));
-    }
-  }
-
-  async function handleGooglePullSync(providerCalendar: GoogleProviderCalendar) {
-    const calendar = calendars.find((item) => item.id === providerCalendar.externalCalendarId)
-      ?? calendars.find((item) => item.providerType === "google" && item.providerCalendarId === providerCalendar.providerCalendarId)
-      ?? null;
-    const key = providerCalendar.externalCalendarId ?? providerCalendar.providerCalendarId;
-
-    setGoogleSyncErrorByCalendarId((current) => ({ ...current, [key]: "" }));
-
-    if (!calendar) {
-      setGoogleSyncErrorByCalendarId((current) => ({
-        ...current,
-        [key]: "Calendrier Google indisponible dans MSTV. Rouvrez ce panneau ou reconnectez Google Calendar.",
-      }));
-      return;
-    }
-
-    try {
-      await onSync(calendar);
-    } catch (syncError) {
-      setGoogleSyncErrorByCalendarId((current) => ({
-        ...current,
-        [key]: getUserFacingErrorMessage(syncError, "Impossible de synchroniser Google Calendar."),
-      }));
     }
   }
 
@@ -14456,42 +14459,6 @@ function ExternalCalendarsListView({
     return appleCalendarsByAccountId[accountId] ?? [];
   }
 
-  async function updateStoredCalendar(calendar: ExternalCalendar, patch: Partial<Pick<ExternalCalendar, "color" | "visibility" | "syncEnabled">>) {
-    setCalendarActionErrorById((current) => ({ ...current, [calendar.id]: "" }));
-    try {
-      await onUpdate(calendar, {
-        name: calendar.name,
-        icsUrl: calendar.icsUrl,
-        color: patch.color ?? calendar.color ?? "blue",
-        visibility: patch.visibility ?? calendar.visibility,
-        syncEnabled: patch.syncEnabled ?? calendar.syncEnabled,
-      });
-    } catch (updateError) {
-      setCalendarActionErrorById((current) => ({
-        ...current,
-        [calendar.id]: getUserFacingErrorMessage(updateError, "Impossible de modifier ce calendrier."),
-      }));
-    }
-  }
-
-  function ActivationToggle({ enabled, disabled, onToggle }: { enabled: boolean; disabled: boolean; onToggle: () => void }) {
-    return (
-      <button
-        type="button"
-        onClick={onToggle}
-        disabled={disabled}
-        className={cn(
-          "rounded-full px-2 py-0.5 text-xs font-semibold ring-1 transition disabled:cursor-default disabled:opacity-50",
-          enabled
-            ? "bg-emerald-50 text-emerald-700 ring-emerald-200 hover:bg-emerald-100"
-            : "bg-white text-stone-400 ring-stone-200 hover:bg-stone-50",
-        )}
-      >
-        {enabled ? "Désactiver" : "Activer"}
-      </button>
-    );
-  }
-
   if (loading) {
     return <div className="rounded-2xl bg-stone-50 px-4 py-3 text-base font-medium text-stone-500">Chargement...</div>;
   }
@@ -14549,8 +14516,8 @@ function ExternalCalendarsListView({
             </div>
           )}
 
-          <div className="space-y-4">
-            <section className="space-y-2">
+          <div className="space-y-5">
+            <section className="space-y-2.5">
               <div className="flex items-center justify-between gap-3">
                 <h4 className="text-base font-semibold text-stone-950">Compte Google Calendar</h4>
                 <button
@@ -14567,100 +14534,42 @@ function ExternalCalendarsListView({
                   {googleConnected ? "Déconnecter" : connectingGoogle ? "Connexion..." : "Connecter"}
                 </button>
               </div>
-          {googleLoading && <div className="rounded-2xl bg-stone-50 px-3 py-2 text-sm font-semibold text-stone-400">Chargement Google Calendar...</div>}
-          {!googleLoading && !googleConnected && (
-              <div className="rounded-xl bg-white px-3 py-2 text-sm font-semibold text-stone-400 ring-1 ring-stone-200">Aucun compte Google connecté.</div>
-          )}
-            <div className="mt-2 space-y-2">
-              {connectedGoogleAccounts.map((account) => (
-                <div key={account.id} className="rounded-2xl border border-stone-200 bg-white px-3 py-3">
-              <div className="flex items-start justify-between gap-3">
-                <div className="min-w-0">
-                      <div className="truncate text-sm font-semibold text-stone-950">{account.email || account.displayName || "Compte Google"}</div>
-                </div>
-              </div>
-              {account.lastError && <div className="mt-2 text-xs font-semibold text-rose-600">{account.lastError}</div>}
-                  <div className="mt-3 space-y-1.5 border-l border-stone-200 pl-3">
-                {getVisibleGoogleProviderCalendars(account.id).map((calendar) => {
-                      const storedCalendar = getGoogleStoredCalendar(calendar);
-                      const canManageStored = storedCalendar ? canManageExternalCalendar(permissions, profile, storedCalendar) : false;
-                  const syncKey = calendar.externalCalendarId ?? calendar.providerCalendarId;
-                      const googleEnabled = storedCalendar?.syncEnabled ?? calendar.enabled;
-                  const canToggleStored = Boolean(storedCalendar && canManageStored);
-                  const isPullSyncing = Boolean(calendar.externalCalendarId) && syncingCalendarId === calendar.externalCalendarId;
-                  const canPullSync = googleEnabled && calendar.writable && Boolean(calendar.externalCalendarId);
-                  const syncError = googleSyncErrorByCalendarId[syncKey];
-                  return (
-                        <div
-                          key={calendar.providerCalendarId}
-                          className={cn(
-                            "rounded-xl px-3 py-2 ring-1 transition",
-                            googleEnabled ? "bg-stone-50 ring-stone-200" : "bg-stone-100/80 ring-stone-200 opacity-75",
-                          )}
-                        >
-                          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-                            <div className="flex min-w-0 items-start gap-2">
-                              <ExternalCalendarColorDot color={storedCalendar?.color ?? calendar.color} className="mt-0.5" />
-                              <div className="min-w-0">
-                                <div className="truncate text-sm font-semibold text-stone-800">{calendar.summary}</div>
-                                <div className="mt-1 flex flex-wrap items-center gap-1.5 text-xs font-semibold">
-                                  <ActivationToggle
-                                    enabled={googleEnabled}
-                                    disabled={!canToggleStored}
-                                    onToggle={() => {
-                                      if (storedCalendar) void updateStoredCalendar(storedCalendar, { syncEnabled: !googleEnabled });
-                                    }}
-                                  />
-                                </div>
-                              </div>
-                          </div>
-                            <div className="flex shrink-0 flex-wrap items-center gap-1.5" onClick={(event) => event.stopPropagation()}>
-                          {googleEnabled && calendar.writable && (
-                            <button
-                              type="button"
-                              onClick={() => void handleGooglePullSync(calendar)}
-                              disabled={!canPullSync || isPullSyncing}
-                              className="rounded-full border border-blue-200 bg-blue-50 px-2.5 py-1 text-xs font-semibold text-blue-700 transition hover:bg-blue-100 disabled:border-stone-200 disabled:bg-stone-50 disabled:text-stone-300"
-                            >
-                              {isPullSyncing ? "En cours..." : "Synchroniser depuis Google"}
-                            </button>
-                          )}
-                        </div>
-                      </div>
-                      {storedCalendar && (
-                        <div className="mt-2 grid gap-2 sm:grid-cols-[auto_1fr_auto_auto] sm:items-center">
-                          <ExternalCalendarColorPalette
-                            value={storedCalendar.color ?? "blue"}
-                            onChange={(nextColor) => void updateStoredCalendar(storedCalendar, { color: nextColor })}
-                            disabled={!canManageStored}
+              {googleLoading && <div className="rounded-2xl bg-stone-50 px-3 py-2 text-sm font-semibold text-stone-400">Chargement Google Calendar...</div>}
+              {!googleLoading && !googleConnected && (
+                <div className="rounded-2xl bg-stone-50 px-3 py-2 text-sm font-semibold text-stone-400">Aucun compte Google connecté.</div>
+              )}
+              <div className="space-y-2">
+                {connectedGoogleAccounts.map((account) => (
+                  <div key={account.id} className="space-y-2">
+                    <div className="truncate px-1 text-sm font-semibold text-stone-500">{account.email || account.displayName || "Compte Google"}</div>
+                    {account.lastError && <div className="px-1 text-xs font-semibold text-rose-600">{account.lastError}</div>}
+                    <div className="overflow-hidden rounded-2xl border border-stone-200 bg-white">
+                      {getVisibleGoogleProviderCalendars(account.id).map((calendar) => {
+                        const storedCalendar = getGoogleStoredCalendar(calendar);
+                        const googleEnabled = storedCalendar?.syncEnabled ?? calendar.enabled;
+                        return (
+                          <CalendarSettingsListRow
+                            key={calendar.providerCalendarId}
+                            name={calendar.summary}
+                            color={storedCalendar?.color ?? calendar.color}
+                            enabled={googleEnabled}
+                            disabled={!storedCalendar}
+                            onOpen={() => {
+                              if (storedCalendar) onOpenCalendarDetail(storedCalendar);
+                            }}
                           />
-                          <select
-                            value={storedCalendar.visibility}
-                            onChange={(event) => void updateStoredCalendar(storedCalendar, { visibility: event.target.value as ExternalCalendarVisibility })}
-                            disabled={!canManageStored || !permissions.canManageEvents}
-                            className="h-10 rounded-xl border border-stone-200 bg-white px-3 text-sm font-semibold text-stone-700 outline-none"
-                          >
-                            {permissions.canManageEvents && <option value="admin_only">Admin uniquement</option>}
-                            {permissions.canManageEvents && <option value="team">Toute l'équipe</option>}
-                            <option value="private">Privé</option>
-                          </select>
-                        </div>
+                        );
+                      })}
+                      {getVisibleGoogleProviderCalendars(account.id).length === 0 && (
+                        <div className="px-3 py-2.5 text-sm font-semibold text-stone-400">Aucun calendrier Google chargé.</div>
                       )}
-                      {storedCalendar && calendarActionErrorById[storedCalendar.id] && <p className="mt-1.5 text-xs font-semibold text-rose-600">{calendarActionErrorById[storedCalendar.id]}</p>}
-                      {syncError && <p className="mt-1.5 text-xs font-semibold text-rose-600">{syncError}</p>}
                     </div>
-                  );
-                })}
-                    {getVisibleGoogleProviderCalendars(account.id).length === 0 && (
-                      <div className="rounded-xl bg-stone-50 px-3 py-2 text-sm font-semibold text-stone-400 ring-1 ring-stone-200">Aucun calendrier Google chargé.</div>
-                    )}
+                  </div>
+                ))}
               </div>
-            </div>
-              ))}
-            </div>
             </section>
 
-            <section className="space-y-2">
+            <section className="space-y-2.5">
               <div className="flex items-center justify-between gap-3">
                 <h4 className="text-base font-semibold text-stone-950">Compte Apple Calendar</h4>
                 <button
@@ -14677,78 +14586,39 @@ function ExternalCalendarsListView({
                   {appleConnected ? "Déconnecter" : connectingApple ? "Connexion..." : "Connecter"}
                 </button>
               </div>
-          {appleLoading && <div className="rounded-2xl bg-stone-50 px-3 py-2 text-sm font-semibold text-stone-400">Chargement Apple Calendar...</div>}
-          {!appleLoading && !appleConnected && (
-              <div className="mt-2 rounded-xl bg-white px-3 py-2 text-sm font-semibold text-stone-400 ring-1 ring-stone-200">Aucun compte Apple Calendar connecté.</div>
-          )}
-            <div className="mt-2 space-y-2">
-              {connectedAppleAccounts.map((account) => (
-                <div key={account.id} className="rounded-2xl border border-stone-200 bg-white px-3 py-3">
-              <div className="min-w-0">
-                    <div className="truncate text-sm font-semibold text-stone-950">{account.email || account.displayName || "Compte Apple"}</div>
-              </div>
-              {account.lastError && <div className="mt-2 text-xs font-semibold text-rose-600">{account.lastError}</div>}
-                  <div className="mt-3 space-y-1.5 border-l border-stone-200 pl-3">
-                {getVisibleAppleProviderCalendars(account.id).map((calendar) => {
-                      const storedCalendar = getAppleStoredCalendar(calendar);
-                      const canManageStored = storedCalendar ? canManageExternalCalendar(permissions, profile, storedCalendar) : false;
-                      const appleEnabled = storedCalendar?.syncEnabled ?? calendar.enabled;
-                  const canToggleStored = Boolean(storedCalendar && canManageStored);
-                  return (
-                        <div
-                          key={calendar.providerCalendarId}
-                          className={cn(
-                            "rounded-xl px-3 py-2 ring-1 transition",
-                            appleEnabled ? "bg-stone-50 ring-stone-200" : "bg-stone-100/80 ring-stone-200 opacity-75",
-                          )}
-                        >
-                          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-                            <div className="flex min-w-0 items-start gap-2">
-                              <ExternalCalendarColorDot color={storedCalendar?.color ?? calendar.color} className="mt-0.5" />
-                          <div className="min-w-0">
-                            <div className="truncate text-sm font-semibold text-stone-800">{calendar.name}</div>
-                                <div className="mt-1 flex flex-wrap items-center gap-1.5 text-xs font-semibold">
-                                  <ActivationToggle
-                                    enabled={appleEnabled}
-                                    disabled={!canToggleStored}
-                                    onToggle={() => {
-                                      if (storedCalendar) void updateStoredCalendar(storedCalendar, { syncEnabled: !appleEnabled });
-                                    }}
-                                  />
-                                </div>
-                          </div>
-                        </div>
-                          </div>
-                      {storedCalendar && (
-                        <div className="mt-2 grid gap-2 sm:grid-cols-[auto_1fr_auto_auto] sm:items-center">
-                          <ExternalCalendarColorPalette
-                            value={storedCalendar.color ?? "blue"}
-                            onChange={(nextColor) => void updateStoredCalendar(storedCalendar, { color: nextColor })}
-                            disabled={!canManageStored}
+              {appleLoading && <div className="rounded-2xl bg-stone-50 px-3 py-2 text-sm font-semibold text-stone-400">Chargement Apple Calendar...</div>}
+              {!appleLoading && !appleConnected && (
+                <div className="rounded-2xl bg-stone-50 px-3 py-2 text-sm font-semibold text-stone-400">Aucun compte Apple Calendar connecté.</div>
+              )}
+              <div className="space-y-2">
+                {connectedAppleAccounts.map((account) => (
+                  <div key={account.id} className="space-y-2">
+                    <div className="truncate px-1 text-sm font-semibold text-stone-500">{account.email || account.displayName || "Compte Apple"}</div>
+                    {account.lastError && <div className="px-1 text-xs font-semibold text-rose-600">{account.lastError}</div>}
+                    <div className="overflow-hidden rounded-2xl border border-stone-200 bg-white">
+                      {getVisibleAppleProviderCalendars(account.id).map((calendar) => {
+                        const storedCalendar = getAppleStoredCalendar(calendar);
+                        const appleEnabled = storedCalendar?.syncEnabled ?? calendar.enabled;
+                        return (
+                          <CalendarSettingsListRow
+                            key={calendar.providerCalendarId}
+                            name={calendar.name}
+                            color={storedCalendar?.color ?? calendar.color}
+                            enabled={appleEnabled}
+                            disabled={!storedCalendar}
+                            onOpen={() => {
+                              if (storedCalendar) onOpenCalendarDetail(storedCalendar);
+                            }}
                           />
-                          <select
-                            value={storedCalendar.visibility}
-                            onChange={(event) => void updateStoredCalendar(storedCalendar, { visibility: event.target.value as ExternalCalendarVisibility })}
-                            disabled={!canManageStored || !permissions.canManageEvents}
-                            className="h-10 rounded-xl border border-stone-200 bg-white px-3 text-sm font-semibold text-stone-700 outline-none"
-                          >
-                            {permissions.canManageEvents && <option value="admin_only">Admin uniquement</option>}
-                            {permissions.canManageEvents && <option value="team">Toute l'équipe</option>}
-                            <option value="private">Privé</option>
-                          </select>
-                        </div>
+                        );
+                      })}
+                      {getVisibleAppleProviderCalendars(account.id).length === 0 && (
+                        <div className="px-3 py-2.5 text-sm font-semibold text-stone-400">Aucun calendrier Apple chargé.</div>
                       )}
-                      {storedCalendar && calendarActionErrorById[storedCalendar.id] && <p className="mt-1.5 text-xs font-semibold text-rose-600">{calendarActionErrorById[storedCalendar.id]}</p>}
                     </div>
-                  );
-                })}
-                    {getVisibleAppleProviderCalendars(account.id).length === 0 && (
-                      <div className="rounded-xl bg-stone-50 px-3 py-2 text-sm font-semibold text-stone-400 ring-1 ring-stone-200">Aucun calendrier Apple chargé.</div>
-                    )}
+                  </div>
+                ))}
               </div>
-            </div>
-              ))}
-            </div>
             </section>
           </div>
 
@@ -14898,11 +14768,12 @@ function ExternalCalendarSettingsDetail({
   onDelete: (calendar: ExternalCalendar) => Promise<void>;
   onSync: (calendar: ExternalCalendar) => Promise<ExternalCalendarSyncResult>;
 }) {
-  const [draft, setDraft] = useState<{ name: string; icsUrl: string; color: string; visibility: ExternalCalendarVisibility }>({
+  const [draft, setDraft] = useState<{ name: string; icsUrl: string; color: string; visibility: ExternalCalendarVisibility; syncEnabled: boolean }>({
     name: calendar.name,
     icsUrl: calendar.icsUrl,
     color: calendar.color ?? "indigo",
     visibility: calendar.visibility,
+    syncEnabled: calendar.syncEnabled,
   });
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
@@ -14913,7 +14784,9 @@ function ExternalCalendarSettingsDetail({
     draft.name.trim() !== calendar.name ||
     draft.icsUrl.trim() !== calendar.icsUrl ||
     draft.color !== (calendar.color ?? "indigo") ||
-    draft.visibility !== calendar.visibility;
+    draft.visibility !== calendar.visibility ||
+    draft.syncEnabled !== calendar.syncEnabled;
+  const canManualSync = calendar.providerType === "google" || calendar.providerType === "ics_read_only";
 
   useEffect(() => {
     setDraft({
@@ -14921,8 +14794,9 @@ function ExternalCalendarSettingsDetail({
       icsUrl: calendar.icsUrl,
       color: calendar.color ?? "indigo",
       visibility: calendar.visibility,
+      syncEnabled: calendar.syncEnabled,
     });
-  }, [calendar.color, calendar.icsUrl, calendar.name, calendar.visibility]);
+  }, [calendar.color, calendar.icsUrl, calendar.name, calendar.syncEnabled, calendar.visibility]);
 
   async function handleSave() {
     setRowError(null);
@@ -14946,6 +14820,21 @@ function ExternalCalendarSettingsDetail({
     } catch (deleteError) {
       setRowError(getUserFacingErrorMessage(deleteError, "Impossible de supprimer ce calendrier."));
       setDeleting(false);
+    }
+  }
+
+  async function handleToggleSyncEnabled() {
+    const nextSyncEnabled = !draft.syncEnabled;
+    setRowError(null);
+    setSyncSummary(null);
+    setSaving(true);
+    try {
+      await onUpdate(calendar, { ...draft, syncEnabled: nextSyncEnabled });
+      setDraft((current) => ({ ...current, syncEnabled: nextSyncEnabled }));
+    } catch (updateError) {
+      setRowError(getUserFacingErrorMessage(updateError, "Impossible de modifier ce calendrier."));
+    } finally {
+      setSaving(false);
     }
   }
 
@@ -14973,8 +14862,9 @@ function ExternalCalendarSettingsDetail({
   }
 
   return (
-    <div className="rounded-2xl border border-stone-200 bg-stone-50/70 px-4 py-3">
-      <div className="grid gap-2">
+    <div className="space-y-4">
+      <div className="rounded-2xl border border-stone-200 bg-white px-4 py-4">
+        <div className="grid gap-3">
         <div className="flex items-center justify-between gap-3">
           <input
             value={draft.name}
@@ -14983,45 +14873,63 @@ function ExternalCalendarSettingsDetail({
             className="min-w-0 flex-1 bg-transparent text-base font-semibold text-stone-950 outline-none"
             aria-label="Nom du calendrier"
           />
-          <span className="rounded-full bg-indigo-50 px-2.5 py-1 text-sm font-semibold text-indigo-700">{getExternalCalendarVisibilityLabel(calendar.visibility)}</span>
+          <ExternalCalendarColorDot color={draft.color} />
         </div>
-        <div
-          className={cn(
-            "rounded-2xl border px-3 py-2 text-sm font-semibold",
-            calendar.syncCapability === "bidirectional"
-              ? "border-emerald-200 bg-emerald-50 text-emerald-700"
-              : "border-stone-200 bg-white text-stone-500",
-          )}
-        >
-          {calendar.syncCapability === "bidirectional"
-            ? "Les modifications MSTV seront synchronisées avec ce calendrier."
-            : "Ce calendrier est en lecture seule."}
+
+        <div className="flex items-center justify-between gap-3 rounded-2xl bg-stone-50 px-3 py-2.5">
+          <div className="min-w-0">
+            <p className="text-sm font-semibold text-stone-950">État</p>
+            <p className="text-xs font-semibold text-stone-400">{draft.syncEnabled ? "Calendrier affiché dans MSTV" : "Calendrier masqué dans MSTV"}</p>
+          </div>
+          <button
+            type="button"
+            onClick={() => void handleToggleSyncEnabled()}
+            disabled={!canManage || saving}
+            className={cn(
+              "shrink-0 rounded-full border px-3 py-1.5 text-sm font-semibold transition disabled:cursor-default disabled:opacity-50",
+              draft.syncEnabled
+                ? "border-stone-200 bg-white text-stone-600 hover:bg-stone-100"
+                : "border-stone-950 bg-stone-950 text-white hover:bg-stone-800",
+            )}
+          >
+            {draft.syncEnabled ? "Désactiver" : "Activer"}
+          </button>
         </div>
-        <input
-          value={draft.icsUrl}
-          onChange={(event) => setDraft((current) => ({ ...current, icsUrl: event.target.value }))}
-          onBlur={() => setDraft((current) => ({ ...current, icsUrl: normalizeExternalCalendarIcsUrl(current.icsUrl) }))}
-          placeholder="URL ICS"
-          inputMode="url"
-          readOnly={!canManage}
-          className="h-10 rounded-xl border border-stone-200 bg-white px-3 text-base font-medium text-stone-950 outline-none transition placeholder:text-stone-300 focus:border-[#bb2720]/40"
-        />
-        <div className="grid grid-cols-1 gap-2 sm:grid-cols-[auto_1fr]">
+
+        {calendar.providerType === "ics_read_only" && (
+          <input
+            value={draft.icsUrl}
+            onChange={(event) => setDraft((current) => ({ ...current, icsUrl: event.target.value }))}
+            onBlur={() => setDraft((current) => ({ ...current, icsUrl: normalizeExternalCalendarIcsUrl(current.icsUrl) }))}
+            placeholder="URL ICS"
+            inputMode="url"
+            readOnly={!canManage}
+            className="h-10 rounded-xl border border-stone-200 bg-white px-3 text-base font-medium text-stone-950 outline-none transition placeholder:text-stone-300 focus:border-[#bb2720]/40"
+          />
+        )}
+
+        <div className="grid grid-cols-1 gap-2">
+          <div>
+            <p className="mb-1.5 text-xs font-semibold uppercase text-stone-400">Couleur</p>
           <ExternalCalendarColorPalette
             value={draft.color}
             onChange={(nextColor) => setDraft((current) => ({ ...current, color: nextColor }))}
             disabled={!canManage}
           />
+          </div>
+          <label>
+            <span className="mb-1.5 block text-xs font-semibold uppercase text-stone-400">Confidentialité</span>
           <select
             value={draft.visibility}
             onChange={(event) => setDraft((current) => ({ ...current, visibility: event.target.value as ExternalCalendarVisibility }))}
             disabled={!canManage || !permissions.canManageEvents}
-            className="h-10 rounded-xl border border-stone-200 bg-white px-3 text-base font-semibold text-stone-700 outline-none"
+            className="h-10 w-full rounded-xl border border-stone-200 bg-white px-3 text-base font-semibold text-stone-700 outline-none"
           >
             {permissions.canManageEvents && <option value="admin_only">Admin uniquement</option>}
             {permissions.canManageEvents && <option value="team">Toute l'équipe</option>}
             <option value="private">Privé</option>
           </select>
+          </label>
         </div>
         {rowError && <p className="text-sm font-semibold text-rose-600">{rowError}</p>}
         {syncProgress && (
@@ -15030,7 +14938,7 @@ function ExternalCalendarSettingsDetail({
           </p>
         )}
         {syncSummary && !syncing && <p className="text-sm font-semibold text-emerald-600">{syncSummary}</p>}
-        <div className="flex justify-end gap-2">
+        <div className="flex flex-wrap justify-end gap-2">
           {canManage && hasChanges && (
             <button
               type="button"
@@ -15041,20 +14949,22 @@ function ExternalCalendarSettingsDetail({
               {saving ? "Enregistrement..." : "Enregistrer"}
             </button>
           )}
-          <button
-            type="button"
-            onClick={() => void handleSync()}
-            disabled={!canManage || syncing || saving || (calendar.syncCapability === "read_only" && !draft.icsUrl.trim())}
-            className="rounded-full border border-indigo-200 bg-indigo-50 px-3 py-1.5 text-base font-semibold text-indigo-700 transition hover:bg-indigo-100 disabled:border-stone-200 disabled:bg-white disabled:text-stone-300"
-          >
-            {syncProgress
-              ? `${syncProgress.synced.toLocaleString("fr-FR")} / ${syncProgress.total.toLocaleString("fr-FR")}`
-              : syncing
-                ? "Synchronisation..."
-                : calendar.providerType === "google" && calendar.syncCapability === "bidirectional"
-                  ? "Synchroniser depuis Google"
-                  : "Synchroniser"}
-          </button>
+          {canManualSync && (
+            <button
+              type="button"
+              onClick={() => void handleSync()}
+              disabled={!canManage || syncing || saving || (calendar.syncCapability === "read_only" && !draft.icsUrl.trim())}
+              className="rounded-full border border-indigo-200 bg-indigo-50 px-3 py-1.5 text-base font-semibold text-indigo-700 transition hover:bg-indigo-100 disabled:border-stone-200 disabled:bg-white disabled:text-stone-300"
+            >
+              {syncProgress
+                ? `${syncProgress.synced.toLocaleString("fr-FR")} / ${syncProgress.total.toLocaleString("fr-FR")}`
+                : syncing
+                  ? "Synchronisation..."
+                  : calendar.providerType === "google" && calendar.syncCapability === "bidirectional"
+                    ? "Synchroniser depuis Google"
+                    : "Synchroniser"}
+            </button>
+          )}
           {canManage && (
             <button
               type="button"
@@ -15065,6 +14975,7 @@ function ExternalCalendarSettingsDetail({
               {deleting ? "Suppression..." : "Supprimer"}
             </button>
           )}
+        </div>
         </div>
       </div>
     </div>
