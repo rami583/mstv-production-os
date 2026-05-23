@@ -1195,6 +1195,9 @@ const modalSheetPositionClassName = "items-end p-3 sm:items-center sm:justify-ce
 const modalPanelClassName = "rounded-3xl border border-stone-200 bg-white shadow-xl shadow-black/10";
 const calendarArrowClassName =
   "flex h-9 w-9 items-center justify-center rounded-full text-base text-[#bb2720] transition hover:bg-[#bb2720]/[0.08] disabled:cursor-not-allowed disabled:text-stone-300 disabled:hover:bg-transparent";
+const weekendColumnTintStyle: React.CSSProperties = {
+  backgroundImage: "linear-gradient(rgba(68, 64, 60, 0.045), rgba(68, 64, 60, 0.045))",
+};
 const localCacheWarningThrottleMs = 60_000;
 const maxCachedProductionEvents = 600;
 const maxCachedExternalCalendarEvents = 1200;
@@ -10681,7 +10684,11 @@ function CalendarMonthPage({
         >
           <div className="grid grid-cols-7">
             {weekdays.map((weekday, index) => (
-              <div key={`${weekday}-${index}`} className="flex min-w-0 items-center justify-center px-1 py-2.5 text-base font-semibold uppercase tracking-normal text-stone-500">
+              <div
+                key={`${weekday}-${index}`}
+                style={index >= 5 ? weekendColumnTintStyle : undefined}
+                className="flex min-w-0 items-center justify-center px-1 py-2.5 text-base font-semibold uppercase tracking-normal text-stone-500"
+              >
                 <span className="block w-full text-center leading-none">{weekday}</span>
               </div>
             ))}
@@ -10782,9 +10789,16 @@ function CalendarMonthGrid({
         className,
       )}
     >
-      {Array.from({ length: monthData.leadingEmptyDays }).map((_, index) => (
-        <div key={`empty-${index}`} className="h-[70px] border-b border-stone-200/45 bg-white/25 sm:h-[88px] lg:h-[clamp(72px,9svh,112px)]" />
-      ))}
+      {Array.from({ length: monthData.leadingEmptyDays }).map((_, index) => {
+        const isWeekendColumn = index % 7 >= 5;
+        return (
+          <div
+            key={`empty-${index}`}
+            style={isWeekendColumn ? weekendColumnTintStyle : undefined}
+            className="h-[70px] border-b border-stone-200/45 bg-white/25 sm:h-[88px] lg:h-[clamp(72px,9svh,112px)]"
+          />
+        );
+      })}
       {monthData.calendarDays.map(({ day, events: dayEvents, externalEvents: dayExternalEvents, markers, dateKey }, index) => {
         const position = monthData.leadingEmptyDays + index;
         const isLastRow = position >= monthData.totalCells - 7;
@@ -10820,6 +10834,7 @@ function CalendarMonthGrid({
             }}
             title={markerLabel || undefined}
             tabIndex={interactive ? 0 : -1}
+            style={isWeekend ? weekendColumnTintStyle : undefined}
             className={cn(
               "group flex h-[70px] flex-col items-center justify-start gap-1 bg-white/35 px-1 py-2.5 transition hover:bg-white/80 sm:h-[88px] sm:py-3 lg:h-[clamp(72px,9svh,112px)] lg:px-2 lg:py-4",
               schoolHolidayMarker && "bg-amber-50/60 hover:bg-amber-50/85",
@@ -10850,9 +10865,17 @@ function CalendarMonthGrid({
           </button>
         );
       })}
-      {Array.from({ length: monthData.trailingEmptyDays }).map((_, index) => (
-        <div key={`trailing-${index}`} className="h-[70px] bg-white/25 sm:h-[88px] lg:h-[clamp(72px,9svh,112px)]" />
-      ))}
+      {Array.from({ length: monthData.trailingEmptyDays }).map((_, index) => {
+        const position = monthData.leadingEmptyDays + monthData.calendarDays.length + index;
+        const isWeekendColumn = position % 7 >= 5;
+        return (
+          <div
+            key={`trailing-${index}`}
+            style={isWeekendColumn ? weekendColumnTintStyle : undefined}
+            className="h-[70px] bg-white/25 sm:h-[88px] lg:h-[clamp(72px,9svh,112px)]"
+          />
+        );
+      })}
     </div>
   );
 }
