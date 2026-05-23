@@ -11325,10 +11325,6 @@ function ProductionDetail({
   profile: UserProfile | null;
 }) {
   const [contextSelection, setContextSelection] = useState<ContextSelection>(null);
-  const [addForm, setAddForm] = useState<ItemKind | null>(null);
-  const [optionName, setOptionName] = useState("");
-  const [linkName, setLinkName] = useState("");
-  const [documentName, setDocumentName] = useState("");
   const [manageError, setManageError] = useState<string | null>(null);
   const [submittingAdd, setSubmittingAdd] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState<DeleteSelection | null>(null);
@@ -11450,15 +11446,13 @@ function ProductionDetail({
     );
   }
 
-  async function addOption(formEvent: React.FormEvent<HTMLFormElement>) {
-    formEvent.preventDefault();
+  async function addOption() {
+    if (submittingAdd) return;
     setSubmittingAdd(true);
     setManageError(null);
 
     try {
-      const option = await onCreateOption(event.id, optionName);
-      setOptionName("");
-      setAddForm(null);
+      const option = await onCreateOption(event.id, "Nouvelle option");
       setContextSelection({ type: "option", optionId: option.id });
     } catch (createError) {
       setManageError(getUserFacingErrorMessage(createError, "Impossible d'ajouter l'option."));
@@ -11467,15 +11461,13 @@ function ProductionDetail({
     }
   }
 
-  async function addLink(formEvent: React.FormEvent<HTMLFormElement>) {
-    formEvent.preventDefault();
+  async function addLink() {
+    if (submittingAdd) return;
     setSubmittingAdd(true);
     setManageError(null);
 
     try {
-      const link = await onCreateLink(event.id, { label: linkName, url: "" });
-      setLinkName("");
-      setAddForm(null);
+      const link = await onCreateLink(event.id, { label: "Nouveau lien", url: "" });
       setContextSelection({ type: "link", linkId: link.id });
     } catch (createError) {
       setManageError(getUserFacingErrorMessage(createError, "Impossible d'ajouter le lien."));
@@ -11484,15 +11476,13 @@ function ProductionDetail({
     }
   }
 
-  async function addDocumentGroup(formEvent: React.FormEvent<HTMLFormElement>) {
-    formEvent.preventDefault();
+  async function addDocumentGroup() {
+    if (submittingAdd) return;
     setSubmittingAdd(true);
     setManageError(null);
 
     try {
-      const group = await onCreateDocumentGroup(event.id, documentName);
-      setDocumentName("");
-      setAddForm(null);
+      const group = await onCreateDocumentGroup(event.id, "Nouveau document");
       setContextSelection({ type: "document", groupId: group.id });
     } catch (createError) {
       setManageError(getUserFacingErrorMessage(createError, "Impossible d'ajouter le document."));
@@ -11693,22 +11683,9 @@ function ProductionDetail({
               label="Options"
               tone="option"
               addLabel="Ajouter une option"
-              onAdd={permissions.canManageOperational ? () => setAddForm((current) => (current === "option" ? null : "option")) : undefined}
+              onAdd={permissions.canManageOperational ? () => void addOption() : undefined}
+              addDisabled={submittingAdd}
             />
-            {permissions.canManageOperational && addForm === "option" && (
-              <InlineAddForm onSubmit={addOption} eventId={event.id}>
-                <input
-                  required
-                  value={optionName}
-                  onChange={(inputEvent) => setOptionName(inputEvent.target.value)}
-                  placeholder="Nom de l'option"
-                  className={inlineAddInputClassName}
-                />
-                <InlineAddButton tone="option" disabled={submittingAdd}>
-                  Ajouter
-                </InlineAddButton>
-              </InlineAddForm>
-            )}
             <div className="grid grid-cols-1 gap-1.5 sm:gap-2">
               {event.options.map((option) => {
                 const Icon = getOptionIcon(option.label);
@@ -11789,22 +11766,9 @@ function ProductionDetail({
               label="Liens"
               tone="link"
               addLabel="Ajouter un lien"
-              onAdd={permissions.canManageOperational ? () => setAddForm((current) => (current === "link" ? null : "link")) : undefined}
+              onAdd={permissions.canManageOperational ? () => void addLink() : undefined}
+              addDisabled={submittingAdd}
             />
-            {permissions.canManageOperational && addForm === "link" && (
-              <InlineAddForm onSubmit={addLink} eventId={event.id}>
-                <input
-                  required
-                  value={linkName}
-                  onChange={(inputEvent) => setLinkName(inputEvent.target.value)}
-                  placeholder="Nom du lien"
-                  className={inlineAddInputClassName}
-                />
-                <InlineAddButton tone="link" disabled={submittingAdd}>
-                  Ajouter
-                </InlineAddButton>
-              </InlineAddForm>
-            )}
             <div className="grid grid-cols-1 gap-1.5 sm:gap-2">
               {event.links.map((link) => {
                 const Icon = getLinkIcon(link.label);
@@ -11864,22 +11828,9 @@ function ProductionDetail({
               label="Documents"
               tone="document"
               addLabel="Ajouter un document"
-              onAdd={permissions.canManageOperational ? () => setAddForm((current) => (current === "document" ? null : "document")) : undefined}
+              onAdd={permissions.canManageOperational ? () => void addDocumentGroup() : undefined}
+              addDisabled={submittingAdd}
             />
-            {permissions.canManageOperational && addForm === "document" && (
-              <InlineAddForm onSubmit={addDocumentGroup} eventId={event.id}>
-                <input
-                  required
-                  value={documentName}
-                  onChange={(inputEvent) => setDocumentName(inputEvent.target.value)}
-                  placeholder="Nom du document"
-                  className={inlineAddInputClassName}
-                />
-                <InlineAddButton tone="document" disabled={submittingAdd}>
-                  Ajouter
-                </InlineAddButton>
-              </InlineAddForm>
-            )}
             <div className="grid grid-cols-1 gap-1.5 sm:gap-2">
               {event.documentGroups.map((group) => {
                 const Icon = getDocumentGroupIcon(group);
@@ -16206,21 +16157,20 @@ function AccountMenu({
   );
 }
 
-const inlineAddInputClassName =
-  "h-9 min-w-0 rounded-xl border border-stone-200 bg-white px-3 text-base font-medium text-stone-950 outline-none transition placeholder:text-stone-300 focus:border-[#bb2720]/40";
-
 function SectionHeader({
   label,
   align = "left",
   tone,
   addLabel,
   onAdd,
+  addDisabled = false,
 }: {
   label: string;
   align?: "left" | "right";
   tone: ItemKind;
   addLabel: string;
   onAdd?: () => void;
+  addDisabled?: boolean;
 }) {
   const activeTone = tone === "option" ? getOptionTone("completed") : tone === "link" ? getLinkTone("available") : getDocumentTone(true);
   const addTone = cn(activeTone.surface, activeTone.border, activeTone.hover, activeTone.text);
@@ -16231,7 +16181,8 @@ function SectionHeader({
         <button
           type="button"
           onClick={onAdd}
-          className={cn("flex h-6 w-6 shrink-0 items-center justify-center rounded-full border-2 text-base font-semibold leading-none transition active:scale-95", addTone)}
+          disabled={addDisabled}
+          className={cn("flex h-6 w-6 shrink-0 items-center justify-center rounded-full border-2 text-base font-semibold leading-none transition active:scale-95 disabled:cursor-wait disabled:opacity-60", addTone)}
           aria-label={addLabel}
           title={addLabel}
         >
@@ -16247,54 +16198,6 @@ function SectionHeader({
         {label}
       </h2>
     </div>
-  );
-}
-
-function InlineAddButton({
-  tone,
-  disabled,
-  children,
-}: {
-  tone: ItemKind;
-  disabled: boolean;
-  children: React.ReactNode;
-}) {
-  const toneClassName =
-    tone === "option"
-      ? "bg-emerald-600 hover:bg-emerald-700 disabled:bg-stone-300"
-      : tone === "link"
-        ? "bg-sky-600 hover:bg-sky-700 disabled:bg-stone-300"
-        : "bg-amber-600 hover:bg-amber-700 disabled:bg-stone-300";
-
-  return (
-    <button disabled={disabled} className={cn("h-9 shrink-0 rounded-xl px-3 text-base font-semibold text-white transition", toneClassName)}>
-      {children}
-    </button>
-  );
-}
-
-function InlineAddForm({
-  children,
-  onSubmit,
-  eventId,
-  align = "left",
-}: {
-  children: React.ReactNode;
-  onSubmit: (event: React.FormEvent<HTMLFormElement>) => void;
-  eventId: string;
-  align?: "left" | "right";
-}) {
-  return (
-    <form
-      onSubmit={onSubmit}
-      data-event-id={eventId}
-      className={cn(
-        "mb-2 flex flex-col gap-2 rounded-xl border border-stone-200 bg-white p-2 sm:flex-row",
-        align === "right" && "sm:justify-end",
-      )}
-    >
-      {children}
-    </form>
   );
 }
 
