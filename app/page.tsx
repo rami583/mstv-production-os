@@ -9013,29 +9013,52 @@ export default function Home() {
   }
 
   if (!hasMounted || authLoading) {
-    return <FullScreenStatus>Chargement...</FullScreenStatus>;
+    return (
+      <>
+        <FullScreenStatus>Chargement...</FullScreenStatus>
+        {hasMounted && <OfflineBanner online={online} />}
+      </>
+    );
   }
 
   if (passwordRecoveryOpen) {
     if (!authSession) {
-      return <FullScreenStatus>Préparation de la réinitialisation...</FullScreenStatus>;
+      return (
+        <>
+          <FullScreenStatus>Préparation de la réinitialisation...</FullScreenStatus>
+          <OfflineBanner online={online} />
+        </>
+      );
     }
 
     return (
-      <UpdatePasswordScreen
-        email={authSession.user.email}
-        onComplete={() => setPasswordRecoveryOpen(false)}
-        onCancel={() => setPasswordRecoveryOpen(false)}
-      />
+      <>
+        <UpdatePasswordScreen
+          email={authSession.user.email}
+          onComplete={() => setPasswordRecoveryOpen(false)}
+          onCancel={() => setPasswordRecoveryOpen(false)}
+        />
+        <OfflineBanner online={online} />
+      </>
     );
   }
 
   if (!authSession) {
-    return <LoginScreen error={authError} />;
+    return (
+      <>
+        <LoginScreen error={authError} />
+        <OfflineBanner online={online} />
+      </>
+    );
   }
 
   if (authError && !profile) {
-    return <AuthRecoveryScreen message={authError} onReset={() => void handleInvalidAuthSession(authError)} />;
+    return (
+      <>
+        <AuthRecoveryScreen message={authError} onReset={() => void handleInvalidAuthSession(authError)} />
+        <OfflineBanner online={online} />
+      </>
+    );
   }
 
   return (

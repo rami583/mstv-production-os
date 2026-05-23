@@ -1,4 +1,4 @@
-const CACHE_NAME = "mstv-production-os-v1";
+const CACHE_NAME = "mstv-production-os-v2";
 const APP_SHELL = [
   "/",
   "/manifest.webmanifest",
