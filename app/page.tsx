@@ -11410,6 +11410,7 @@ function ProductionDetail({
   const previousContextSelectionKeyRef = useRef<string | null>(null);
   const eventSwipeStartRef = useRef<{ pointerId: number; x: number; y: number; axis: "horizontal" | "vertical" | null } | null>(null);
   const suppressEventSwipeClickRef = useRef(false);
+  const [hideHeaderNavigationForTouch, setHideHeaderNavigationForTouch] = useState(false);
   const eventDisplay = getProductionEventDisplay(event);
 
   const contextSelectionKey =
@@ -11504,6 +11505,26 @@ function ProductionDetail({
     scrollContainer.scrollTop = 0;
     scrollContainer.scrollLeft = 0;
   }, [event.id]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+
+    const coarsePointerQuery = window.matchMedia("(hover: none), (pointer: coarse)");
+    const smallScreenQuery = window.matchMedia("(max-width: 639px)");
+
+    function updateHeaderNavigationVisibility() {
+      setHideHeaderNavigationForTouch(coarsePointerQuery.matches && smallScreenQuery.matches);
+    }
+
+    updateHeaderNavigationVisibility();
+    coarsePointerQuery.addEventListener("change", updateHeaderNavigationVisibility);
+    smallScreenQuery.addEventListener("change", updateHeaderNavigationVisibility);
+
+    return () => {
+      coarsePointerQuery.removeEventListener("change", updateHeaderNavigationVisibility);
+      smallScreenQuery.removeEventListener("change", updateHeaderNavigationVisibility);
+    };
+  }, []);
 
   function selectOption(option: EventOption) {
     setContextSelection((current) =>
@@ -11718,7 +11739,7 @@ function ProductionDetail({
             <div className="mb-3 flex flex-wrap items-center gap-2">
               <EventCalendarBadge event={event} />
             </div>
-            <h1 className="truncate text-3xl font-semibold leading-tight text-stone-950 sm:text-5xl">{eventDisplay.title}</h1>
+            <h1 className="break-words pb-1 text-3xl font-semibold leading-[1.16] text-stone-950 sm:text-5xl sm:leading-[1.12]">{eventDisplay.title}</h1>
             {eventDisplay.subtitle && <p className="mt-2 truncate text-base font-medium text-stone-500">{eventDisplay.subtitle}</p>}
             {permissions.canManageEvents && (
               <button
@@ -11730,7 +11751,7 @@ function ProductionDetail({
               </button>
             )}
           </div>
-          <div className="hidden items-center gap-2 sm:flex">
+          <div className={cn("items-center gap-2", hideHeaderNavigationForTouch ? "hidden" : "flex")}>
             {permissions.canManageEvents && (
               <button type="button" onClick={onEditEvent} className="rounded-full border border-stone-200 bg-white px-3 py-2 text-sm font-semibold text-stone-600 transition hover:bg-stone-50">
                 Modifier
