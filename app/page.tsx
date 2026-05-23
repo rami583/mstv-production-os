@@ -33,6 +33,7 @@ import {
   Timer,
   Trash2,
   Wifi,
+  WifiOff,
   Webcam,
   X,
   type LucideIcon,
@@ -9186,6 +9187,8 @@ export default function Home() {
         </div>
       </div>
 
+      <OfflineBanner online={online} />
+
       {globalQuoteDragActive && (
         <div className="pointer-events-none fixed inset-0 z-50 flex items-center justify-center bg-stone-950/10 p-4">
           <div className="flex items-center gap-3 rounded-full border border-stone-200 bg-white/95 px-5 py-3 text-base font-semibold text-stone-800 backdrop-blur-xl">
@@ -16181,18 +16184,10 @@ function SyncStatusIndicator({
   syncing: boolean;
   error: string | null;
 }) {
-  const visible = !online || pendingCount > 0 || syncing || Boolean(error);
+  const visible = pendingCount > 0 || syncing || Boolean(error);
   if (!visible) return null;
 
-  const label = !online
-    ? pendingCount > 0
-      ? `${pendingCount} en attente`
-      : "Hors ligne"
-    : syncing
-      ? "Synchro"
-      : error
-        ? "Erreur synchro"
-        : `${pendingCount} en attente`;
+  const label = syncing ? "Synchro" : error ? "Erreur synchro" : `${pendingCount} en attente`;
 
   return (
     <div
@@ -16207,8 +16202,21 @@ function SyncStatusIndicator({
       title={error ?? label}
       aria-live="polite"
     >
-      <span className="sm:hidden">{error ? "!" : !online ? "HL" : pendingCount}</span>
+      <span className="sm:hidden">{error ? "!" : pendingCount}</span>
       <span className="hidden sm:inline">{label}</span>
+    </div>
+  );
+}
+
+function OfflineBanner({ online }: { online: boolean }) {
+  if (online) return null;
+
+  return (
+    <div className="pointer-events-none fixed inset-x-3 bottom-[calc(0.85rem+env(safe-area-inset-bottom))] z-30 flex justify-center sm:bottom-[calc(1rem+env(safe-area-inset-bottom))]">
+      <div className="flex w-full max-w-md items-center justify-center gap-2 rounded-full border border-orange-200/80 bg-orange-50/95 px-4 py-3 text-sm font-semibold text-orange-900 shadow-lg shadow-orange-950/10 backdrop-blur-xl sm:w-auto sm:px-5">
+        <WifiOff className="h-4 w-4 shrink-0 text-[#bb2720]" aria-hidden="true" />
+        <span>Pas de connexion Internet</span>
+      </div>
     </div>
   );
 }
