@@ -14576,60 +14576,7 @@ function ExternalCalendarsListView({
           <div className="space-y-5">
             <section className="space-y-2.5">
               <div className="flex items-center justify-between gap-3">
-                <h4 className="text-base font-semibold text-stone-950">Compte Google Calendar</h4>
-                <button
-                  type="button"
-                  onClick={() => handleProviderButtonClick("google")}
-                  disabled={connectingGoogle || disconnectingProvider === "google"}
-                  className={cn(
-                    "shrink-0 rounded-full border px-3 py-1.5 text-sm font-semibold transition disabled:cursor-default",
-                    googleConnected
-                      ? "border-stone-200 bg-white text-stone-600 hover:bg-stone-50"
-                      : "border-stone-950 bg-stone-950 text-white hover:bg-stone-800 disabled:border-stone-200 disabled:bg-stone-200",
-                  )}
-                >
-                  {googleConnected ? "Déconnecter" : connectingGoogle ? "Connexion..." : "Connecter"}
-                </button>
-              </div>
-              {googleLoading && <div className="rounded-2xl bg-stone-50 px-3 py-2 text-sm font-semibold text-stone-400">Chargement Google Calendar...</div>}
-              {!googleLoading && !googleConnected && (
-                <div className="rounded-2xl bg-stone-50 px-3 py-2 text-sm font-semibold text-stone-400">Aucun compte Google connecté.</div>
-              )}
-              <div className="space-y-2">
-                {connectedGoogleAccounts.map((account) => (
-                  <div key={account.id} className="space-y-2">
-                    <div className="truncate px-1 text-sm font-semibold text-stone-500">{account.email || account.displayName || "Compte Google"}</div>
-                    {account.lastError && <div className="px-1 text-xs font-semibold text-rose-600">{account.lastError}</div>}
-                    <div className="overflow-hidden rounded-2xl border border-stone-200 bg-white">
-                      {getVisibleGoogleProviderCalendars(account.id).map((calendar) => {
-                        const storedCalendar = getGoogleStoredCalendar(calendar);
-                        if (!isStoredCalendarVisible(storedCalendar)) return null;
-                        const googleEnabled = storedCalendar?.syncEnabled ?? calendar.enabled;
-                        return (
-                          <CalendarSettingsListRow
-                            key={storedCalendar?.id ?? calendar.providerCalendarId}
-                            name={calendar.summary}
-                            color={storedCalendar?.color ?? calendar.color}
-                            enabled={googleEnabled}
-                            disabled={!storedCalendar}
-                            onOpen={() => {
-                              if (storedCalendar) onOpenCalendarDetail(storedCalendar);
-                            }}
-                          />
-                        );
-                      })}
-                      {getVisibleGoogleProviderCalendars(account.id).length === 0 && (
-                        <div className="px-3 py-2.5 text-sm font-semibold text-stone-400">Aucun calendrier Google chargé.</div>
-                      )}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </section>
-
-            <section className="space-y-2.5">
-              <div className="flex items-center justify-between gap-3">
-                <h4 className="text-base font-semibold text-stone-950">Compte Apple Calendar</h4>
+                <h4 className="text-base font-semibold text-stone-950">Apple</h4>
                 <button
                   type="button"
                   onClick={() => handleProviderButtonClick("apple")}
@@ -14673,6 +14620,59 @@ function ExternalCalendarsListView({
                       })}
                       {getVisibleAppleProviderCalendars(account.id).length === 0 && (
                         <div className="px-3 py-2.5 text-sm font-semibold text-stone-400">Aucun calendrier Apple chargé.</div>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </section>
+
+            <section className="space-y-2.5">
+              <div className="flex items-center justify-between gap-3">
+                <h4 className="text-base font-semibold text-stone-950">Google</h4>
+                <button
+                  type="button"
+                  onClick={() => handleProviderButtonClick("google")}
+                  disabled={connectingGoogle || disconnectingProvider === "google"}
+                  className={cn(
+                    "shrink-0 rounded-full border px-3 py-1.5 text-sm font-semibold transition disabled:cursor-default",
+                    googleConnected
+                      ? "border-stone-200 bg-white text-stone-600 hover:bg-stone-50"
+                      : "border-stone-950 bg-stone-950 text-white hover:bg-stone-800 disabled:border-stone-200 disabled:bg-stone-200",
+                  )}
+                >
+                  {googleConnected ? "Déconnecter" : connectingGoogle ? "Connexion..." : "Connecter"}
+                </button>
+              </div>
+              {googleLoading && <div className="rounded-2xl bg-stone-50 px-3 py-2 text-sm font-semibold text-stone-400">Chargement Google Calendar...</div>}
+              {!googleLoading && !googleConnected && (
+                <div className="rounded-2xl bg-stone-50 px-3 py-2 text-sm font-semibold text-stone-400">Aucun compte Google connecté.</div>
+              )}
+              <div className="space-y-2">
+                {connectedGoogleAccounts.map((account) => (
+                  <div key={account.id} className="space-y-2">
+                    <div className="truncate px-1 text-sm font-semibold text-stone-500">{account.email || account.displayName || "Compte Google"}</div>
+                    {account.lastError && <div className="px-1 text-xs font-semibold text-rose-600">{account.lastError}</div>}
+                    <div className="overflow-hidden rounded-2xl border border-stone-200 bg-white">
+                      {getVisibleGoogleProviderCalendars(account.id).map((calendar) => {
+                        const storedCalendar = getGoogleStoredCalendar(calendar);
+                        if (!isStoredCalendarVisible(storedCalendar)) return null;
+                        const googleEnabled = storedCalendar?.syncEnabled ?? calendar.enabled;
+                        return (
+                          <CalendarSettingsListRow
+                            key={storedCalendar?.id ?? calendar.providerCalendarId}
+                            name={calendar.summary}
+                            color={storedCalendar?.color ?? calendar.color}
+                            enabled={googleEnabled}
+                            disabled={!storedCalendar}
+                            onOpen={() => {
+                              if (storedCalendar) onOpenCalendarDetail(storedCalendar);
+                            }}
+                          />
+                        );
+                      })}
+                      {getVisibleGoogleProviderCalendars(account.id).length === 0 && (
+                        <div className="px-3 py-2.5 text-sm font-semibold text-stone-400">Aucun calendrier Google chargé.</div>
                       )}
                     </div>
                   </div>
