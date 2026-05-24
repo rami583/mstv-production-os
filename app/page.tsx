@@ -12305,7 +12305,7 @@ function InlineEditableTitle({
           }
         }}
         className={cn(
-          "h-8 min-w-0 rounded-lg border border-stone-200 bg-white px-2 text-base font-semibold outline-none transition focus:border-stone-300 disabled:opacity-70",
+          "h-8 min-w-0 rounded-lg border border-transparent bg-stone-50/80 px-2 text-base font-semibold outline-none transition focus:border-stone-300 focus:bg-white disabled:opacity-70",
           inputClassName,
         )}
       />
@@ -12392,7 +12392,7 @@ function LinkValueRow({
 
   return (
     <div className="flex w-full min-w-0 items-center gap-2">
-      <div className={cn("inline-flex min-h-9 min-w-0 flex-1 items-center gap-2 rounded-full border px-3 py-1.5 transition focus-within:border-sky-400", rowTone.surface, rowTone.border)}>
+      <div className={cn("inline-flex min-h-9 min-w-0 flex-1 items-center gap-2 rounded-full border border-transparent px-3 py-1.5 transition focus-within:border-sky-300", rowTone.surface)}>
         <Icon className={cn("h-4 w-4 shrink-0", rowTone.icon)} />
         {editable ? (
           <input
@@ -12442,9 +12442,8 @@ function LinkValueRow({
         onClick={onCopy}
         disabled={!trimmedValue}
         className={cn(
-          "flex h-9 w-9 shrink-0 items-center justify-center rounded-full border transition disabled:cursor-not-allowed disabled:opacity-35",
+          "flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-transparent transition disabled:cursor-not-allowed disabled:opacity-35",
           rowTone.surface,
-          rowTone.border,
           rowTone.icon,
           rowTone.hover,
           copied && "bg-sky-200 text-sky-900",
@@ -12876,7 +12875,7 @@ function ContextDetailBlock({
             value={selectedLink.label}
             onSave={renameSelectedLink}
             className="truncate"
-            inputClassName="border-sky-200 text-sky-950 focus:border-sky-400"
+            inputClassName="text-sky-950 focus:border-sky-300"
             editable={canRenameSelectedLink}
           />
             </div>
@@ -12945,7 +12944,7 @@ function ContextDetailBlock({
                 value={selectedDocumentGroup.label}
                 onSave={renameSelectedDocumentGroup}
                 className="truncate"
-                inputClassName="border-amber-200 text-amber-950 focus:border-amber-400"
+                inputClassName="text-amber-950 focus:border-amber-300"
                 editable={canRenameSelectedDocumentGroup}
               />
             </div>
@@ -12966,11 +12965,11 @@ function ContextDetailBlock({
                 void uploadFilesToSelectedGroup(dropEvent.dataTransfer.files);
               }}
               className={cn(
-                "rounded-xl border border-amber-200 bg-white p-2 transition",
-                draggingDocumentFiles && "border-amber-300 bg-amber-50",
+                "rounded-xl border border-dashed border-amber-200/60 bg-amber-50/30 p-2 transition",
+                draggingDocumentFiles && "border-amber-300/80 bg-amber-50/80",
               )}
             >
-              <label className="flex min-h-16 cursor-pointer items-center justify-center rounded-lg border border-dashed border-amber-200 bg-amber-50/60 px-3 text-center text-base font-semibold text-amber-800 transition hover:bg-amber-100">
+              <label className="flex min-h-16 cursor-pointer items-center justify-center rounded-lg bg-amber-50/70 px-3 text-center text-base font-semibold text-amber-800 transition hover:bg-amber-100/70">
                 {uploadingDocumentFiles ? "Envoi..." : "Déposer ou choisir"}
                 <input
                   type="file"
@@ -12993,7 +12992,7 @@ function ContextDetailBlock({
                 const canDeleteFile = canManageCreatedEntity(permissions, profile, file);
                 return (
                   <div key={file.id} data-no-event-swipe className="flex w-full min-w-0 items-center gap-2">
-                    <div className={cn("group inline-flex min-h-9 min-w-0 flex-1 items-center gap-2 rounded-full border px-3 py-1.5", documentTone.surface, documentTone.border)}>
+                    <div className={cn("group inline-flex min-h-9 min-w-0 flex-1 items-center gap-2 rounded-full border border-transparent px-3 py-1.5", documentTone.surface)}>
                       <button
                         onClick={() => void openDocumentFile(file)}
                         className="flex min-w-0 flex-1 items-center gap-2 text-left"
@@ -13017,9 +13016,8 @@ function ContextDetailBlock({
                     <button
                       onClick={() => void downloadDocumentFile(file)}
                       className={cn(
-                        "flex h-9 w-9 shrink-0 items-center justify-center rounded-full border transition hover:bg-amber-100",
+                        "flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-transparent transition hover:bg-amber-100",
                         documentTone.surface,
-                        documentTone.border,
                         documentTone.icon,
                       )}
                       aria-label="Télécharger ce fichier"
@@ -13060,7 +13058,7 @@ function ContextDetailBlock({
             value={selectedOption.label}
             onSave={renameSelectedOption}
             className="truncate"
-            inputClassName="border-emerald-200 text-emerald-950 focus:border-emerald-400"
+            inputClassName="text-emerald-950 focus:border-emerald-300"
             editable={canRenameSelectedOption}
           />
         </div>
@@ -13068,9 +13066,8 @@ function ContextDetailBlock({
           <button
             onClick={() => void onToggleOption(selectedOption)}
             className={cn(
-              "shrink-0 rounded-full border px-3 py-1.5 text-base font-semibold transition",
+              "shrink-0 rounded-full border border-transparent px-3 py-1.5 text-base font-semibold transition",
               optionTone.surface,
-              optionTone.border,
               optionTone.text,
               selectedOption.status === "completed" ? "hover:bg-emerald-100" : "hover:bg-emerald-50",
             )}
@@ -13082,7 +13079,7 @@ function ContextDetailBlock({
       </div>
       {titleRenameError && <div className="mt-2 text-base font-medium text-rose-700">{titleRenameError}</div>}
       {canOverrideCompletedBy && (
-        <div className="mt-3 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-emerald-200 bg-emerald-50/70 px-3 py-2">
+        <div className="mt-3 flex flex-wrap items-center justify-between gap-2 rounded-xl bg-emerald-50/70 px-3 py-2">
           <span className="text-base font-semibold text-emerald-800">Fait par</span>
           <div className="flex min-w-0 items-center gap-2">
             <span className="max-w-28 truncate text-base font-semibold text-emerald-900">{completedByDisplay}</span>
@@ -13102,7 +13099,7 @@ function ContextDetailBlock({
                 }
                 void changeSelectedOptionCompletedBy(nextValue);
               }}
-              className="h-8 rounded-full border border-emerald-200 bg-white px-3 text-base font-semibold text-emerald-800 outline-none transition focus:border-emerald-500 disabled:text-emerald-400"
+              className="h-8 rounded-full border border-transparent bg-white/80 px-3 text-base font-semibold text-emerald-800 outline-none transition focus:border-emerald-300 focus:bg-white disabled:text-emerald-400"
               aria-label="Modifier le champ Fait par"
             >
               <option value="" disabled>
@@ -13133,7 +13130,7 @@ function ContextDetailBlock({
               }}
               placeholder="Prénom"
               disabled={savingCompletedByOverride}
-              className="h-8 w-full rounded-full border border-emerald-200 bg-white px-3 text-base font-semibold text-emerald-800 outline-none transition placeholder:text-emerald-300 focus:border-emerald-500 disabled:text-emerald-400 sm:w-40"
+              className="h-8 w-full rounded-full border border-transparent bg-white/80 px-3 text-base font-semibold text-emerald-800 outline-none transition placeholder:text-emerald-300 focus:border-emerald-300 focus:bg-white disabled:text-emerald-400 sm:w-40"
             />
           )}
         </div>
@@ -13144,7 +13141,7 @@ function ContextDetailBlock({
           {canEdit && !addingOptionItem ? (
             <button
               onClick={() => setAddingOptionItem(true)}
-              className="flex h-8 w-fit shrink-0 items-center gap-2 rounded-full border border-emerald-200 bg-emerald-50 px-3 text-base font-semibold leading-none text-emerald-700 transition hover:bg-emerald-100"
+              className="flex h-8 w-fit shrink-0 items-center gap-2 rounded-full bg-emerald-50 px-3 text-base font-semibold leading-none text-emerald-700 transition hover:bg-emerald-100"
               aria-label="Ajouter une note"
               title="Ajouter une note"
             >
@@ -13159,7 +13156,7 @@ function ContextDetailBlock({
                 value={optionItemInput}
                 onChange={(event) => setOptionItemInput(event.target.value)}
                 placeholder="Nouvelle note"
-                className="min-h-20 w-full resize-none rounded-xl border border-emerald-200 bg-white px-3 py-2 text-base font-medium text-stone-950 outline-none transition placeholder:text-stone-300 focus:border-emerald-400"
+                className="min-h-20 w-full resize-none rounded-xl border border-transparent bg-emerald-50/40 px-3 py-2 text-base font-medium text-stone-950 outline-none transition placeholder:text-stone-300 focus:border-emerald-300 focus:bg-white"
               />
               <button disabled={savingOptionItem} className="h-9 w-fit shrink-0 rounded-xl bg-emerald-600 px-3 text-base font-semibold text-white transition hover:bg-emerald-700 disabled:bg-stone-300">
                 Ajouter
@@ -13171,14 +13168,14 @@ function ContextDetailBlock({
           const isEditingNote = editingOptionItemId === item.id;
           const isSavingEditedNote = savingEditedOptionItemId === item.id;
           return (
-            <div key={item.id} className={cn("group flex min-h-12 w-full items-start gap-3 rounded-xl border px-3 py-2.5", optionTone.surface, optionTone.border)}>
+            <div key={item.id} className={cn("group flex min-h-12 w-full items-start gap-3 rounded-xl border border-transparent px-3 py-2.5", optionTone.surface)}>
               {isEditingNote ? (
                 <div className="flex min-w-0 flex-1 flex-col gap-2">
                   <textarea
                     rows={3}
                     value={editingOptionItemInput}
                     onChange={(event) => setEditingOptionItemInput(event.target.value)}
-                    className="min-h-20 w-full resize-none rounded-xl border border-emerald-200 bg-white px-3 py-2 text-base font-medium text-stone-950 outline-none transition placeholder:text-stone-300 focus:border-emerald-400"
+                    className="min-h-20 w-full resize-none rounded-xl border border-transparent bg-emerald-50/40 px-3 py-2 text-base font-medium text-stone-950 outline-none transition placeholder:text-stone-300 focus:border-emerald-300 focus:bg-white"
                     autoFocus
                   />
                   <div className="flex flex-wrap gap-2">
@@ -13194,7 +13191,7 @@ function ContextDetailBlock({
                       type="button"
                       onClick={cancelEditingOptionItem}
                       disabled={isSavingEditedNote}
-                      className="h-8 rounded-full border border-emerald-200 bg-white px-3 text-base font-semibold text-emerald-700 transition hover:bg-emerald-50 disabled:text-stone-300"
+                      className="h-8 rounded-full bg-emerald-50 px-3 text-base font-semibold text-emerald-700 transition hover:bg-emerald-100 disabled:text-stone-300"
                     >
                       Annuler
                     </button>
