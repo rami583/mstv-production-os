@@ -1210,7 +1210,7 @@ const modalPanelClassName = "rounded-3xl border border-stone-200 bg-white shadow
 const calendarArrowClassName =
   "flex h-9 w-9 items-center justify-center rounded-full text-base text-[#bb2720] transition hover:bg-[#bb2720]/[0.08] disabled:cursor-not-allowed disabled:text-stone-300 disabled:hover:bg-transparent";
 const weekendColumnTintStyle: React.CSSProperties = {
-  backgroundImage: "linear-gradient(rgba(47, 143, 229, 0.026), rgba(47, 143, 229, 0.026))",
+  backgroundColor: "#f7f9fb",
 };
 const localCacheWarningThrottleMs = 60_000;
 const maxCachedProductionEvents = 600;
@@ -9082,7 +9082,7 @@ export default function Home() {
   }
 
   return (
-    <main className="relative h-screen h-[100svh] overflow-hidden bg-[#f7f9fb] text-stone-950">
+    <main className="relative h-screen h-[100svh] overflow-hidden bg-[rgba(47,143,229,0.026)] text-stone-950">
       <div
         onDragEnter={(event) => {
           if (!permissions.canManageEvents) return;
@@ -10194,7 +10194,7 @@ function YearOverviewOverlay({
   const yearPageStep = getYearPageStep();
 
   return (
-    <div className="fixed inset-0 z-50 overflow-hidden bg-[#f7f9fb]/95 px-2 pb-[calc(1.15rem+env(safe-area-inset-bottom))] pt-[calc(1.25rem+env(safe-area-inset-top))] backdrop-blur-xl sm:px-6 sm:pb-[calc(1rem+env(safe-area-inset-bottom))] sm:pt-[calc(1.25rem+env(safe-area-inset-top))] lg:px-8">
+    <div className="fixed inset-0 z-50 overflow-hidden bg-[rgba(47,143,229,0.026)] px-2 pb-[calc(1.15rem+env(safe-area-inset-bottom))] pt-[calc(1.25rem+env(safe-area-inset-top))] backdrop-blur-xl sm:px-6 sm:pb-[calc(1rem+env(safe-area-inset-bottom))] sm:pt-[calc(1.25rem+env(safe-area-inset-top))] lg:px-8">
       <div className="mx-auto flex h-full max-w-7xl flex-col">
         <AppHeader
           screen="calendar"
@@ -16497,7 +16497,7 @@ function StatusMessage({ children, tone = "neutral" }: { children: React.ReactNo
 
 function FullScreenStatus({ children, tone = "neutral" }: { children: React.ReactNode; tone?: "neutral" | "error" }) {
   return (
-    <main className="flex h-screen h-[100svh] items-center justify-center bg-[#f7f9fb] p-4 text-stone-950">
+    <main className="flex h-screen h-[100svh] items-center justify-center bg-[rgba(47,143,229,0.026)] p-4 text-stone-950">
       <div
         className={cn(
           "rounded-3xl border bg-white px-5 py-4 text-base font-semibold",
@@ -16512,7 +16512,7 @@ function FullScreenStatus({ children, tone = "neutral" }: { children: React.Reac
 
 function AuthRecoveryScreen({ message, onReset }: { message: string; onReset: () => void }) {
   return (
-    <main className="flex h-screen h-[100svh] items-center justify-center bg-[#f7f9fb] p-4 text-stone-950">
+    <main className="flex h-screen h-[100svh] items-center justify-center bg-[rgba(47,143,229,0.026)] p-4 text-stone-950">
       <div className="w-full max-w-sm rounded-3xl border border-rose-200 bg-white px-5 py-5 text-center shadow-xl shadow-black/5">
         <AlertCircle className="mx-auto h-5 w-5 text-rose-600" />
         <p className="mt-3 text-base font-semibold text-rose-700">{message}</p>
@@ -16577,7 +16577,7 @@ function UpdatePasswordScreen({
   }
 
   return (
-    <main className="flex h-screen h-[100svh] items-center justify-center bg-[#f7f9fb] p-4 text-stone-950">
+    <main className="flex h-screen h-[100svh] items-center justify-center bg-[rgba(47,143,229,0.026)] p-4 text-stone-950">
       <form onSubmit={submitPassword} className="w-full max-w-sm rounded-3xl border border-stone-200 bg-white p-5 sm:p-6">
         <div className="mb-6 flex items-center gap-3">
           <img src="/brand/mon-studio-tv-icon.png" alt="Mon Studio TV" className="h-11 w-auto" />
@@ -16699,7 +16699,7 @@ function LoginScreen({ error }: { error: string | null }) {
   }
 
   return (
-    <main className="flex h-screen h-[100svh] items-center justify-center bg-[#f7f9fb] p-4 text-stone-950">
+    <main className="flex h-screen h-[100svh] items-center justify-center bg-[rgba(47,143,229,0.026)] p-4 text-stone-950">
       <form onSubmit={submitLogin} className="w-full max-w-sm rounded-3xl border border-stone-200 bg-white p-5 sm:p-6">
         <div className="mb-6 flex items-center gap-3">
           <img src="/brand/mon-studio-tv-icon.png" alt="Mon Studio TV" className="h-11 w-auto" />
