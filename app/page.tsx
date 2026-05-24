@@ -12084,7 +12084,7 @@ function ProductionDetail({
                     key={option.id}
                     data-grid-delete-confirm={isConfirmingDelete ? true : undefined}
                     className={cn(
-                      "group relative flex min-h-[4.75rem] items-center gap-1.5 rounded-xl border border-transparent transition sm:min-h-20 sm:gap-2",
+                      "group relative flex h-[4.75rem] items-center gap-1.5 overflow-hidden rounded-xl border border-transparent transition sm:h-20 sm:gap-2",
                       optionTone.surface,
                       optionTone.hover,
                       isSelectedOption && "border-emerald-700",
@@ -12102,13 +12102,13 @@ function ProductionDetail({
                         <button
                           onClick={() => selectOption(option)}
                           className={cn(
-                            "flex min-h-[4.75rem] min-w-0 flex-1 px-2 py-3 text-left sm:min-h-20 sm:px-3",
-                        showOptionCompletedName ? "flex-col items-start justify-between gap-2" : "items-center gap-1.5 sm:gap-2",
+                            "flex h-full min-w-0 flex-1 px-2 py-2.5 text-left sm:px-3",
+                        showOptionCompletedName ? "flex-col items-start justify-center gap-1.5" : "items-center gap-1.5 sm:gap-2",
                       )}
                     >
                       {showOptionCompletedName ? (
                         <>
-                          <span className="inline-flex max-w-full shrink-0 rounded-full border border-emerald-300 bg-white/75 px-2 py-0.5 text-base font-bold leading-tight text-emerald-800">
+                          <span className="inline-flex h-5 max-w-full shrink-0 items-center rounded-full bg-white/75 px-2 text-[0.7rem] font-bold leading-none text-emerald-800 sm:text-xs">
                                 <span className="truncate">{optionCompletedName}</span>
                           </span>
                               <span className="flex w-full min-w-0 items-center gap-1.5 pr-5 sm:gap-2">
@@ -12164,7 +12164,7 @@ function ProductionDetail({
                     key={link.id}
                     data-grid-delete-confirm={isConfirmingDelete ? true : undefined}
                     className={cn(
-                      "group relative flex min-h-[4.75rem] items-center gap-1.5 rounded-xl border border-transparent transition sm:min-h-20 sm:gap-2",
+                      "group relative flex h-[4.75rem] items-center gap-1.5 overflow-hidden rounded-xl border border-transparent transition sm:h-20 sm:gap-2",
                       linkTone.surface,
                       linkTone.hover,
                       isSelectedLink && "border-sky-700",
@@ -12179,7 +12179,7 @@ function ProductionDetail({
                       />
                     ) : (
                       <>
-                        <button onClick={() => selectLink(link)} className="flex min-h-[4.75rem] min-w-0 flex-1 items-center gap-1.5 px-2 py-3 text-left sm:min-h-20 sm:gap-2 sm:px-3">
+                        <button onClick={() => selectLink(link)} className="flex h-full min-w-0 flex-1 items-center gap-1.5 px-2 py-2.5 text-left sm:gap-2 sm:px-3">
                           <Icon className={cn("h-4 w-4 shrink-0 sm:h-5 sm:w-5", linkTone.icon)} />
                           <span className={cn("min-w-0 flex-1 truncate pr-5 text-base font-semibold", linkTone.text)}>{link.label}</span>
                         </button>
@@ -12226,7 +12226,7 @@ function ProductionDetail({
                     key={group.id}
                     data-grid-delete-confirm={isConfirmingDelete ? true : undefined}
                     className={cn(
-                      "group relative flex min-h-[4.75rem] items-center gap-1.5 rounded-xl border border-transparent transition sm:min-h-20 sm:gap-2",
+                      "group relative flex h-[4.75rem] items-center gap-1.5 overflow-hidden rounded-xl border border-transparent transition sm:h-20 sm:gap-2",
                       documentTone.surface,
                       documentTone.hover,
                       isSelectedDocument && documentTone.selected,
@@ -12243,7 +12243,7 @@ function ProductionDetail({
                       <>
                         <button
                           onClick={() => selectDocumentGroup(group)}
-                          className="flex min-h-[4.75rem] min-w-0 flex-1 items-center gap-1.5 px-2 py-3 text-left sm:min-h-20 sm:gap-2 sm:px-3"
+                          className="flex h-full min-w-0 flex-1 items-center gap-1.5 px-2 py-2.5 text-left sm:gap-2 sm:px-3"
                         >
                           <Icon className={cn("h-4 w-4 shrink-0 sm:h-5 sm:w-5", documentTone.icon)} />
                           <span className={cn("min-w-0 flex-1 truncate pr-5 text-base font-semibold", documentTone.text)}>{group.label}</span>
@@ -16859,7 +16859,7 @@ function InlineGridDeleteConfirmation({
         : "bg-amber-50/80";
 
   return (
-    <div className={cn("flex min-h-[4.75rem] min-w-0 flex-1 items-center justify-center rounded-[0.65rem] px-2 py-3 transition sm:min-h-20 sm:px-3", toneClassName)}>
+    <div className={cn("flex h-[4.75rem] min-w-0 flex-1 items-center justify-center rounded-[0.65rem] px-2 py-2.5 transition sm:h-20 sm:px-3", toneClassName)}>
       <div className="flex items-center justify-center gap-3">
         <button
           type="button"
