@@ -11360,7 +11360,7 @@ function ExternalInvitationDetailsCard({ event }: { event: ProductionEvent }) {
   if (!hasInvitationDetails) return null;
 
   return (
-    <Card className="premium-surface min-w-0 space-y-3 overflow-hidden p-4 sm:p-5">
+    <Card className="premium-surface min-w-0 space-y-3 overflow-hidden !border-transparent p-4 sm:p-5">
       {details.location && (
         <div className="min-w-0 rounded-2xl bg-stone-50 px-4 py-3">
           <p className="text-xs font-semibold uppercase text-stone-400">Lieu</p>
@@ -11808,7 +11808,7 @@ function ProductionDetail({
         }}
       >
       <Card
-        className="premium-surface shrink-0 p-4 sm:p-6"
+        className="premium-surface shrink-0 !border-transparent p-4 sm:p-6"
       >
         <div className="flex items-start justify-between gap-4">
           <div className="min-w-0 flex-1">
@@ -11844,11 +11844,11 @@ function ProductionDetail({
       </Card>
 
       <div key={event.id} ref={detailScrollContainerRef} className="no-scrollbar min-h-0 flex-1 space-y-4 overflow-y-auto overscroll-contain pb-6">
-        <Card className="premium-surface overflow-hidden p-4 sm:p-5">
+        <Card className="premium-surface overflow-hidden !border-transparent p-4 sm:p-5">
           <ProductionTimeCards event={event} />
         </Card>
         <ExternalInvitationDetailsCard event={event} />
-        <Card className="premium-surface overflow-hidden p-3 sm:p-4">
+        <Card className="premium-surface overflow-hidden !border-transparent p-3 sm:p-4">
         <div className="grid grid-cols-[repeat(3,minmax(0,1fr))] gap-1.5 sm:gap-4 lg:items-start">
           <div className="min-w-0">
             <SectionHeader
@@ -12871,7 +12871,7 @@ function ContextDetailBlock({
     const linkTone = getLinkTone(linkState);
 
     return (
-      <Card className="w-full border-sky-200 bg-white p-4 sm:p-5">
+      <Card className="w-full !border-transparent bg-white p-4 sm:p-5">
         <div className="link-detail-block flex w-full min-w-0 flex-col gap-3">
           <div className="top-row flex w-full min-w-0 items-center justify-between gap-3">
             <div className={cn("flex min-w-0 items-center gap-2 text-base font-semibold", linkTone.text)}>
@@ -12939,7 +12939,7 @@ function ContextDetailBlock({
     const Icon = getDocumentGroupIcon(selectedDocumentGroup);
 
     return (
-      <Card className="w-full border-amber-200 bg-white p-4 sm:p-5">
+      <Card className="w-full !border-transparent bg-white p-4 sm:p-5">
         <div className="flex w-full min-w-0 flex-col gap-3">
           <div className="flex w-full min-w-0 items-center justify-between gap-3">
             <div className={cn("flex min-w-0 items-center gap-2 text-base font-semibold", documentTone.text)}>
@@ -13056,7 +13056,7 @@ function ContextDetailBlock({
   const canOverrideCompletedBy = permissions.canManageEvents && selectedOption.status === "completed";
 
   return (
-    <Card className="border-emerald-200 bg-white p-4 sm:p-5">
+    <Card className="!border-transparent bg-white p-4 sm:p-5">
       <div className="flex items-center justify-between gap-3">
         <div className={cn("flex min-w-0 items-center gap-2 text-base font-semibold", optionTone.text)}>
           <InlineEditableTitle
