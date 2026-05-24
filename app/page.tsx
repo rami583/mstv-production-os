@@ -10384,7 +10384,6 @@ function YearOverviewMiniMonth({
           const position = monthData.leadingEmptyDays + index;
           const isWeekend = position % 7 >= 5;
           const isToday = day.dateKey === todayKey;
-          const hasEvents = day.events.length > 0;
           return (
             <span key={day.dateKey} className="relative flex aspect-square min-w-0 items-center justify-center sm:h-4 sm:aspect-auto lg:h-5">
               <span
@@ -10395,7 +10394,6 @@ function YearOverviewMiniMonth({
               >
                 {day.day}
               </span>
-              {hasEvents && <span className={cn("absolute bottom-0 h-1 w-1 rounded-full", isToday ? "bg-[#bb2720]" : "bg-stone-400")} />}
             </span>
           );
         })}
