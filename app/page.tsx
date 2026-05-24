@@ -14720,7 +14720,7 @@ function ExternalCalendarsListView({
                   {appleConnected ? "Déconnecter" : connectingApple ? "Connexion..." : "Connecter"}
                 </button>
               </div>
-              {appleLoading && <div className="rounded-2xl bg-stone-50 px-3 py-2 text-sm font-semibold text-stone-400">Chargement Apple Calendar...</div>}
+              {appleLoading && <div className="rounded-2xl bg-stone-50 px-3 py-2 text-sm font-semibold text-stone-400">Chargement...</div>}
               <div className="space-y-2">
                 {connectedAppleAccounts.map((account) => (
                   <div key={account.id} className="space-y-2">
@@ -14805,7 +14805,7 @@ function ExternalCalendarsListView({
                   {googleConnected ? "Déconnecter" : connectingGoogle ? "Connexion..." : "Connecter"}
                 </button>
               </div>
-              {googleLoading && <div className="rounded-2xl bg-stone-50 px-3 py-2 text-sm font-semibold text-stone-400">Chargement Google Calendar...</div>}
+              {googleLoading && <div className="rounded-2xl bg-stone-50 px-3 py-2 text-sm font-semibold text-stone-400">Chargement...</div>}
               <div className="space-y-2">
                 {connectedGoogleAccounts.map((account) => (
                   <div key={account.id} className="space-y-2">
