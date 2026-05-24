@@ -221,27 +221,26 @@ export function EventEditorModal({
         </div>
 
         <div className="min-h-0 flex-1 space-y-3 overflow-y-auto pr-0.5 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-          <div className="flex items-end gap-3">
-            <div className="min-w-0 flex-1">
-              <Field label="Date">
-                <button
-                  type="button"
-                  onClick={() => setDatePickerOpen(true)}
-                  className={cn(formInputClassName, "flex items-center text-left")}
-                >
-                  {formatFullDate(form.date)}
-                </button>
-              </Field>
+          <div className="space-y-1">
+            <div className="flex items-center justify-between gap-3">
+              <span className="text-sm font-semibold text-stone-500">Date</span>
+              <label className="flex shrink-0 items-center gap-2 text-sm font-semibold text-stone-600">
+                <span>Jour entier</span>
+                <input
+                  type="checkbox"
+                  checked={form.isAllDay}
+                  onChange={(inputEvent) => updateField("isAllDay", inputEvent.target.checked)}
+                  className="h-5 w-5 accent-[#bb2720]"
+                />
+              </label>
             </div>
-            <label className="flex h-11 shrink-0 items-center gap-2 rounded-2xl bg-stone-50/70 px-3 text-sm font-semibold text-stone-600">
-              <span>Jour entier</span>
-              <input
-                type="checkbox"
-                checked={form.isAllDay}
-                onChange={(inputEvent) => updateField("isAllDay", inputEvent.target.checked)}
-                className="h-5 w-5 accent-[#bb2720]"
-              />
-            </label>
+            <button
+              type="button"
+              onClick={() => setDatePickerOpen(true)}
+              className={cn(formInputClassName, "flex items-center text-left")}
+            >
+              {formatFullDate(form.date)}
+            </button>
           </div>
 
           <div className="grid gap-3 sm:grid-cols-2">
