@@ -10194,7 +10194,7 @@ function YearOverviewOverlay({
   const yearPageStep = getYearPageStep();
 
   return (
-    <div className="fixed inset-0 z-50 overflow-hidden bg-[rgba(47,143,229,0.026)] px-2 pb-[calc(1.15rem+env(safe-area-inset-bottom))] pt-[calc(1.25rem+env(safe-area-inset-top))] backdrop-blur-xl sm:px-6 sm:pb-[calc(1rem+env(safe-area-inset-bottom))] sm:pt-[calc(1.25rem+env(safe-area-inset-top))] lg:px-8">
+    <div className="fixed inset-0 z-50 overflow-hidden bg-[#fafcfe] px-2 pb-[calc(1.15rem+env(safe-area-inset-bottom))] pt-[calc(1.25rem+env(safe-area-inset-top))] sm:px-6 sm:pb-[calc(1rem+env(safe-area-inset-bottom))] sm:pt-[calc(1.25rem+env(safe-area-inset-top))] lg:px-8">
       <div className="mx-auto flex h-full max-w-7xl flex-col">
         <AppHeader
           screen="calendar"
