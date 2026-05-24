@@ -14481,7 +14481,7 @@ function CalendarSettingsListRow({
     <div
       className={cn(
         "flex min-w-0 items-center gap-3 rounded-2xl transition",
-        compact ? "px-3 py-1.5" : "px-3 py-2.5",
+        compact ? "px-3 py-1.5" : "px-3 py-2",
         enabled ? "bg-white hover:bg-stone-50" : "bg-stone-50/70 text-stone-400",
       )}
     >
