@@ -10408,24 +10408,24 @@ function YearOverviewMiniMonth({
       <span className={cn("mb-2 block truncate text-xs font-semibold leading-none sm:mb-2.5 sm:text-sm lg:mb-3", isVisibleMonth ? "text-[#bb2720]" : "text-stone-950")}>
         {monthName}
       </span>
-      <span className="grid min-h-0 grid-cols-7 content-start gap-x-0.5 gap-y-1.5 sm:gap-x-1 sm:gap-y-1.5 lg:gap-x-1.5 lg:gap-y-2">
+      <span className="grid min-h-0 grid-cols-7 content-start gap-x-1 gap-y-2 sm:gap-x-1.5 sm:gap-y-2 lg:gap-x-2 lg:gap-y-2.5">
         {weekdays.map((weekday, index) => (
-          <span key={`${weekday}-${index}`} className={cn("text-center text-[0.5rem] font-semibold leading-none sm:text-[0.55rem] lg:text-[0.6rem]", index >= 5 ? "text-stone-300" : "text-stone-400")}>
+          <span key={`${weekday}-${index}`} className={cn("text-center text-[0.5rem] font-semibold leading-[1.1] sm:text-[0.55rem] lg:text-[0.6rem]", index >= 5 ? "text-stone-300" : "text-stone-400")}>
             {weekday}
           </span>
         ))}
         {Array.from({ length: monthData.leadingEmptyDays }).map((_, index) => (
-          <span key={`empty-start-${index}`} className="aspect-square sm:h-4 sm:aspect-auto lg:h-5" />
+          <span key={`empty-start-${index}`} className="h-4 w-4 justify-self-center sm:h-[1.125rem] sm:w-[1.125rem] lg:h-5 lg:w-5" />
         ))}
         {monthData.calendarDays.map((day, index) => {
           const position = monthData.leadingEmptyDays + index;
           const isWeekend = position % 7 >= 5;
           const isToday = day.dateKey === todayKey;
           return (
-            <span key={day.dateKey} className="relative flex aspect-square min-w-0 items-center justify-center sm:h-4 sm:aspect-auto lg:h-5">
+            <span key={day.dateKey} className="relative flex h-4 w-4 min-w-0 items-center justify-center justify-self-center sm:h-[1.125rem] sm:w-[1.125rem] lg:h-5 lg:w-5">
               <span
                 className={cn(
-                  "flex h-4 w-4 items-center justify-center rounded-full text-[0.62rem] font-semibold leading-none sm:h-4 sm:w-4 sm:text-[0.6rem] lg:h-5 lg:w-5 lg:text-[0.7rem]",
+                  "flex h-4 w-4 shrink-0 items-center justify-center rounded-full text-[0.62rem] font-semibold leading-none sm:h-[1.125rem] sm:w-[1.125rem] sm:text-[0.64rem] lg:h-5 lg:w-5 lg:text-[0.7rem]",
                   isToday ? "bg-[#bb2720] text-white" : isWeekend ? "text-stone-400" : "text-stone-700",
                 )}
               >
@@ -10435,7 +10435,7 @@ function YearOverviewMiniMonth({
           );
         })}
         {Array.from({ length: monthData.trailingEmptyDays }).map((_, index) => (
-          <span key={`empty-end-${index}`} className="aspect-square sm:h-4 sm:aspect-auto lg:h-5" />
+          <span key={`empty-end-${index}`} className="h-4 w-4 justify-self-center sm:h-[1.125rem] sm:w-[1.125rem] lg:h-5 lg:w-5" />
         ))}
       </span>
       </span>
