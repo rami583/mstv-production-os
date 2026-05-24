@@ -274,7 +274,7 @@ export function EventEditorModal({
           )}
         </div>
 
-        {error && <div className="mt-4 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-base font-medium text-rose-700">{error}</div>}
+        {error && <div className="mt-4 rounded-2xl bg-rose-50 px-4 py-3 text-base font-medium text-rose-700">{error}</div>}
 
         <div className="mt-4 flex shrink-0 justify-end gap-2 border-t border-stone-100 pt-4">
           <button type="button" onClick={onClose} className="rounded-full border border-stone-200 bg-white px-4 py-2 text-base font-semibold text-stone-600">

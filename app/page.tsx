@@ -13371,14 +13371,14 @@ function NativeMstvIcsImportModal({
           </button>
         </div>
 
-        {error && <div className="mb-3 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-base font-medium text-rose-700">{error}</div>}
+        {error && <div className="mb-3 rounded-2xl bg-rose-50 px-4 py-3 text-base font-medium text-rose-700">{error}</div>}
         {importProgress && (
-          <div className="mb-3 rounded-2xl border border-blue-200 bg-blue-50 px-4 py-3 text-base font-semibold text-blue-800">
+          <div className="mb-3 rounded-2xl bg-blue-50 px-4 py-3 text-base font-semibold text-blue-800">
             Importation {importProgress.processed} / {importProgress.total}...
           </div>
         )}
         {importResult && (
-          <div className="mb-3 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-base font-medium text-emerald-900">
+          <div className="mb-3 rounded-2xl bg-emerald-50 px-4 py-3 text-base font-medium text-emerald-900">
             <p className="font-semibold">
               {importResult.importedCount} événement{importResult.importedCount > 1 ? "s" : ""} importé{importResult.importedCount > 1 ? "s" : ""}
             </p>
@@ -13428,7 +13428,7 @@ function NativeMstvIcsImportModal({
         ) : (
           <>
             <div className="mb-3 grid grid-cols-2 gap-2">
-              <div className="rounded-2xl border border-emerald-200 bg-emerald-50 px-3 py-2">
+              <div className="rounded-2xl bg-emerald-50 px-3 py-2">
                 <p className="text-sm font-semibold text-emerald-700">Nouveaux événements à importer</p>
                 <p className="text-lg font-semibold text-emerald-950">{importableCount}</p>
               </div>
@@ -13829,7 +13829,7 @@ function QuoteImportModal({
           />
         )}
 
-        {error && <div className="mt-4 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-base font-medium text-rose-700">{error}</div>}
+        {error && <div className="mt-4 rounded-2xl bg-rose-50 px-4 py-3 text-base font-medium text-rose-700">{error}</div>}
 
         <div className="mt-6 flex justify-end gap-2">
           {step === "review" && (
@@ -13929,7 +13929,7 @@ function EventHistorySheet({
           </button>
         </div>
 
-        {error && <div className="mb-3 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-base font-medium text-rose-700">{error}</div>}
+        {error && <div className="mb-3 rounded-2xl bg-rose-50 px-4 py-3 text-base font-medium text-rose-700">{error}</div>}
 
         <div className="no-scrollbar min-h-0 flex-1 overflow-y-auto overscroll-contain">
           {loading && <div className="rounded-2xl bg-stone-50 px-4 py-3 text-base font-medium text-stone-500">Chargement...</div>}
@@ -14014,7 +14014,7 @@ function TrashEventsSheet({
           </button>
         </div>
 
-        {error && <div className="mb-3 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-base font-medium text-rose-700">{error}</div>}
+        {error && <div className="mb-3 rounded-2xl bg-rose-50 px-4 py-3 text-base font-medium text-rose-700">{error}</div>}
 
         <div className="no-scrollbar min-h-0 flex-1 overflow-y-auto overscroll-contain">
           {loading && <div className="rounded-2xl bg-stone-50 px-4 py-3 text-base font-medium text-stone-500">Chargement...</div>}
@@ -14101,7 +14101,7 @@ function UserManagementSheet({
           </button>
         </div>
 
-        {error && <div className="mb-3 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-base font-medium text-rose-700">{error}</div>}
+        {error && <div className="mb-3 rounded-2xl bg-rose-50 px-4 py-3 text-base font-medium text-rose-700">{error}</div>}
 
         <div className="no-scrollbar min-h-0 flex-1 overflow-y-auto overscroll-contain">
           {loading && <div className="rounded-2xl bg-stone-50 px-4 py-3 text-base font-medium text-stone-500">Chargement...</div>}
@@ -14381,7 +14381,7 @@ function ExternalCalendarsSheet({
           </button>
         </div>
 
-        {(error || localError) && <div className="mb-3 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-base font-medium text-rose-700">{localError || error}</div>}
+        {(error || localError) && <div className="mb-3 rounded-2xl bg-rose-50 px-4 py-3 text-base font-medium text-rose-700">{localError || error}</div>}
 
         <div className={cn("no-scrollbar min-h-0 flex-1 overflow-y-auto overscroll-contain", isMobileFormView && "pb-8 sm:pb-0")}>
           {view === "list" && (
@@ -15203,7 +15203,7 @@ function ExternalCalendarSettingsDetail({
               type="button"
               onClick={() => void handleSync()}
               disabled={!canManage || syncing || saving || (calendar.syncCapability === "read_only" && !draft.icsUrl.trim())}
-              className="rounded-full border border-indigo-200 bg-indigo-50 px-3 py-1.5 text-base font-semibold text-indigo-700 transition hover:bg-indigo-100 disabled:border-stone-200 disabled:bg-white disabled:text-stone-300"
+              className="rounded-full bg-indigo-50 px-3 py-1.5 text-base font-semibold text-indigo-700 transition hover:bg-indigo-100 disabled:bg-white disabled:text-stone-300"
             >
               {syncProgress
                 ? `${syncProgress.synced.toLocaleString("fr-FR")} / ${syncProgress.total.toLocaleString("fr-FR")}`
@@ -15405,7 +15405,7 @@ function DuplicateEventDialog({
           </div>
         </div>
 
-        {error && <div className="mb-4 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-base font-medium text-rose-700">{error}</div>}
+        {error && <div className="mb-4 rounded-2xl bg-rose-50 px-4 py-3 text-base font-medium text-rose-700">{error}</div>}
 
         <div className="flex justify-end gap-2">
           <button
@@ -15471,7 +15471,7 @@ function DeleteEventDialog({
           {display.subtitle && <p className="mt-1 truncate text-base text-stone-500">{display.subtitle}</p>}
         </div>
 
-        {error && <div className="mb-4 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-base font-medium text-rose-700">{error}</div>}
+        {error && <div className="mb-4 rounded-2xl bg-rose-50 px-4 py-3 text-base font-medium text-rose-700">{error}</div>}
 
         <div className="flex justify-end gap-2">
           <button
@@ -15524,7 +15524,7 @@ function PermanentDeleteEventDialog({
 
   return (
     <div className={cn(elevatedModalBackdropClassName, modalSheetPositionClassName)} onPointerDown={(pointerEvent) => handleModalBackdropPointerDown(pointerEvent, onClose)}>
-      <div className={cn(modalPanelClassName, "w-full border-rose-200 p-5 sm:max-w-md sm:p-6")} onPointerDown={(pointerEvent) => pointerEvent.stopPropagation()}>
+      <div className={cn(modalPanelClassName, "w-full p-5 sm:max-w-md sm:p-6")} onPointerDown={(pointerEvent) => pointerEvent.stopPropagation()}>
         <div className="mb-5">
           <h2 className="text-base font-semibold text-stone-950">Supprimer définitivement cet événement ?</h2>
           <p className="mt-2 text-base font-medium text-rose-700">Cette action est irréversible.</p>
@@ -15532,7 +15532,7 @@ function PermanentDeleteEventDialog({
           {display.subtitle && <p className="mt-1 truncate text-base text-stone-500">{display.subtitle}</p>}
         </div>
 
-        {error && <div className="mb-4 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-base font-medium text-rose-700">{error}</div>}
+        {error && <div className="mb-4 rounded-2xl bg-rose-50 px-4 py-3 text-base font-medium text-rose-700">{error}</div>}
 
         <div className="flex justify-end gap-2">
           <button
@@ -15791,7 +15791,7 @@ function SharedDatePicker({
           </div>
         </div>
 
-        {error && <div className="mt-3 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-base font-medium text-rose-700">{error}</div>}
+        {error && <div className="mt-3 rounded-2xl bg-rose-50 px-4 py-3 text-base font-medium text-rose-700">{error}</div>}
 
         <div className="mt-3 flex justify-end px-1">
           <button
@@ -15836,7 +15836,7 @@ function SharedDatePicker({
               </button>
             </div>
 
-            {error && <div className="mt-4 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-base font-medium text-rose-700">{error}</div>}
+            {error && <div className="mt-4 rounded-2xl bg-rose-50 px-4 py-3 text-base font-medium text-rose-700">{error}</div>}
           </div>
         </div>
       )}
@@ -15978,7 +15978,7 @@ function DocumentPreviewModal({
           </div>
         </div>
 
-        {downloadError && <div className="shrink-0 border-b border-rose-100 bg-rose-50 px-4 py-2 text-base font-medium text-rose-700">{downloadError}</div>}
+        {downloadError && <div className="shrink-0 bg-rose-50 px-4 py-2 text-base font-medium text-rose-700">{downloadError}</div>}
 
         <div className="min-h-0 flex-1 bg-stone-100">
           {preview.kind === "image" ? (
@@ -16210,12 +16210,12 @@ function GoogleAutoSyncStatusIndicator({ status }: { status: GoogleAutoSyncStatu
   return (
     <div
       className={cn(
-        "flex h-10 min-w-10 items-center justify-center rounded-full border px-2 text-sm font-semibold sm:px-3",
+        "flex h-10 min-w-10 items-center justify-center rounded-full px-2 text-sm font-semibold sm:px-3",
         status.state === "error"
-          ? "border-rose-200 bg-rose-50 text-rose-700"
+          ? "bg-rose-50 text-rose-700"
           : status.state === "syncing"
-            ? "border-blue-200 bg-blue-50 text-blue-700"
-            : "border-emerald-200 bg-emerald-50 text-emerald-700",
+            ? "bg-blue-50 text-blue-700"
+            : "bg-emerald-50 text-emerald-700",
       )}
       title={status.error ?? label}
       aria-live="polite"
@@ -16245,12 +16245,12 @@ function SyncStatusIndicator({
   return (
     <div
       className={cn(
-        "flex h-10 min-w-10 items-center justify-center rounded-full border px-2 text-sm font-semibold sm:px-3",
+        "flex h-10 min-w-10 items-center justify-center rounded-full px-2 text-sm font-semibold sm:px-3",
         error
-          ? "border-rose-200 bg-rose-50 text-rose-700"
+          ? "bg-rose-50 text-rose-700"
           : !online
-            ? "border-amber-200 bg-amber-50 text-amber-800"
-            : "border-sky-200 bg-sky-50 text-sky-700",
+            ? "bg-amber-50 text-amber-800"
+            : "bg-sky-50 text-sky-700",
       )}
       title={error ?? label}
       aria-live="polite"
@@ -16266,7 +16266,7 @@ function OfflineBanner({ online }: { online: boolean }) {
 
   return (
     <div className="pointer-events-none fixed inset-x-3 bottom-[calc(0.85rem+env(safe-area-inset-bottom))] z-30 flex justify-center sm:bottom-[calc(1rem+env(safe-area-inset-bottom))]">
-      <div className="flex w-full max-w-md items-center justify-center gap-2 rounded-full border border-orange-200/80 bg-orange-50/95 px-4 py-3 text-sm font-semibold text-orange-900 shadow-lg shadow-orange-950/10 backdrop-blur-xl sm:w-auto sm:px-5">
+      <div className="flex w-full max-w-md items-center justify-center gap-2 rounded-full bg-orange-50/95 px-4 py-3 text-sm font-semibold text-orange-900 shadow-lg shadow-orange-950/10 backdrop-blur-xl sm:w-auto sm:px-5">
         <WifiOff className="h-4 w-4 shrink-0 text-[#bb2720]" aria-hidden="true" />
         <span>Pas de connexion Internet</span>
       </div>
@@ -16501,7 +16501,7 @@ function StatusMessage({ children, tone = "neutral" }: { children: React.ReactNo
     <div
       className={cn(
         "mb-4 rounded-2xl px-4 py-3 text-base font-medium",
-        tone === "error" ? "border border-rose-200 bg-white text-rose-700" : "bg-white/55 text-stone-500",
+        tone === "error" ? "bg-rose-50 text-rose-700" : "bg-white/55 text-stone-500",
       )}
     >
       <span className="inline-flex items-center gap-2">
@@ -16518,7 +16518,7 @@ function FullScreenStatus({ children, tone = "neutral" }: { children: React.Reac
       <div
         className={cn(
           "rounded-3xl px-5 py-4 text-base font-semibold",
-          tone === "error" ? "border border-rose-200 bg-white text-rose-700" : "bg-white/55 text-stone-600",
+          tone === "error" ? "bg-rose-50 text-rose-700" : "bg-white/55 text-stone-600",
         )}
       >
         {children}
@@ -16530,7 +16530,7 @@ function FullScreenStatus({ children, tone = "neutral" }: { children: React.Reac
 function AuthRecoveryScreen({ message, onReset }: { message: string; onReset: () => void }) {
   return (
     <main className="flex h-screen h-[100svh] items-center justify-center bg-[var(--app-background)] p-4 text-stone-950">
-      <div className="w-full max-w-sm rounded-3xl border border-rose-200 bg-white px-5 py-5 text-center shadow-xl shadow-black/5">
+      <div className="w-full max-w-sm rounded-3xl bg-white px-5 py-5 text-center shadow-xl shadow-black/5">
         <AlertCircle className="mx-auto h-5 w-5 text-rose-600" />
         <p className="mt-3 text-base font-semibold text-rose-700">{message}</p>
         <p className="mt-2 text-sm font-medium leading-snug text-stone-500">Réinitialisez la session locale, puis reconnectez-vous.</p>
@@ -16605,7 +16605,7 @@ function UpdatePasswordScreen({
         </div>
 
         {completed ? (
-          <div className="rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-base font-semibold text-emerald-700">
+          <div className="rounded-2xl bg-emerald-50 px-4 py-3 text-base font-semibold text-emerald-700">
             Mot de passe mis à jour.
           </div>
         ) : (
@@ -16632,7 +16632,7 @@ function UpdatePasswordScreen({
         )}
 
         {error && (
-          <div className="mt-4 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-base font-medium text-rose-700">
+          <div className="mt-4 rounded-2xl bg-rose-50 px-4 py-3 text-base font-medium text-rose-700">
             {error}
           </div>
         )}
@@ -16748,12 +16748,12 @@ function LoginScreen({ error }: { error: string | null }) {
         </div>
 
         {(loginError || error) && (
-          <div className="mt-4 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-base font-medium text-rose-700">
+          <div className="mt-4 rounded-2xl bg-rose-50 px-4 py-3 text-base font-medium text-rose-700">
             {loginError ?? error}
           </div>
         )}
         {resetMessage && (
-          <div className="mt-4 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-base font-medium text-emerald-700">
+          <div className="mt-4 rounded-2xl bg-emerald-50 px-4 py-3 text-base font-medium text-emerald-700">
             {resetMessage}
           </div>
         )}
