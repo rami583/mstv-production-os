@@ -59,10 +59,12 @@ function handleModalBackdropPointerDown(pointerEvent: PointerEvent<HTMLDivElemen
 function TimeTextInput({
   value,
   onChange,
+  onEditingChange,
   className,
 }: {
   value: string;
   onChange: (value: string) => void;
+  onEditingChange?: (editing: boolean) => void;
   className?: string;
 }) {
   function commitValue() {
@@ -73,11 +75,19 @@ function TimeTextInput({
     <input
       type="text"
       inputMode="numeric"
+      enterKeyHint="done"
       placeholder="--:--"
       value={value}
       onChange={(event) => onChange(sanitizeTimeDraft(event.target.value))}
-      onBlur={commitValue}
-      onFocus={(event) => event.currentTarget.select()}
+      onBlur={() => {
+        commitValue();
+        onEditingChange?.(false);
+      }}
+      onFocus={(event) => {
+        onEditingChange?.(true);
+        event.currentTarget.select();
+        window.setTimeout(() => event.currentTarget.scrollIntoView({ block: "center", behavior: "smooth" }), 80);
+      }}
       onKeyDown={(event) => {
         if (event.key === "Enter") {
           event.preventDefault();
@@ -128,6 +138,7 @@ export function EventEditorModal({
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [datePickerOpen, setDatePickerOpen] = useState(false);
+  const [timeKeyboardActive, setTimeKeyboardActive] = useState(false);
   const selectableSyncCalendars = getSelectableEditorSyncCalendars({
     event,
     syncCalendars,
@@ -165,6 +176,13 @@ export function EventEditorModal({
     setForm((current) => ({ ...current, [key]: value }));
   }
 
+  function dismissTimeKeyboard() {
+    if (document.activeElement instanceof HTMLElement) {
+      document.activeElement.blur();
+    }
+    setTimeKeyboardActive(false);
+  }
+
   useEscapeToClose(onClose);
 
   return (
@@ -181,7 +199,16 @@ export function EventEditorModal({
           </button>
         </div>
 
-        <div className="min-h-0 flex-1 space-y-3 overflow-y-auto pr-0.5 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+        <div
+          className={cn(
+            "min-h-0 flex-1 space-y-3 overflow-y-auto pr-0.5 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden",
+            timeKeyboardActive ? "pb-24 sm:pb-0" : "pb-1",
+          )}
+          onPointerDown={(pointerEvent) => {
+            const target = pointerEvent.target as HTMLElement | null;
+            if (!target?.closest("input, textarea, select, button")) dismissTimeKeyboard();
+          }}
+        >
           <div className="space-y-1">
             <div className="flex items-center justify-between gap-3">
               <span className="text-sm font-semibold text-stone-500">Date</span>
@@ -216,20 +243,20 @@ export function EventEditorModal({
           {!form.isAllDay && (
             <div className="grid grid-cols-2 gap-3">
               <Field label="Début">
-                <TimeTextInput value={form.clientArrivalTime} onChange={(value) => updateField("clientArrivalTime", value)} className={formInputClassName} />
+                <TimeTextInput value={form.clientArrivalTime} onChange={(value) => updateField("clientArrivalTime", value)} onEditingChange={setTimeKeyboardActive} className={formInputClassName} />
               </Field>
               <Field label="Fin">
-                <TimeTextInput value={form.endOfDayTime} onChange={(value) => updateField("endOfDayTime", value)} className={formInputClassName} />
+                <TimeTextInput value={form.endOfDayTime} onChange={(value) => updateField("endOfDayTime", value)} onEditingChange={setTimeKeyboardActive} className={formInputClassName} />
               </Field>
             </div>
           )}
 
           <div className="grid grid-cols-2 gap-3">
             <Field label="Début live/tournage">
-              <TimeTextInput value={form.startTime} onChange={(value) => updateField("startTime", value)} className={formInputClassName} />
+              <TimeTextInput value={form.startTime} onChange={(value) => updateField("startTime", value)} onEditingChange={setTimeKeyboardActive} className={formInputClassName} />
             </Field>
             <Field label="Fin live/tournage">
-              <TimeTextInput value={form.endTime} onChange={(value) => updateField("endTime", value)} className={formInputClassName} />
+              <TimeTextInput value={form.endTime} onChange={(value) => updateField("endTime", value)} onEditingChange={setTimeKeyboardActive} className={formInputClassName} />
             </Field>
           </div>
 
@@ -276,7 +303,15 @@ export function EventEditorModal({
 
         {error && <div className="mt-4 rounded-2xl bg-rose-50 px-4 py-3 text-base font-medium text-rose-700">{error}</div>}
 
-        <div className="mt-4 flex shrink-0 justify-end gap-2 border-t border-stone-100 pt-4">
+        {timeKeyboardActive && (
+          <div className="-mx-4 mt-3 flex shrink-0 justify-end border-y border-stone-100 bg-stone-50 px-4 py-2 sm:hidden">
+            <button type="button" onPointerDown={(event) => event.preventDefault()} onClick={dismissTimeKeyboard} className="rounded-xl bg-white px-4 py-2 text-base font-semibold text-stone-700 shadow-sm shadow-black/5">
+              Terminé
+            </button>
+          </div>
+        )}
+
+        <div className="sticky bottom-0 -mx-4 mt-4 flex shrink-0 justify-end gap-2 border-t border-stone-100 bg-white px-4 pb-[calc(env(safe-area-inset-bottom)+1rem)] pt-4 sm:static sm:mx-0 sm:px-0 sm:pb-0">
           <button type="button" onClick={onClose} className="rounded-xl bg-stone-50 px-4 py-2 text-base font-semibold text-stone-600 transition hover:bg-stone-100">
             Annuler
           </button>
