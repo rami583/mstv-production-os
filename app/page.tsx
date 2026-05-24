@@ -16255,7 +16255,7 @@ function SyncStatusIndicator({
       title={error ?? label}
       aria-live="polite"
     >
-      <span className="sm:hidden">{error ? "!" : pendingCount}</span>
+      <span className="sm:hidden">{error ? "!" : syncing ? "..." : pendingCount > 0 ? pendingCount : null}</span>
       <span className="hidden sm:inline">{label}</span>
     </div>
   );
