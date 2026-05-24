@@ -9697,8 +9697,8 @@ function AppHeader({
               className={cn(
                 "rounded-full border px-2.5 py-2 text-base font-semibold transition sm:px-3",
                 isSelectedDateToday
-                  ? "border-[#bb2720]/20 bg-[#bb2720]/[0.08] text-[#bb2720] hover:bg-[#bb2720]/[0.1]"
-                  : "border-stone-200 bg-white text-stone-700 hover:bg-stone-50",
+                  ? "border-[#bb2720]/10 bg-[#bb2720]/[0.08] text-[#bb2720] hover:bg-[#bb2720]/[0.1]"
+                  : "border-stone-200/45 bg-white text-stone-700 hover:bg-stone-50",
               )}
               aria-pressed={isSelectedDateToday}
             >
@@ -16069,7 +16069,7 @@ function NotificationMenu({
       <button
         type="button"
         onClick={() => setOpen((current) => !current)}
-        className="relative flex h-10 w-10 items-center justify-center rounded-full border border-stone-200 bg-white text-stone-600 transition hover:bg-stone-50"
+        className="relative flex h-10 w-10 items-center justify-center rounded-full border border-stone-200/45 bg-white text-stone-600 transition hover:bg-stone-50"
         title="Notifications"
         aria-label="Notifications"
       >
@@ -16153,7 +16153,7 @@ function HeaderIcon({ label, icon: Icon, onClick }: { label: string; icon: Lucid
     <button
       type="button"
       onClick={onClick}
-      className="flex h-10 w-10 items-center justify-center rounded-full border border-stone-200 bg-white text-stone-600 transition hover:bg-stone-50"
+      className="flex h-10 w-10 items-center justify-center rounded-full border border-stone-200/45 bg-white text-stone-600 transition hover:bg-stone-50"
       title={label}
       aria-label={label}
     >
@@ -16290,7 +16290,7 @@ function AccountMenu({
       <button
         type="button"
         onClick={() => setOpen((current) => !current)}
-        className="flex h-10 w-10 items-center justify-center rounded-full border border-stone-200 bg-white text-sm font-semibold text-stone-700 transition hover:bg-stone-50"
+        className="flex h-10 w-10 items-center justify-center rounded-full border border-stone-200/45 bg-white text-sm font-semibold text-stone-700 transition hover:bg-stone-50"
         aria-label="Compte"
         title={displayName}
       >
