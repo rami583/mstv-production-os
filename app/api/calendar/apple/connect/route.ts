@@ -23,6 +23,14 @@ function normalizeAppleEmail(value: string) {
   return value.trim().toLowerCase();
 }
 
+function normalizeAppleAppPassword(value: string) {
+  return value
+    .normalize("NFKC")
+    .trim()
+    .replace(/[‐‑‒–—−]/g, "-")
+    .replace(/\s+/g, "");
+}
+
 type AppleConnectStage =
   | "auth"
   | "validation"
@@ -67,7 +75,7 @@ export async function POST(request: Request) {
 
     const body = (await request.json().catch(() => null)) as { appleId?: string; appPassword?: string } | null;
     const appleId = normalizeAppleEmail(body?.appleId ?? "");
-    const appPassword = body?.appPassword?.trim() ?? "";
+    const appPassword = normalizeAppleAppPassword(body?.appPassword ?? "");
 
     if (!appleId || !appPassword) {
       return appleConnectErrorResponse({
@@ -86,10 +94,13 @@ export async function POST(request: Request) {
       });
     } catch (error) {
       if (error instanceof AppleCalDavStageError) {
+        const isInvalidAppleCredentials = error.status === 401;
         return appleConnectErrorResponse({
           stage: error.stage,
-          message: error.message,
-          status: error.status === 401 ? 401 : 502,
+          message: isInvalidAppleCredentials
+            ? "Identifiants Apple Calendar incorrects. Vérifiez l’adresse iCloud et le mot de passe d’app Apple."
+            : error.message,
+          status: isInvalidAppleCredentials ? 401 : 502,
           details: error.status ? `${error.status} ${error.statusText ?? ""}`.trim() : error.details,
         });
       }

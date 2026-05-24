@@ -2624,10 +2624,7 @@ function getNativeAppApiBaseUrl() {
   const configuredUrl = process.env.NEXT_PUBLIC_SITE_URL?.trim();
   if (!configuredUrl) return deployedAppOrigin;
 
-  const currentHost = typeof window === "undefined" ? "" : window.location.hostname;
-  const currentProtocol = typeof window === "undefined" ? "" : window.location.protocol;
-  const runningFromLocalDevUrl = isLocalhostHost(currentHost) && (currentProtocol === "http:" || currentProtocol === "https:");
-  if ((isTauriRuntime() || isCapacitorRuntime()) && isLocalhostUrl(configuredUrl) && !runningFromLocalDevUrl) {
+  if ((isTauriRuntime() || isCapacitorRuntime()) && isLocalhostUrl(configuredUrl)) {
     return deployedAppOrigin;
   }
 
@@ -14780,6 +14777,9 @@ function ExternalCalendarsListView({
                     className="h-10 rounded-xl border border-stone-200 bg-white px-3 text-base font-semibold text-stone-800 outline-none"
                     inputMode="email"
                     autoComplete="username"
+                    autoCapitalize="none"
+                    autoCorrect="off"
+                    spellCheck={false}
                   />
                 </label>
                 <label className="grid gap-1">
@@ -14793,6 +14793,9 @@ function ExternalCalendarsListView({
                     className="h-10 rounded-xl border border-stone-200 bg-white px-3 text-base font-semibold text-stone-800 outline-none"
                     type="password"
                     autoComplete="current-password"
+                    autoCapitalize="none"
+                    autoCorrect="off"
+                    spellCheck={false}
                   />
                 </label>
                 <p className="text-xs font-semibold text-stone-500">Apple nécessite un mot de passe d’app généré depuis votre compte Apple. N’utilisez pas votre mot de passe principal.</p>
