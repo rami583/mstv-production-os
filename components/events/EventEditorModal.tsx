@@ -162,7 +162,6 @@ export function EventEditorModal({
   const [initialForm] = useState<EventEditorFormInput>(() => getEventEditorInitialForm(event, selectedDateKey));
   const [form, setForm] = useState<EventEditorFormInput>(initialForm);
   const [detailsOpen, setDetailsOpen] = useState(() => hasDetailsValues(initialForm));
-  const [liveTimesOpen, setLiveTimesOpen] = useState(() => hasLiveTimeValues(initialForm));
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [datePickerOpen, setDatePickerOpen] = useState(false);
@@ -222,25 +221,28 @@ export function EventEditorModal({
         </div>
 
         <div className="min-h-0 flex-1 space-y-3 overflow-y-auto pr-0.5 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-          <Field label="Date">
-            <button
-              type="button"
-              onClick={() => setDatePickerOpen(true)}
-              className={cn(formInputClassName, "flex items-center text-left")}
-            >
-              {formatFullDate(form.date)}
-            </button>
-          </Field>
-
-          <label className={cn(editorSectionClassName, "flex items-center justify-between gap-3 px-4 py-2.5 text-base font-semibold text-stone-700")}>
-            <span>Jour entier</span>
-            <input
-              type="checkbox"
-              checked={form.isAllDay}
-              onChange={(inputEvent) => updateField("isAllDay", inputEvent.target.checked)}
-              className="h-5 w-5 accent-[#bb2720]"
-            />
-          </label>
+          <div className="flex items-end gap-3">
+            <div className="min-w-0 flex-1">
+              <Field label="Date">
+                <button
+                  type="button"
+                  onClick={() => setDatePickerOpen(true)}
+                  className={cn(formInputClassName, "flex items-center text-left")}
+                >
+                  {formatFullDate(form.date)}
+                </button>
+              </Field>
+            </div>
+            <label className="flex h-11 shrink-0 items-center gap-2 rounded-2xl bg-stone-50/70 px-3 text-sm font-semibold text-stone-600">
+              <span>Jour entier</span>
+              <input
+                type="checkbox"
+                checked={form.isAllDay}
+                onChange={(inputEvent) => updateField("isAllDay", inputEvent.target.checked)}
+                className="h-5 w-5 accent-[#bb2720]"
+              />
+            </label>
+          </div>
 
           <div className="grid gap-3 sm:grid-cols-2">
             <Field label="Événement">
@@ -252,7 +254,7 @@ export function EventEditorModal({
           </div>
 
           {!form.isAllDay && (
-            <div className="grid gap-3 sm:grid-cols-2">
+            <div className="grid grid-cols-2 gap-3">
               <Field label="Début">
                 <TimeTextInput value={form.clientArrivalTime} onChange={(value) => updateField("clientArrivalTime", value)} className={formInputClassName} />
               </Field>
@@ -261,6 +263,31 @@ export function EventEditorModal({
               </Field>
             </div>
           )}
+
+          {showLiveTimeFields && (
+            <div className="grid grid-cols-2 gap-3">
+              <Field label="Début live/tournage">
+                <TimeTextInput value={form.startTime} onChange={(value) => updateField("startTime", value)} className={formInputClassName} />
+              </Field>
+              <Field label="Fin live/tournage">
+                <TimeTextInput value={form.endTime} onChange={(value) => updateField("endTime", value)} className={formInputClassName} />
+              </Field>
+            </div>
+          )}
+
+          <CollapsibleSection title="Détails" open={detailsOpen} onToggle={() => setDetailsOpen((current) => !current)}>
+            <Field label="Lieu">
+              <input value={form.location} onChange={(inputEvent) => updateField("location", inputEvent.target.value)} className={formInputClassName} />
+            </Field>
+
+            <Field label="Notes">
+              <textarea
+                value={form.notes}
+                onChange={(inputEvent) => updateField("notes", inputEvent.target.value)}
+                className={cn(formInputClassName, "min-h-24 resize-none py-3")}
+              />
+            </Field>
+          </CollapsibleSection>
 
           {((!isEditing && selectableSyncCalendars.length > 0) || Boolean(currentExternalCalendarId)) && (
             <Field label="Calendrier">
@@ -289,35 +316,6 @@ export function EventEditorModal({
               </div>
             </Field>
           )}
-
-          <CollapsibleSection title="Détails" open={detailsOpen} onToggle={() => setDetailsOpen((current) => !current)}>
-            <Field label="Lieu">
-              <input value={form.location} onChange={(inputEvent) => updateField("location", inputEvent.target.value)} className={formInputClassName} />
-            </Field>
-
-            <Field label="Notes">
-              <textarea
-                value={form.notes}
-                onChange={(inputEvent) => updateField("notes", inputEvent.target.value)}
-                className={cn(formInputClassName, "min-h-24 resize-none py-3")}
-              />
-            </Field>
-          </CollapsibleSection>
-
-          <CollapsibleSection title="Horaires live/tournage" open={liveTimesOpen} onToggle={() => setLiveTimesOpen((current) => !current)}>
-            {showLiveTimeFields ? (
-              <div className="grid gap-3 sm:grid-cols-2">
-                <Field label="Début live/tournage">
-                  <TimeTextInput value={form.startTime} onChange={(value) => updateField("startTime", value)} className={formInputClassName} />
-                </Field>
-                <Field label="Fin live/tournage">
-                  <TimeTextInput value={form.endTime} onChange={(value) => updateField("endTime", value)} className={formInputClassName} />
-                </Field>
-              </div>
-            ) : (
-              <p className="text-sm font-semibold text-stone-400">Masqué pour un événement jour entier.</p>
-            )}
-          </CollapsibleSection>
         </div>
 
         {error && <div className="mt-4 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-base font-medium text-rose-700">{error}</div>}
