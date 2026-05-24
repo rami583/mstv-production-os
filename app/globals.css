@@ -5,6 +5,9 @@
 :root {
   color-scheme: light;
   --font-ui: "SF Pro Rounded", ui-rounded, -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif;
+  --app-background-base: #2f8fe5;
+  --app-background: color-mix(in srgb, var(--app-background-base) 2.6%, white);
+  --app-weekend-background: color-mix(in srgb, var(--app-background-base) 4.6%, white);
   --background: 38 35% 95%;
   --foreground: 24 15% 10%;
   --muted: 28 9% 43%;
@@ -21,7 +24,7 @@ html {
   height: 100%;
   min-height: 100%;
   overflow: hidden;
-  background: rgba(47, 143, 229, 0.026);
+  background: var(--app-background);
 }
 
 body {
@@ -31,7 +34,7 @@ body {
   min-height: 100svh;
   overflow: hidden;
   font-family: var(--font-ui);
-  background: rgba(47, 143, 229, 0.026);
+  background: var(--app-background);
 }
 
 button,
