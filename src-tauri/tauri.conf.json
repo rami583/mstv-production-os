@@ -15,7 +15,7 @@
         "label": "main",
         "title": "MSTV Production OS",
         "width": 960,
-        "height": 820,
+        "height": 1000,
         "minWidth": 960,
         "minHeight": 680,
         "resizable": true,
