@@ -9678,7 +9678,7 @@ function AppHeader({
             <button
               type="button"
               onClick={onOpenYearOverview}
-              className="rounded-full border border-stone-200 bg-white px-2.5 py-1.5 text-base font-semibold text-stone-700 transition hover:bg-stone-50 sm:px-3"
+              className="rounded-full border border-transparent bg-white px-2.5 py-1.5 text-base font-semibold text-stone-700 transition hover:bg-stone-50 sm:px-3"
             >
               {yearLabel}
             </button>
@@ -9697,8 +9697,8 @@ function AppHeader({
               className={cn(
                 "rounded-full border px-2.5 py-2 text-base font-semibold transition sm:px-3",
                 isSelectedDateToday
-                  ? "border-[#bb2720]/10 bg-[#bb2720]/[0.08] text-[#bb2720] hover:bg-[#bb2720]/[0.1]"
-                  : "border-stone-200/45 bg-white text-stone-700 hover:bg-stone-50",
+                  ? "border-transparent bg-[#bb2720]/[0.08] text-[#bb2720] hover:bg-[#bb2720]/[0.1]"
+                  : "border-transparent bg-white text-stone-700 hover:bg-stone-50",
               )}
               aria-pressed={isSelectedDateToday}
             >
