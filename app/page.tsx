@@ -16237,10 +16237,10 @@ function SyncStatusIndicator({
   syncing: boolean;
   error: string | null;
 }) {
-  const visible = pendingCount > 0 || syncing || Boolean(error);
+  const visible = pendingCount > 0 || Boolean(error);
   if (!visible) return null;
 
-  const label = syncing ? "Synchro" : error ? "Erreur synchro" : `${pendingCount} en attente`;
+  const label = error ? "Erreur synchro" : `${pendingCount} en attente`;
 
   return (
     <div
@@ -16255,7 +16255,7 @@ function SyncStatusIndicator({
       title={error ?? label}
       aria-live="polite"
     >
-      <span className="sm:hidden">{error ? "!" : syncing ? "..." : pendingCount > 0 ? pendingCount : null}</span>
+      <span className="sm:hidden">{error ? "!" : pendingCount}</span>
       <span className="hidden sm:inline">{label}</span>
     </div>
   );
