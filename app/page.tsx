@@ -16574,7 +16574,7 @@ function NotificationMenu({
                   {visibleNotifications.map((notification) => (
                     <div
                       key={notification.id}
-                      className="flex items-start gap-3 rounded-2xl px-3 py-2.5 transition hover:bg-stone-50"
+                      className="grid grid-cols-[auto_minmax(0,1fr)_auto] items-start gap-2.5 rounded-2xl px-2.5 py-2.5 transition hover:bg-stone-50 sm:gap-3 sm:px-3"
                     >
                       <span className="mt-2 h-2 w-2 shrink-0 rounded-full bg-[#bb2720]" aria-hidden="true" />
                       <button
@@ -16582,9 +16582,11 @@ function NotificationMenu({
                         onClick={() => onOpenNotification(notification)}
                         className="min-w-0 flex-1 text-left"
                       >
-                        <span className="flex items-start justify-between gap-3">
-                          <span className="truncate text-sm font-semibold text-stone-900">{notification.title}</span>
-                          <span className="shrink-0 text-xs font-medium text-stone-400">{formatNotificationRelativeTime(notification.createdAt)}</span>
+                        <span className="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-start gap-2">
+                          <span className="min-w-0 truncate text-sm font-semibold text-stone-900">{notification.title}</span>
+                          <span className="max-w-[4.75rem] text-right text-xs font-medium leading-tight text-stone-400 sm:max-w-none">
+                            {formatNotificationRelativeTime(notification.createdAt)}
+                          </span>
                         </span>
                         <span className="mt-0.5 line-clamp-2 text-xs font-medium leading-snug text-stone-500">{notification.body}</span>
                       </button>
@@ -16596,7 +16598,7 @@ function NotificationMenu({
                             setOpen(false);
                           }
                         }}
-                        className="shrink-0 rounded-xl bg-stone-50 px-2.5 py-1 text-xs font-semibold text-stone-600 transition hover:bg-stone-100"
+                        className="min-w-9 shrink-0 rounded-xl bg-stone-50 px-2.5 py-1 text-xs font-semibold text-stone-600 transition hover:bg-stone-100"
                       >
                         OK
                       </button>
