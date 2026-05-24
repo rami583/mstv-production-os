@@ -1,4 +1,5 @@
 import {
+  AppleCalDavStageError,
   appleCorsHeaders,
   appleJsonResponse,
   encryptAppleCredentials,
@@ -22,24 +23,80 @@ function normalizeAppleEmail(value: string) {
   return value.trim().toLowerCase();
 }
 
+type AppleConnectStage =
+  | "auth"
+  | "validation"
+  | "caldav_discovery"
+  | "caldav_principal"
+  | "caldav_calendar_home"
+  | "caldav_calendars"
+  | "supabase_account_lookup"
+  | "supabase_account_update"
+  | "supabase_account_insert"
+  | "supabase_calendars_materialize"
+  | "unknown";
+
+function appleConnectErrorResponse(input: {
+  stage: AppleConnectStage | string;
+  message: string;
+  status?: number;
+  details?: string | null;
+}) {
+  return appleJsonResponse(
+    {
+      error: input.message,
+      message: input.message,
+      stage: input.stage,
+      status: input.status ?? 500,
+      details: input.details ?? null,
+    },
+    { status: input.status ?? 500 },
+  );
+}
+
 export async function POST(request: Request) {
   try {
     const authResult = await requireAuthenticatedUser(request);
-    if ("error" in authResult) return authResult.error;
+    if ("error" in authResult) {
+      return appleConnectErrorResponse({
+        stage: "auth",
+        message: "Session utilisateur introuvable. Reconnectez-vous.",
+        status: authResult.error?.status ?? 401,
+      });
+    }
 
     const body = (await request.json().catch(() => null)) as { appleId?: string; appPassword?: string } | null;
     const appleId = normalizeAppleEmail(body?.appleId ?? "");
     const appPassword = body?.appPassword?.trim() ?? "";
 
     if (!appleId || !appPassword) {
-      return appleJsonResponse({ error: "Adresse Apple et mot de passe d’app obligatoires." }, { status: 400 });
+      return appleConnectErrorResponse({
+        stage: "validation",
+        message: "Adresse Apple et mot de passe d’app obligatoires.",
+        status: 400,
+      });
     }
 
-    const calendars = await listAppleCalDavCalendars({
-      appleId,
-      appPassword,
-      serverUrl: "https://caldav.icloud.com",
-    });
+    let calendars: Awaited<ReturnType<typeof listAppleCalDavCalendars>>;
+    try {
+      calendars = await listAppleCalDavCalendars({
+        appleId,
+        appPassword,
+        serverUrl: "https://caldav.icloud.com",
+      });
+    } catch (error) {
+      if (error instanceof AppleCalDavStageError) {
+        return appleConnectErrorResponse({
+          stage: error.stage,
+          message: error.message,
+          status: error.status === 401 ? 401 : 502,
+          details: error.status ? `${error.status} ${error.statusText ?? ""}`.trim() : error.details,
+        });
+      }
+      throw Object.assign(error instanceof Error ? error : new Error("Découverte Apple Calendar impossible."), {
+        appleConnectStage: "caldav_discovery",
+      });
+    }
 
     const supabase = getServiceSupabaseClient();
     const encryptedCredentials = encryptAppleCredentials({ appleId, appPassword });
@@ -53,7 +110,14 @@ export async function POST(request: Request) {
       .eq("provider_account_id", appleId)
       .maybeSingle();
 
-    if (existingError) throw existingError;
+    if (existingError) {
+      return appleConnectErrorResponse({
+        stage: "supabase_account_lookup",
+        message: "Impossible de vérifier le compte Apple Calendar.",
+        status: 500,
+        details: existingError.message,
+      });
+    }
 
     let account = existingAccount;
     if (account) {
@@ -73,7 +137,14 @@ export async function POST(request: Request) {
         .select("*")
         .single();
 
-      if (error) throw error;
+      if (error) {
+        return appleConnectErrorResponse({
+          stage: "supabase_account_update",
+          message: "Impossible de mettre à jour le compte Apple Calendar.",
+          status: 500,
+          details: error.message,
+        });
+      }
       account = data;
     } else {
       const { data, error } = await supabase
@@ -96,15 +167,31 @@ export async function POST(request: Request) {
         .select("*")
         .single();
 
-      if (error) throw error;
+      if (error) {
+        return appleConnectErrorResponse({
+          stage: "supabase_account_insert",
+          message: "Impossible d’enregistrer le compte Apple Calendar.",
+          status: 500,
+          details: error.message,
+        });
+      }
       account = data;
     }
 
-    await materializeAppleCalendars(supabase, {
-      account,
-      userId: authResult.user.id,
-      calendars,
-    });
+    try {
+      await materializeAppleCalendars(supabase, {
+        account,
+        userId: authResult.user.id,
+        calendars,
+      });
+    } catch (error) {
+      return appleConnectErrorResponse({
+        stage: "supabase_calendars_materialize",
+        message: "Compte Apple connecté, mais impossible d’enregistrer ses calendriers.",
+        status: 500,
+        details: error instanceof Error ? error.message : null,
+      });
+    }
 
     return appleJsonResponse({
       account: toSafeAppleAccount(account),
@@ -112,7 +199,10 @@ export async function POST(request: Request) {
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Connexion Apple Calendar impossible.";
-    console.error("Apple Calendar connect failed", { message });
-    return appleJsonResponse({ error: message }, { status: 500 });
+    const stage = typeof error === "object" && error !== null && "appleConnectStage" in error
+      ? String((error as { appleConnectStage?: unknown }).appleConnectStage)
+      : "unknown";
+    console.error("Apple Calendar connect failed", { message, stage });
+    return appleConnectErrorResponse({ stage, message, status: 500 });
   }
 }

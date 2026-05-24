@@ -55,6 +55,22 @@ export type AppleCalendarDuplicateCleanupResult = {
   }>;
 };
 
+export class AppleCalDavStageError extends Error {
+  stage: string;
+  status?: number;
+  statusText?: string;
+  details?: string;
+
+  constructor(stage: string, message: string, input?: { status?: number; statusText?: string; details?: string }) {
+    super(message);
+    this.name = "AppleCalDavStageError";
+    this.stage = stage;
+    this.status = input?.status;
+    this.statusText = input?.statusText;
+    this.details = input?.details;
+  }
+}
+
 function normalizeAppleEmail(value: string) {
   return value.trim().toLowerCase();
 }
@@ -250,7 +266,7 @@ export function getBasicAuthHeader(appleId: string, appPassword: string) {
   return `Basic ${Buffer.from(`${appleId}:${appPassword}`, "utf8").toString("base64")}`;
 }
 
-async function calDavPropfind(input: { url: string; appleId: string; appPassword: string; body: string; depth?: "0" | "1" }) {
+async function calDavPropfind(input: { url: string; appleId: string; appPassword: string; body: string; depth?: "0" | "1"; stage?: string }) {
   const response = await fetch(input.url, {
     method: "PROPFIND",
     headers: {
@@ -266,8 +282,17 @@ async function calDavPropfind(input: { url: string; appleId: string; appPassword
     console.error("Apple CalDAV PROPFIND failed", {
       status: response.status,
       host: new URL(input.url).host,
+      stage: input.stage ?? "caldav_propfind",
     });
-    throw new Error(response.status === 401 ? "Identifiants Apple Calendar incorrects." : "Impossible de charger Apple Calendar.");
+    throw new AppleCalDavStageError(
+      input.stage ?? "caldav_propfind",
+      response.status === 401 ? "Identifiants Apple Calendar incorrects." : "Impossible de charger Apple Calendar.",
+      {
+        status: response.status,
+        statusText: response.statusText,
+        details: text.slice(0, 240),
+      },
+    );
   }
 
   return text;
@@ -301,25 +326,27 @@ async function discoverCalendarHome(input: { appleId: string; appPassword: strin
     url: input.serverUrl,
     appleId: input.appleId,
     appPassword: input.appPassword,
+    stage: "caldav_principal",
     body: `<?xml version="1.0" encoding="utf-8" ?>
 <d:propfind xmlns:d="DAV:">
   <d:prop><d:current-user-principal /></d:prop>
 </d:propfind>`,
   });
   const principalHref = getHrefInsideTag(principalXml, "current-user-principal");
-  if (!principalHref) throw new Error("Compte Apple Calendar introuvable.");
+  if (!principalHref) throw new AppleCalDavStageError("caldav_principal", "Compte Apple Calendar introuvable.");
 
   const homeXml = await calDavPropfind({
     url: joinCalDavUrl(input.serverUrl, principalHref),
     appleId: input.appleId,
     appPassword: input.appPassword,
+    stage: "caldav_calendar_home",
     body: `<?xml version="1.0" encoding="utf-8" ?>
 <d:propfind xmlns:d="DAV:" xmlns:c="urn:ietf:params:xml:ns:caldav">
   <d:prop><c:calendar-home-set /></d:prop>
 </d:propfind>`,
   });
   const homeHref = getHrefInsideTag(homeXml, "calendar-home-set");
-  if (!homeHref) throw new Error("Aucun calendrier Apple trouvé.");
+  if (!homeHref) throw new AppleCalDavStageError("caldav_calendar_home", "Aucun calendrier Apple trouvé.");
 
   return joinCalDavUrl(input.serverUrl, homeHref);
 }
@@ -331,6 +358,7 @@ export async function listAppleCalDavCalendars(credentials: AppleCredentialPaylo
     appleId: credentials.appleId,
     appPassword: credentials.appPassword,
     depth: "1",
+    stage: "caldav_calendars",
     body: `<?xml version="1.0" encoding="utf-8" ?>
 <d:propfind xmlns:d="DAV:" xmlns:c="urn:ietf:params:xml:ns:caldav" xmlns:cs="http://calendarserver.org/ns/">
   <d:prop>

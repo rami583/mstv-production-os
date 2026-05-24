@@ -152,6 +152,28 @@ type GooglePullSyncErrorPayload = {
     | null;
 };
 type GooglePullSyncApiResponse = Partial<ExternalCalendarSyncResult> & GooglePullSyncErrorPayload;
+type AppleConnectFailurePayload = {
+  error?: string | null;
+  message?: string | null;
+  stage?: string | null;
+  status?: number | null;
+  details?: string | null;
+};
+type AppleConnectDiagnostic = {
+  environment: "web" | "tauri" | "capacitor";
+  routeCalled: string;
+  responseStatus: number | null;
+  responseJson: AppleConnectFailurePayload | null;
+  error: string | null;
+  authenticated: boolean;
+  supabaseSession: boolean;
+  backendReached: boolean;
+  stage: string | null;
+};
+type AppleConnectDiagnosticError = Error & {
+  appleConnectDiagnostic?: AppleConnectDiagnostic;
+  userMessage?: string;
+};
 
 const EXTERNAL_CALENDAR_UPSERT_BATCH_SIZE = 250;
 const EXTERNAL_CALENDAR_FETCH_PAGE_SIZE = 1000;
@@ -2578,17 +2600,69 @@ function isTauriRuntime() {
   );
 }
 
+const deployedAppOrigin = "https://mstv-production-os.vercel.app";
+
+function isLocalhostHost(value: string) {
+  return value === "localhost" || value === "127.0.0.1" || value === "::1";
+}
+
+function isLocalhostUrl(value: string) {
+  try {
+    return isLocalhostHost(new URL(value).hostname);
+  } catch {
+    return false;
+  }
+}
+
+function getAppRuntimeEnvironment(): AppleConnectDiagnostic["environment"] {
+  if (isTauriRuntime()) return "tauri";
+  if (isCapacitorRuntime()) return "capacitor";
+  return "web";
+}
+
+function getNativeAppApiBaseUrl() {
+  const configuredUrl = process.env.NEXT_PUBLIC_SITE_URL?.trim();
+  if (!configuredUrl) return deployedAppOrigin;
+
+  const currentHost = typeof window === "undefined" ? "" : window.location.hostname;
+  const currentProtocol = typeof window === "undefined" ? "" : window.location.protocol;
+  const runningFromLocalDevUrl = isLocalhostHost(currentHost) && (currentProtocol === "http:" || currentProtocol === "https:");
+  if ((isTauriRuntime() || isCapacitorRuntime()) && isLocalhostUrl(configuredUrl) && !runningFromLocalDevUrl) {
+    return deployedAppOrigin;
+  }
+
+  return configuredUrl;
+}
+
 function getAppApiUrl(path: string, unavailableMessage = "Service momentanément indisponible.") {
   if (typeof window === "undefined") return path;
-  const configuredUrl = process.env.NEXT_PUBLIC_SITE_URL?.trim();
   const needsDeployedApiOrigin = isCapacitorRuntime() || isTauriRuntime();
-  if (needsDeployedApiOrigin && configuredUrl) {
-    return new URL(path, configuredUrl.endsWith("/") ? configuredUrl : `${configuredUrl}/`).toString();
-  }
   if (needsDeployedApiOrigin) {
+    const baseUrl = getNativeAppApiBaseUrl();
+    if (baseUrl) {
+      return new URL(path, baseUrl.endsWith("/") ? baseUrl : `${baseUrl}/`).toString();
+    }
     throw new Error(unavailableMessage);
   }
   return path;
+}
+
+function truncateAppleConnectDiagnosticValue(value: string, maxLength = 480) {
+  return value.length > maxLength ? `${value.slice(0, maxLength)}…` : value;
+}
+
+function getAppleConnectDiagnostic(error: unknown) {
+  return error && typeof error === "object" && "appleConnectDiagnostic" in error
+    ? (error as AppleConnectDiagnosticError).appleConnectDiagnostic ?? null
+    : null;
+}
+
+function getAppleConnectUserMessage(error: unknown, fallback = "Impossible de connecter Apple Calendar.") {
+  if (error && typeof error === "object" && "userMessage" in error) {
+    const message = (error as AppleConnectDiagnosticError).userMessage;
+    if (message) return message;
+  }
+  return getUserFacingErrorMessage(error, fallback);
 }
 
 async function getCurrentSupabaseAccessToken(fallbackToken?: string | null) {
@@ -4394,9 +4468,24 @@ export default function Home() {
 
     setConnectingAppleCalendar(true);
     setExternalCalendarSettingsError(null);
+    const routePath = "/api/calendar/apple/connect";
+    let routeCalled = routePath;
+    let diagnosticBase: AppleConnectDiagnostic = {
+      environment: getAppRuntimeEnvironment(),
+      routeCalled,
+      responseStatus: null,
+      responseJson: null,
+      error: null,
+      authenticated: Boolean(authSession.user?.id),
+      supabaseSession: Boolean(authSession.access_token),
+      backendReached: false,
+      stage: null,
+    };
     try {
+      routeCalled = getAppApiUrl(routePath, "Connexion Apple Calendar momentanément indisponible.");
+      diagnosticBase = { ...diagnosticBase, routeCalled };
       const accessToken = await getServerApiAccessToken(authSession.access_token);
-      const response = await fetch(getAppApiUrl("/api/calendar/apple/connect", "Connexion Apple Calendar momentanément indisponible."), {
+      const response = await fetch(routeCalled, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -4404,16 +4493,37 @@ export default function Home() {
         },
         body: JSON.stringify(input),
       });
-      const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+      const payload = (await response.json().catch(() => null)) as AppleConnectFailurePayload | null;
 
       if (!response.ok) {
-        throw new Error(payload?.error ?? "Impossible de connecter Apple Calendar.");
+        const routeMessage = payload?.error ?? payload?.message ?? "Connexion Apple Calendar refusée.";
+        const userMessage = `Impossible de connecter Apple Calendar : ${routeMessage}`;
+        const error = new Error(userMessage) as AppleConnectDiagnosticError;
+        error.userMessage = userMessage;
+        error.appleConnectDiagnostic = {
+          ...diagnosticBase,
+          responseStatus: response.status,
+          responseJson: payload,
+          error: routeMessage,
+          backendReached: true,
+          stage: payload?.stage ?? null,
+        };
+        throw error;
       }
 
       await refreshAppleCalendarAccounts();
       await refreshExternalCalendarSettings({ silent: true });
     } catch (connectError) {
-      setExternalCalendarSettingsError(getUserFacingErrorMessage(connectError, "Impossible de connecter Apple Calendar."));
+      const diagnostic = getAppleConnectDiagnostic(connectError) ?? {
+        ...diagnosticBase,
+        error: getRawErrorMessage(connectError) || "Erreur inconnue.",
+      };
+      const userMessage = getAppleConnectUserMessage(connectError, "Impossible de connecter Apple Calendar.");
+      const error = new Error(userMessage) as AppleConnectDiagnosticError;
+      error.userMessage = userMessage;
+      error.appleConnectDiagnostic = diagnostic;
+      setExternalCalendarSettingsError(userMessage);
+      throw error;
     } finally {
       setConnectingAppleCalendar(false);
     }
@@ -14554,6 +14664,7 @@ function ExternalCalendarsListView({
   const [appleConnectOpen, setAppleConnectOpen] = useState(false);
   const [appleDraft, setAppleDraft] = useState({ appleId: "", appPassword: "" });
   const [appleConnectError, setAppleConnectError] = useState<string | null>(null);
+  const [appleConnectDiagnostic, setAppleConnectDiagnostic] = useState<AppleConnectDiagnostic | null>(null);
   const [disconnectRequest, setDisconnectRequest] = useState<"google" | "apple" | null>(null);
   const [disconnectingProvider, setDisconnectingProvider] = useState<"google" | "apple" | null>(null);
   const connectedGoogleAccounts = googleAccounts.filter((account) => account.connectionStatus === "connected");
@@ -14563,6 +14674,7 @@ function ExternalCalendarsListView({
 
   async function handleAppleConnect() {
     setAppleConnectError(null);
+    setAppleConnectDiagnostic(null);
     if (!appleDraft.appleId.trim() || !appleDraft.appPassword.trim()) {
       setAppleConnectError("Adresse Apple et mot de passe d’app obligatoires.");
       return;
@@ -14573,7 +14685,8 @@ function ExternalCalendarsListView({
       setAppleDraft({ appleId: "", appPassword: "" });
       setAppleConnectOpen(false);
     } catch (connectError) {
-      setAppleConnectError(getUserFacingErrorMessage(connectError, "Impossible de connecter Apple Calendar."));
+      setAppleConnectError(getAppleConnectUserMessage(connectError, "Impossible de connecter Apple Calendar."));
+      setAppleConnectDiagnostic(getAppleConnectDiagnostic(connectError));
     }
   }
 
@@ -14660,7 +14773,10 @@ function ExternalCalendarsListView({
                   <span className="text-xs font-semibold uppercase text-stone-400">Adresse Apple / iCloud</span>
                   <input
                     value={appleDraft.appleId}
-                    onChange={(event) => setAppleDraft((current) => ({ ...current, appleId: event.target.value }))}
+                    onChange={(event) => {
+                      setAppleConnectDiagnostic(null);
+                      setAppleDraft((current) => ({ ...current, appleId: event.target.value }));
+                    }}
                     className="h-10 rounded-xl border border-stone-200 bg-white px-3 text-base font-semibold text-stone-800 outline-none"
                     inputMode="email"
                     autoComplete="username"
@@ -14670,7 +14786,10 @@ function ExternalCalendarsListView({
                   <span className="text-xs font-semibold uppercase text-stone-400">Mot de passe d’app Apple</span>
                   <input
                     value={appleDraft.appPassword}
-                    onChange={(event) => setAppleDraft((current) => ({ ...current, appPassword: event.target.value }))}
+                    onChange={(event) => {
+                      setAppleConnectDiagnostic(null);
+                      setAppleDraft((current) => ({ ...current, appPassword: event.target.value }));
+                    }}
                     className="h-10 rounded-xl border border-stone-200 bg-white px-3 text-base font-semibold text-stone-800 outline-none"
                     type="password"
                     autoComplete="current-password"
@@ -14678,11 +14797,61 @@ function ExternalCalendarsListView({
                 </label>
                 <p className="text-xs font-semibold text-stone-500">Apple nécessite un mot de passe d’app généré depuis votre compte Apple. N’utilisez pas votre mot de passe principal.</p>
                 {appleConnectError && <p className="text-xs font-semibold text-rose-600">{appleConnectError}</p>}
+                {appleConnectDiagnostic && (
+                  <div className="rounded-2xl bg-stone-100 px-3 py-2 text-xs font-semibold text-stone-600">
+                    <p className="text-stone-800">Diagnostic temporaire Apple</p>
+                    <dl className="mt-1 grid gap-1">
+                      <div className="flex justify-between gap-3">
+                        <dt>Environnement</dt>
+                        <dd>{appleConnectDiagnostic.environment}</dd>
+                      </div>
+                      <div className="flex justify-between gap-3">
+                        <dt>Backend joint</dt>
+                        <dd>{appleConnectDiagnostic.backendReached ? "oui" : "non"}</dd>
+                      </div>
+                      <div className="flex justify-between gap-3">
+                        <dt>Authentifié</dt>
+                        <dd>{appleConnectDiagnostic.authenticated ? "oui" : "non"}</dd>
+                      </div>
+                      <div className="flex justify-between gap-3">
+                        <dt>Session Supabase</dt>
+                        <dd>{appleConnectDiagnostic.supabaseSession ? "oui" : "non"}</dd>
+                      </div>
+                      <div className="flex justify-between gap-3">
+                        <dt>Statut</dt>
+                        <dd>{appleConnectDiagnostic.responseStatus ?? "aucun"}</dd>
+                      </div>
+                      <div className="flex justify-between gap-3">
+                        <dt>Étape</dt>
+                        <dd>{appleConnectDiagnostic.stage ?? "non renseignée"}</dd>
+                      </div>
+                      <div className="grid gap-0.5">
+                        <dt>Route</dt>
+                        <dd className="break-all text-stone-500">{appleConnectDiagnostic.routeCalled}</dd>
+                      </div>
+                      {appleConnectDiagnostic.error && (
+                        <div className="grid gap-0.5">
+                          <dt>Erreur</dt>
+                          <dd className="break-words text-stone-500">{appleConnectDiagnostic.error}</dd>
+                        </div>
+                      )}
+                      {appleConnectDiagnostic.responseJson && (
+                        <div className="grid gap-0.5">
+                          <dt>Réponse</dt>
+                          <dd className="break-words text-stone-500">
+                            {truncateAppleConnectDiagnosticValue(JSON.stringify(appleConnectDiagnostic.responseJson))}
+                          </dd>
+                        </div>
+                      )}
+                    </dl>
+                  </div>
+                )}
                 <div className="flex justify-end gap-2">
                   <button
                     type="button"
                     onClick={() => {
                       setAppleConnectError(null);
+                      setAppleConnectDiagnostic(null);
                       setAppleConnectOpen(false);
                     }}
                     className="rounded-xl bg-white px-3 py-1.5 text-sm font-semibold text-stone-500 transition hover:bg-stone-100"
