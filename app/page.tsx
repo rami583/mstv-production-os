@@ -10349,7 +10349,7 @@ function YearOverviewPage({
 }) {
   return (
     <section data-year-overview-page className="no-scrollbar flex w-full shrink-0 flex-col overflow-y-auto overscroll-contain" style={{ height: pageHeight ? `${pageHeight}px` : "100%" }}>
-      <div className="grid grid-cols-3 content-start gap-x-4 gap-y-4 px-1 py-2 sm:gap-x-7 sm:gap-y-6 sm:px-2 sm:py-3 lg:gap-x-9 lg:gap-y-7 xl:grid-cols-4 xl:gap-x-12 xl:gap-y-8">
+      <div className="grid grid-cols-3 content-start gap-x-4 gap-y-3 px-1 py-1.5 sm:gap-x-7 sm:gap-y-4 sm:px-2 sm:py-2 lg:gap-x-9 lg:gap-y-5 xl:grid-cols-4 xl:gap-x-12 xl:gap-y-5">
         {monthNames.map((monthName, monthIndex) => (
           <YearOverviewMiniMonth
             key={`${year}-${monthName}`}
@@ -10397,18 +10397,18 @@ function YearOverviewMiniMonth({
       data-year={year}
       data-month-index={monthIndex}
       onClick={onSelect}
-      className="flex min-h-[132px] min-w-0 flex-col overflow-visible px-0.5 py-1 text-left sm:min-h-[148px] sm:px-1 sm:py-1.5 lg:min-h-[168px]"
+      className="flex min-h-[124px] min-w-0 flex-col overflow-visible px-0.5 py-0.5 text-left sm:min-h-[136px] sm:px-1 sm:py-1 lg:min-h-[152px]"
     >
       <span
         className={cn(
-          "flex w-full min-w-0 flex-1 flex-col overflow-visible rounded-[1.15rem] px-1 pb-2 pt-2 transition-colors hover:bg-white/[0.28] sm:rounded-[1.2rem] sm:px-2 sm:pb-2.5 sm:pt-2.5 lg:px-2.5 lg:pb-3.5 lg:pt-3.5",
+          "flex w-full min-w-0 flex-1 flex-col overflow-visible rounded-[1.15rem] px-1 pb-1.5 pt-1.5 transition-colors hover:bg-white/[0.28] sm:rounded-[1.2rem] sm:px-2 sm:pb-2 sm:pt-2 lg:px-2.5 lg:pb-2.5 lg:pt-2.5",
           isVisibleMonth && "bg-white/[0.58]",
         )}
       >
-      <span className={cn("mb-2 block truncate text-xs font-semibold leading-none sm:mb-2.5 sm:text-sm lg:mb-3", isVisibleMonth ? "text-[#bb2720]" : "text-stone-950")}>
+      <span className={cn("mb-1.5 block truncate text-xs font-semibold leading-none sm:mb-2 sm:text-sm lg:mb-2", isVisibleMonth ? "text-[#bb2720]" : "text-stone-950")}>
         {monthName}
       </span>
-      <span className="grid min-h-0 grid-cols-7 content-start gap-x-1.5 gap-y-2 sm:gap-x-2.5 sm:gap-y-2 lg:gap-x-3 lg:gap-y-2.5">
+      <span className="grid min-h-0 grid-cols-7 content-start gap-x-1.5 gap-y-1 sm:gap-x-2.5 sm:gap-y-1.5 lg:gap-x-3 lg:gap-y-1.5">
         {weekdays.map((weekday, index) => (
           <span key={`${weekday}-${index}`} className={cn("text-center text-[0.5rem] font-semibold leading-[1.1] sm:text-[0.55rem] lg:text-[0.6rem]", index >= 5 ? "text-stone-300" : "text-stone-400")}>
             {weekday}
