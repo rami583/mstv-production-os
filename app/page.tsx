@@ -11360,7 +11360,7 @@ function ExternalInvitationDetailsCard({ event }: { event: ProductionEvent }) {
   if (!hasInvitationDetails) return null;
 
   return (
-    <Card className="premium-surface min-w-0 space-y-3 overflow-hidden !border-transparent p-4 sm:p-5">
+    <Card className="premium-surface min-w-0 space-y-3 overflow-hidden !border-0 p-4 sm:p-5">
       {details.location && (
         <div className="min-w-0 rounded-2xl bg-stone-50 px-4 py-3">
           <p className="text-xs font-semibold uppercase text-stone-400">Lieu</p>
@@ -11808,7 +11808,7 @@ function ProductionDetail({
         }}
       >
       <Card
-        className="premium-surface shrink-0 !border-transparent p-4 sm:p-6"
+        className="premium-surface shrink-0 !border-0 p-4 sm:p-6"
       >
         <div className="flex items-start justify-between gap-4">
           <div className="min-w-0 flex-1">
@@ -11844,11 +11844,11 @@ function ProductionDetail({
       </Card>
 
       <div key={event.id} ref={detailScrollContainerRef} className="no-scrollbar min-h-0 flex-1 space-y-4 overflow-y-auto overscroll-contain pb-6">
-        <Card className="premium-surface overflow-hidden !border-transparent p-4 sm:p-5">
+        <Card className="premium-surface overflow-hidden !border-0 p-4 sm:p-5">
           <ProductionTimeCards event={event} />
         </Card>
         <ExternalInvitationDetailsCard event={event} />
-        <Card className="premium-surface overflow-hidden !border-transparent p-3 sm:p-4">
+        <Card className="premium-surface overflow-hidden !border-0 p-3 sm:p-4">
         <div className="grid grid-cols-[repeat(3,minmax(0,1fr))] gap-1.5 sm:gap-4 lg:items-start">
           <div className="min-w-0">
             <SectionHeader
@@ -11873,11 +11873,10 @@ function ProductionDetail({
                     key={option.id}
                     data-grid-delete-confirm={isConfirmingDelete ? true : undefined}
                     className={cn(
-                      "group relative flex min-h-[4.75rem] items-center gap-1.5 rounded-xl border-2 transition sm:min-h-20 sm:gap-2",
+                      "group relative flex min-h-[4.75rem] items-center gap-1.5 rounded-xl border border-transparent transition sm:min-h-20 sm:gap-2",
                       optionTone.surface,
-                      optionTone.border,
                       optionTone.hover,
-                      isSelectedOption && "border-emerald-700 ring-2 ring-emerald-700/20",
+                      isSelectedOption && "border-emerald-700",
                     )}
                   >
                     {isConfirmingDelete ? (
@@ -11954,11 +11953,10 @@ function ProductionDetail({
                     key={link.id}
                     data-grid-delete-confirm={isConfirmingDelete ? true : undefined}
                     className={cn(
-                      "group relative flex min-h-[4.75rem] items-center gap-1.5 rounded-xl border-2 transition sm:min-h-20 sm:gap-2",
+                      "group relative flex min-h-[4.75rem] items-center gap-1.5 rounded-xl border border-transparent transition sm:min-h-20 sm:gap-2",
                       linkTone.surface,
-                      linkTone.border,
                       linkTone.hover,
-                      isSelectedLink && "border-sky-700 ring-2 ring-sky-700/20",
+                      isSelectedLink && "border-sky-700",
                     )}
                   >
                     {isConfirmingDelete ? (
@@ -12017,9 +12015,8 @@ function ProductionDetail({
                     key={group.id}
                     data-grid-delete-confirm={isConfirmingDelete ? true : undefined}
                     className={cn(
-                      "group relative flex min-h-[4.75rem] items-center gap-1.5 rounded-xl border-2 transition sm:min-h-20 sm:gap-2",
+                      "group relative flex min-h-[4.75rem] items-center gap-1.5 rounded-xl border border-transparent transition sm:min-h-20 sm:gap-2",
                       documentTone.surface,
-                      documentTone.border,
                       documentTone.hover,
                       isSelectedDocument && documentTone.selected,
                     )}
@@ -12151,7 +12148,7 @@ function getDocumentTone(hasFiles: boolean) {
         hover: "hover:bg-amber-200",
         icon: "text-amber-900",
         text: "text-amber-950",
-        selected: "border-amber-700 ring-2 ring-amber-700/20",
+        selected: "border-amber-700",
       }
     : {
         surface: "bg-amber-50/80",
@@ -12159,7 +12156,7 @@ function getDocumentTone(hasFiles: boolean) {
         hover: "hover:bg-amber-100/60",
         icon: "text-amber-600",
         text: "text-stone-700",
-        selected: "border-amber-700 ring-2 ring-amber-700/20",
+        selected: "border-amber-700",
       };
 }
 
@@ -12871,7 +12868,7 @@ function ContextDetailBlock({
     const linkTone = getLinkTone(linkState);
 
     return (
-      <Card className="w-full !border-transparent bg-white p-4 sm:p-5">
+      <Card className="w-full !border-0 bg-white p-4 sm:p-5">
         <div className="link-detail-block flex w-full min-w-0 flex-col gap-3">
           <div className="top-row flex w-full min-w-0 items-center justify-between gap-3">
             <div className={cn("flex min-w-0 items-center gap-2 text-base font-semibold", linkTone.text)}>
@@ -12939,7 +12936,7 @@ function ContextDetailBlock({
     const Icon = getDocumentGroupIcon(selectedDocumentGroup);
 
     return (
-      <Card className="w-full !border-transparent bg-white p-4 sm:p-5">
+      <Card className="w-full !border-0 bg-white p-4 sm:p-5">
         <div className="flex w-full min-w-0 flex-col gap-3">
           <div className="flex w-full min-w-0 items-center justify-between gap-3">
             <div className={cn("flex min-w-0 items-center gap-2 text-base font-semibold", documentTone.text)}>
@@ -13056,7 +13053,7 @@ function ContextDetailBlock({
   const canOverrideCompletedBy = permissions.canManageEvents && selectedOption.status === "completed";
 
   return (
-    <Card className="!border-transparent bg-white p-4 sm:p-5">
+    <Card className="!border-0 bg-white p-4 sm:p-5">
       <div className="flex items-center justify-between gap-3">
         <div className={cn("flex min-w-0 items-center gap-2 text-base font-semibold", optionTone.text)}>
           <InlineEditableTitle
@@ -14439,7 +14436,7 @@ function EventCalendarBadge({ event }: { event: ProductionEvent }) {
 
   return (
     <span
-      className={cn("inline-flex max-w-full items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-semibold ring-1 ring-stone-200", tone.bg, tone.meta)}
+      className={cn("inline-flex max-w-full items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-semibold", tone.bg, tone.meta)}
       style={tone.bgStyle}
     >
       <ExternalCalendarColorDot color={badge.color} className="h-2.5 w-2.5" />
@@ -15274,7 +15271,7 @@ function ExternalCalendarEventDetails({
           <div className="min-w-0">
             <div className="mb-2 flex flex-wrap items-center gap-2">
               <span
-                className={cn("inline-flex max-w-full items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-semibold ring-1 ring-stone-200", tone.bg, tone.meta)}
+                className={cn("inline-flex max-w-full items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-semibold", tone.bg, tone.meta)}
                 style={tone.bgStyle}
               >
                 <ExternalCalendarColorDot color={event.calendarColor} className="h-2.5 w-2.5" />
@@ -16352,7 +16349,7 @@ function SectionHeader({
   addDisabled?: boolean;
 }) {
   const activeTone = tone === "option" ? getOptionTone("completed") : tone === "link" ? getLinkTone("available") : getDocumentTone(true);
-  const addTone = cn(activeTone.surface, activeTone.border, activeTone.hover, activeTone.text);
+  const addTone = cn(activeTone.surface, activeTone.hover, activeTone.text);
 
   return (
     <div className={cn("mb-2 flex min-w-0 items-center gap-1.5 sm:mb-3 sm:gap-2", align === "right" ? "justify-end" : "justify-start")}>
@@ -16361,7 +16358,7 @@ function SectionHeader({
           type="button"
           onClick={onAdd}
           disabled={addDisabled}
-          className={cn("flex h-6 w-6 shrink-0 items-center justify-center rounded-full border-2 text-base font-semibold leading-none transition active:scale-95 disabled:cursor-wait disabled:opacity-60", addTone)}
+          className={cn("flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-base font-semibold leading-none transition active:scale-95 disabled:cursor-wait disabled:opacity-60", addTone)}
           aria-label={addLabel}
           title={addLabel}
         >
