@@ -729,6 +729,13 @@ function getEventSwipeThreshold(viewportWidth: number) {
   return Math.min(EVENT_SWIPE_THRESHOLD_MAX, Math.max(EVENT_SWIPE_THRESHOLD_MIN, viewportWidth * EVENT_SWIPE_THRESHOLD_RATIO));
 }
 
+function shouldShowEventDetailDesktopControls() {
+  if (typeof window === "undefined") return false;
+  const isCoarseOrTouch = window.matchMedia("(hover: none), (pointer: coarse)").matches;
+  const isSmallScreen = window.matchMedia("(max-width: 639px)").matches;
+  return !(isCoarseOrTouch && isSmallScreen);
+}
+
 function createLocalId() {
   return globalThis.crypto?.randomUUID?.() ?? `local-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
@@ -3435,6 +3442,7 @@ export default function Home() {
   const [activityError, setActivityError] = useState<string | null>(null);
   const [restoringActivityId, setRestoringActivityId] = useState<string | null>(null);
   const [eventDetailCarousel, setEventDetailCarousel] = useState<{ direction: -1 | 1; targetId: string } | null>(null);
+  const [showEventDetailDesktopControls, setShowEventDetailDesktopControls] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const processingPendingActionsRef = useRef(false);
@@ -3596,6 +3604,26 @@ export default function Home() {
   useEffect(() => {
     setEventDetailCarousel(null);
   }, [screen, selectedId]);
+
+  useLayoutEffect(() => {
+    if (typeof window === "undefined") return;
+
+    const coarsePointerQuery = window.matchMedia("(hover: none), (pointer: coarse)");
+    const smallScreenQuery = window.matchMedia("(max-width: 639px)");
+
+    function updateEventDetailControlsVisibility() {
+      setShowEventDetailDesktopControls(shouldShowEventDetailDesktopControls());
+    }
+
+    updateEventDetailControlsVisibility();
+    coarsePointerQuery.addEventListener("change", updateEventDetailControlsVisibility);
+    smallScreenQuery.addEventListener("change", updateEventDetailControlsVisibility);
+
+    return () => {
+      coarsePointerQuery.removeEventListener("change", updateEventDetailControlsVisibility);
+      smallScreenQuery.removeEventListener("change", updateEventDetailControlsVisibility);
+    };
+  }, []);
 
   useEffect(() => {
     setHasMounted(true);
@@ -5752,6 +5780,7 @@ export default function Home() {
         hasNext={panelHasNext}
         goPrevious={() => startEventDetailCarousel(-1)}
         goNext={() => startEventDetailCarousel(1)}
+        showHeaderControls={showEventDetailDesktopControls}
         onEditEvent={() => {
           if (!permissions.canManageEvents) return;
           setEditingEvent(eventToRender);
@@ -11424,6 +11453,7 @@ function ProductionDetail({
   hasNext,
   goPrevious,
   goNext,
+  showHeaderControls,
   onEditEvent,
   onToggleOption,
   onChangeOptionCompletedBy,
@@ -11452,6 +11482,7 @@ function ProductionDetail({
   hasNext: boolean;
   goPrevious: () => void;
   goNext: () => void;
+  showHeaderControls: boolean;
   onEditEvent: () => void;
   onToggleOption: (option: EventOption) => Promise<void>;
   onChangeOptionCompletedBy: (option: EventOption, choice: CompletedByOverrideChoice, customLabel?: string) => Promise<void>;
@@ -11486,7 +11517,6 @@ function ProductionDetail({
   const previousContextSelectionKeyRef = useRef<string | null>(null);
   const eventSwipeStartRef = useRef<{ pointerId: number; x: number; y: number; axis: "horizontal" | "vertical" | null } | null>(null);
   const suppressEventSwipeClickRef = useRef(false);
-  const [hideHeaderNavigationForTouch, setHideHeaderNavigationForTouch] = useState(false);
   const eventDisplay = getProductionEventDisplay(event);
 
   const contextSelectionKey =
@@ -11581,26 +11611,6 @@ function ProductionDetail({
     scrollContainer.scrollTop = 0;
     scrollContainer.scrollLeft = 0;
   }, [event.id]);
-
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-
-    const coarsePointerQuery = window.matchMedia("(hover: none), (pointer: coarse)");
-    const smallScreenQuery = window.matchMedia("(max-width: 639px)");
-
-    function updateHeaderNavigationVisibility() {
-      setHideHeaderNavigationForTouch(coarsePointerQuery.matches && smallScreenQuery.matches);
-    }
-
-    updateHeaderNavigationVisibility();
-    coarsePointerQuery.addEventListener("change", updateHeaderNavigationVisibility);
-    smallScreenQuery.addEventListener("change", updateHeaderNavigationVisibility);
-
-    return () => {
-      coarsePointerQuery.removeEventListener("change", updateHeaderNavigationVisibility);
-      smallScreenQuery.removeEventListener("change", updateHeaderNavigationVisibility);
-    };
-  }, []);
 
   function selectOption(option: EventOption) {
     setContextSelection((current) =>
@@ -11817,29 +11827,31 @@ function ProductionDetail({
             </div>
             <h1 className="break-words pb-1 text-3xl font-semibold leading-[1.16] text-stone-950 sm:text-5xl sm:leading-[1.12]">{eventDisplay.title}</h1>
             {eventDisplay.subtitle && <p className="mt-2 truncate text-base font-medium text-stone-500">{eventDisplay.subtitle}</p>}
-            {permissions.canManageEvents && (
+            {permissions.canManageEvents && !showHeaderControls && (
               <button
                 type="button"
                 onClick={onEditEvent}
-                className="mt-3 rounded-full border border-stone-200 bg-white px-3 py-2 text-sm font-semibold text-stone-600 transition hover:bg-stone-50 sm:hidden"
+                className="mt-3 rounded-full border border-stone-200 bg-white px-3 py-2 text-sm font-semibold text-stone-600 transition hover:bg-stone-50"
               >
                 Modifier
               </button>
             )}
           </div>
-          <div className={cn("items-center gap-2", hideHeaderNavigationForTouch ? "hidden" : "flex")}>
-            {permissions.canManageEvents && (
-              <button type="button" onClick={onEditEvent} className="rounded-full border border-stone-200 bg-white px-3 py-2 text-sm font-semibold text-stone-600 transition hover:bg-stone-50">
-                Modifier
+          {showHeaderControls && (
+            <div className="flex items-center gap-2">
+              {permissions.canManageEvents && (
+                <button type="button" onClick={onEditEvent} className="rounded-full border border-stone-200 bg-white px-3 py-2 text-sm font-semibold text-stone-600 transition hover:bg-stone-50">
+                  Modifier
+                </button>
+              )}
+              <button onClick={() => navigateEventByDirection(-1)} disabled={!hasPrevious} className={calendarArrowClassName} aria-label="Événement précédent">
+                ←
               </button>
-            )}
-            <button onClick={() => navigateEventByDirection(-1)} disabled={!hasPrevious} className={calendarArrowClassName} aria-label="Événement précédent">
-              ←
-            </button>
-            <button onClick={() => navigateEventByDirection(1)} disabled={!hasNext} className={calendarArrowClassName} aria-label="Événement suivant">
-              →
-            </button>
-          </div>
+              <button onClick={() => navigateEventByDirection(1)} disabled={!hasNext} className={calendarArrowClassName} aria-label="Événement suivant">
+                →
+              </button>
+            </div>
+          )}
         </div>
       </Card>
 
