@@ -8,6 +8,10 @@
   --app-background-base: #2f8fe5;
   --app-background: color-mix(in srgb, var(--app-background-base) 4.6%, white);
   --app-weekend-background: color-mix(in srgb, var(--app-background-base) 2.6%, white);
+  --surface-card: #ffffff;
+  --surface-muted: color-mix(in srgb, var(--app-background-base) 3%, white);
+  --surface-soft-border: rgba(214, 205, 193, 0.38);
+  --surface-soft-shadow: 0 10px 30px rgba(36, 31, 25, 0.055);
   --background: 38 35% 95%;
   --foreground: 24 15% 10%;
   --muted: 28 9% 43%;
@@ -48,8 +52,8 @@ a {
 }
 
 .premium-surface {
-  background: #ffffff;
-  border: 1px solid rgba(214, 205, 193, 0.86);
+  background: var(--surface-card);
+  border: 0;
 }
 
 .quiet-scrollbar {

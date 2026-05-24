@@ -33,9 +33,9 @@ type EventEditorModalProps = {
 
 const modalBackdropClassName = "fixed inset-0 z-40 flex bg-black/35";
 const modalSheetPositionClassName = "items-end p-3 sm:items-center sm:justify-center sm:p-6";
-const modalPanelClassName = "rounded-3xl border border-stone-200 bg-white shadow-xl shadow-black/10";
+const modalPanelClassName = "rounded-2xl bg-white shadow-sm shadow-black/5";
 const formInputClassName =
-  "h-11 w-full rounded-2xl border border-stone-200 bg-white px-3 text-base font-medium text-stone-950 outline-none transition focus:border-[#bb2720]/50";
+  "h-11 w-full rounded-xl border border-stone-200 bg-white px-3 text-base font-medium text-stone-950 outline-none transition focus:border-[#bb2720]/50";
 
 function useEscapeToClose(onClose: () => void, enabled = true) {
   useEffect(() => {
@@ -176,7 +176,7 @@ export function EventEditorModal({
       >
         <div className="mb-4 flex shrink-0 items-center justify-between gap-4">
           <h2 className="text-base font-semibold text-stone-950">{isEditing ? "Modifier l'événement" : "Créer un événement"}</h2>
-          <button type="button" onClick={onClose} className="rounded-full border border-stone-200 px-3 py-1.5 text-base font-semibold text-stone-600">
+          <button type="button" onClick={onClose} className="rounded-xl bg-stone-50 px-3 py-1.5 text-base font-semibold text-stone-600 transition hover:bg-stone-100">
             Fermer
           </button>
         </div>
@@ -277,10 +277,10 @@ export function EventEditorModal({
         {error && <div className="mt-4 rounded-2xl bg-rose-50 px-4 py-3 text-base font-medium text-rose-700">{error}</div>}
 
         <div className="mt-4 flex shrink-0 justify-end gap-2 border-t border-stone-100 pt-4">
-          <button type="button" onClick={onClose} className="rounded-full border border-stone-200 bg-white px-4 py-2 text-base font-semibold text-stone-600">
+          <button type="button" onClick={onClose} className="rounded-xl bg-stone-50 px-4 py-2 text-base font-semibold text-stone-600 transition hover:bg-stone-100">
             Annuler
           </button>
-          <button disabled={submitting} className="rounded-full bg-[#bb2720] px-4 py-2 text-base font-semibold text-white disabled:bg-stone-300">
+          <button disabled={submitting} className="rounded-xl bg-[#bb2720] px-4 py-2 text-base font-semibold text-white disabled:bg-stone-300">
             {submitting ? (isEditing ? "Modification..." : "Création...") : isEditing ? "Modifier" : "Créer"}
           </button>
         </div>

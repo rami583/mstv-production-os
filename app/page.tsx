@@ -1150,12 +1150,12 @@ function getCachedNotifications(userId: string) {
 }
 
 const statusStyles: Record<EventStatus, string> = {
-  Brouillon: "bg-stone-100 text-stone-600 ring-stone-200",
-  "En préparation": "bg-amber-100 text-amber-800 ring-amber-200",
-  "En attente client": "bg-sky-100 text-sky-800 ring-sky-200",
-  Prêt: "bg-emerald-100 text-emerald-800 ring-emerald-200",
-  "En direct": "bg-rose-100 text-rose-800 ring-rose-200",
-  Terminé: "bg-stone-200 text-stone-700 ring-stone-300",
+  Brouillon: "bg-stone-100 text-stone-600",
+  "En préparation": "bg-amber-100 text-amber-800",
+  "En attente client": "bg-sky-100 text-sky-800",
+  Prêt: "bg-emerald-100 text-emerald-800",
+  "En direct": "bg-rose-100 text-rose-800",
+  Terminé: "bg-stone-200 text-stone-700",
 };
 
 const iconKeywordRules: { keywords: string[]; icon: LucideIcon }[] = [
@@ -1213,7 +1213,7 @@ const modalBackdropClassName = "fixed inset-0 z-40 flex bg-black/35";
 const elevatedModalBackdropClassName = "fixed inset-0 z-[60] flex bg-black/35";
 const notificationLayerClassName = "fixed inset-0 z-[80] flex bg-black/35";
 const modalSheetPositionClassName = "items-end p-3 sm:items-center sm:justify-center sm:p-6";
-const modalPanelClassName = "rounded-3xl border border-stone-200 bg-white shadow-xl shadow-black/10";
+const modalPanelClassName = "rounded-2xl bg-white shadow-sm shadow-black/5";
 const calendarArrowClassName =
   "flex h-9 w-9 items-center justify-center rounded-full text-base text-[#bb2720] transition hover:bg-[#bb2720]/[0.08] disabled:cursor-not-allowed disabled:text-stone-300 disabled:hover:bg-transparent";
 const weekendColumnTintStyle: React.CSSProperties = {
@@ -9264,7 +9264,7 @@ export default function Home() {
 
       {globalQuoteDragActive && (
         <div className="pointer-events-none fixed inset-0 z-50 flex items-center justify-center bg-stone-950/10 p-4">
-          <div className="flex items-center gap-3 rounded-full border border-stone-200 bg-white/95 px-5 py-3 text-base font-semibold text-stone-800 backdrop-blur-xl">
+          <div className="flex items-center gap-3 rounded-full bg-white px-5 py-3 text-base font-semibold text-stone-800 shadow-sm shadow-black/5">
             <Import className="h-5 w-5 text-[#bb2720]" />
             Déposer le devis pour l'importer
           </div>
@@ -9775,7 +9775,7 @@ function CreateMenu({
   const hasActions = canImportQuote || canCreateEvent || canDuplicateEvent || canDeleteEvent || canOpenTrash;
 
   return (
-    <div className="absolute right-1 top-14 z-40 w-56 rounded-2xl border border-stone-200 bg-white/95 p-1.5 backdrop-blur-xl">
+    <div className="absolute right-1 top-14 z-40 w-56 rounded-2xl bg-white/95 p-1.5 shadow-sm shadow-black/5">
       {!hasActions && (
         <div className="px-4 py-3 text-right text-base font-medium text-stone-400">
           Aucune action
@@ -9882,7 +9882,7 @@ function EventSearchOverlay({
       >
         <div className="shrink-0 border-b border-stone-100 pb-3">
           <div className="flex items-center gap-2">
-            <div className="flex h-11 min-w-0 flex-1 items-center gap-3 rounded-2xl border border-stone-200 bg-stone-50 px-4">
+            <div className="flex h-11 min-w-0 flex-1 items-center gap-3 rounded-xl bg-stone-50 px-4">
               <Search className="h-4 w-4 shrink-0 text-stone-400" />
               <input
                 ref={inputRef}
@@ -11839,7 +11839,7 @@ function ProductionDetail({
               <button
                 type="button"
                 onClick={onEditEvent}
-                className="mt-3 rounded-full border border-stone-200 bg-white px-3 py-2 text-sm font-semibold text-stone-600 transition hover:bg-stone-50"
+                className="mt-3 rounded-xl bg-stone-50 px-3 py-2 text-sm font-semibold text-stone-600 transition hover:bg-stone-100"
               >
                 Modifier
               </button>
@@ -11848,7 +11848,7 @@ function ProductionDetail({
           {showHeaderControls && (
             <div className="flex items-center gap-2">
               {permissions.canManageEvents && (
-                <button type="button" onClick={onEditEvent} className="rounded-full border border-stone-200 bg-white px-3 py-2 text-sm font-semibold text-stone-600 transition hover:bg-stone-50">
+                <button type="button" onClick={onEditEvent} className="rounded-xl bg-stone-50 px-3 py-2 text-sm font-semibold text-stone-600 transition hover:bg-stone-100">
                   Modifier
                 </button>
               )}
@@ -13366,7 +13366,7 @@ function NativeMstvIcsImportModal({
             </p>
             {fileName && <p className="mt-1 truncate text-sm font-semibold text-stone-400">{fileName}</p>}
           </div>
-          <button type="button" onClick={onClose} className="rounded-full border border-stone-200 px-3 py-1.5 text-base font-semibold text-stone-600">
+          <button type="button" onClick={onClose} className="rounded-xl bg-stone-50 px-3 py-1.5 text-base font-semibold text-stone-600 transition hover:bg-stone-100">
             Fermer
           </button>
         </div>
@@ -13409,7 +13409,7 @@ function NativeMstvIcsImportModal({
               event.preventDefault();
               void handleFile(event.dataTransfer.files.item(0));
             }}
-            className="flex min-h-44 cursor-pointer flex-col items-center justify-center rounded-3xl border border-dashed border-stone-300 bg-stone-50 px-4 py-8 text-center transition hover:bg-stone-100/70"
+            className="flex min-h-44 cursor-pointer flex-col items-center justify-center rounded-2xl border border-dashed border-stone-300 bg-stone-50 px-4 py-8 text-center transition hover:bg-stone-100/70"
           >
             <FileText className="mb-3 h-7 w-7 text-stone-500" />
             <span className="text-base font-semibold text-stone-800">{parsing ? "Lecture du calendrier..." : "Déposez le fichier .ics ici"}</span>
@@ -13432,7 +13432,7 @@ function NativeMstvIcsImportModal({
                 <p className="text-sm font-semibold text-emerald-700">Nouveaux événements à importer</p>
                 <p className="text-lg font-semibold text-emerald-950">{importableCount}</p>
               </div>
-              <div className="rounded-2xl border border-stone-200 bg-stone-50 px-3 py-2">
+              <div className="rounded-2xl bg-stone-50 px-3 py-2">
                 <p className="text-sm font-semibold text-stone-500">Déjà présents, ignorés</p>
                 <p className="text-lg font-semibold text-stone-800">{skippedCount}</p>
               </div>
@@ -13463,7 +13463,7 @@ function NativeMstvIcsImportModal({
               ))}
             </div>
             <div className="mt-4 flex justify-end gap-2">
-              <button type="button" onClick={() => setStep("upload")} disabled={importing} className="rounded-full border border-stone-200 bg-white px-4 py-2 text-base font-semibold text-stone-600 disabled:text-stone-300">
+              <button type="button" onClick={() => setStep("upload")} disabled={importing} className="rounded-xl bg-stone-50 px-4 py-2 text-base font-semibold text-stone-600 transition hover:bg-stone-100 disabled:text-stone-300">
                 Changer de fichier
               </button>
               <button
@@ -13687,7 +13687,7 @@ function QuoteImportModal({
             </h2>
             {fileName && <p className="mt-1 truncate text-base font-medium text-stone-500">{fileName}</p>}
           </div>
-          <button type="button" onClick={onClose} className="rounded-full border border-stone-200 px-3 py-1.5 text-base font-semibold text-stone-600">
+          <button type="button" onClick={onClose} className="rounded-xl bg-stone-50 px-3 py-1.5 text-base font-semibold text-stone-600 transition hover:bg-stone-100">
             Fermer
           </button>
         </div>
@@ -13734,7 +13734,7 @@ function QuoteImportModal({
               void handleFile(pdfFile);
             }}
             className={cn(
-              "flex min-h-44 cursor-pointer flex-col items-center justify-center rounded-3xl border border-dashed px-4 py-8 text-center transition",
+              "flex min-h-44 cursor-pointer flex-col items-center justify-center rounded-2xl border border-dashed px-4 py-8 text-center transition",
               dropActive ? "border-[#bb2720]/50 bg-[#bb2720]/[0.06]" : "border-stone-300 bg-stone-50 hover:bg-stone-100/70",
             )}
           >
@@ -13753,7 +13753,7 @@ function QuoteImportModal({
         ) : step === "resolve" && resolution ? (
           <div className="flex flex-col gap-3">
             <div className="grid gap-2 sm:grid-cols-2">
-              <div className="rounded-2xl border border-stone-200 bg-stone-50 px-3 py-3">
+              <div className="rounded-2xl bg-stone-50 px-3 py-3">
                 <p className="text-base font-semibold text-stone-500">Événement existant</p>
                 <p className="mt-1 text-base font-semibold text-stone-950">{resolution.existingEvent.clientName}</p>
                 <p className="mt-1 text-base font-medium text-stone-500">{formatFullDate(resolution.existingEvent.date)}</p>
@@ -13765,7 +13765,7 @@ function QuoteImportModal({
               </div>
             </div>
 
-            <div className="rounded-2xl border border-stone-200 bg-white px-3 py-2">
+            <div className="rounded-2xl bg-stone-50 px-3 py-2">
               <p className="mb-2 text-base font-semibold text-stone-600">Différences détectées</p>
               {resolution.differences.length > 0 ? (
                 <div className="flex flex-col divide-y divide-stone-100">
@@ -13811,7 +13811,7 @@ function QuoteImportModal({
                 value={serviceText}
                 onChange={(event) => setServiceText(event.target.value)}
                 rows={4}
-                className="w-full resize-none rounded-2xl border border-stone-200 bg-white px-3 py-2 text-base font-medium text-stone-950 outline-none transition focus:border-[#bb2720]/50"
+                className="w-full resize-none rounded-xl border border-stone-200 bg-white px-3 py-2 text-base font-medium text-stone-950 outline-none transition focus:border-[#bb2720]/50"
                 placeholder="Un service par ligne"
               />
             </label>
@@ -13833,16 +13833,16 @@ function QuoteImportModal({
 
         <div className="mt-6 flex justify-end gap-2">
           {step === "review" && (
-            <button type="button" onClick={() => setStep("upload")} disabled={submitting} className="rounded-full border border-stone-200 bg-white px-4 py-2 text-base font-semibold text-stone-600 disabled:text-stone-300">
+            <button type="button" onClick={() => setStep("upload")} disabled={submitting} className="rounded-xl bg-stone-50 px-4 py-2 text-base font-semibold text-stone-600 transition hover:bg-stone-100 disabled:text-stone-300">
               Remplacer le PDF
             </button>
           )}
           {step === "resolve" && (
-            <button type="button" onClick={() => setStep("review")} disabled={submitting} className="rounded-full border border-stone-200 bg-white px-4 py-2 text-base font-semibold text-stone-600 disabled:text-stone-300">
+            <button type="button" onClick={() => setStep("review")} disabled={submitting} className="rounded-xl bg-stone-50 px-4 py-2 text-base font-semibold text-stone-600 transition hover:bg-stone-100 disabled:text-stone-300">
               Retour
             </button>
           )}
-          <button type="button" onClick={onClose} disabled={submitting || extracting} className="rounded-full border border-stone-200 bg-white px-4 py-2 text-base font-semibold text-stone-600 disabled:text-stone-300">
+          <button type="button" onClick={onClose} disabled={submitting || extracting} className="rounded-xl bg-stone-50 px-4 py-2 text-base font-semibold text-stone-600 transition hover:bg-stone-100 disabled:text-stone-300">
             Annuler
           </button>
           {step === "review" && (
@@ -13852,7 +13852,7 @@ function QuoteImportModal({
           )}
           {step === "resolve" && (
             <>
-              <button type="button" onClick={() => void createNewEventFromResolution()} disabled={submitting} className="rounded-full border border-stone-200 bg-white px-4 py-2 text-base font-semibold text-stone-700 disabled:text-stone-300">
+              <button type="button" onClick={() => void createNewEventFromResolution()} disabled={submitting} className="rounded-xl bg-stone-50 px-4 py-2 text-base font-semibold text-stone-700 transition hover:bg-stone-100 disabled:text-stone-300">
                 Créer un nouvel événement
               </button>
               <button type="button" onClick={() => void updateExistingEventFromResolution()} disabled={submitting} className="rounded-full bg-[#bb2720] px-4 py-2 text-base font-semibold text-white disabled:bg-stone-300">
@@ -13924,7 +13924,7 @@ function EventHistorySheet({
               {[display.title, display.subtitle].filter(Boolean).join(" · ")}
             </p>
           </div>
-          <button type="button" onClick={onClose} className="rounded-full border border-stone-200 bg-white px-3 py-1.5 text-base font-semibold text-stone-600 transition hover:bg-stone-50">
+          <button type="button" onClick={onClose} className="rounded-xl bg-stone-50 px-3 py-1.5 text-base font-semibold text-stone-600 transition hover:bg-stone-100">
             Fermer
           </button>
         </div>
@@ -13944,7 +13944,7 @@ function EventHistorySheet({
               const isRestoring = restoringActivityId === entry.id;
 
               return (
-                <div key={entry.id} className="rounded-2xl border border-stone-200 bg-stone-50/70 px-4 py-3">
+                <div key={entry.id} className="rounded-2xl bg-stone-50/70 px-4 py-3">
                   <div className="flex items-start justify-between gap-3">
                     <div className="min-w-0">
                       <p className="text-base font-semibold text-stone-900">{entry.description}</p>
@@ -13955,7 +13955,7 @@ function EventHistorySheet({
                         type="button"
                         onClick={() => void onRestore(entry)}
                         disabled={isRestoring}
-                        className="shrink-0 rounded-full border border-stone-200 bg-white px-3 py-1.5 text-sm font-semibold text-stone-600 transition hover:bg-stone-100 disabled:text-stone-300"
+                        className="shrink-0 rounded-xl bg-white px-3 py-1.5 text-sm font-semibold text-stone-600 transition hover:bg-stone-100 disabled:text-stone-300"
                       >
                         {isRestoring ? "..." : "Restaurer"}
                       </button>
@@ -14009,7 +14009,7 @@ function TrashEventsSheet({
             <h2 className="text-base font-semibold text-stone-950">Corbeille</h2>
             <p className="mt-1 text-base font-medium text-stone-500">Événements supprimés restaurables.</p>
           </div>
-          <button type="button" onClick={onClose} className="rounded-full border border-stone-200 bg-white px-3 py-1.5 text-base font-semibold text-stone-600 transition hover:bg-stone-50">
+          <button type="button" onClick={onClose} className="rounded-xl bg-stone-50 px-3 py-1.5 text-base font-semibold text-stone-600 transition hover:bg-stone-100">
             Fermer
           </button>
         </div>
@@ -14026,7 +14026,7 @@ function TrashEventsSheet({
               const isRestoring = restoringEventId === event.id;
               const display = getProductionEventDisplay(event);
               return (
-                <div key={event.id} className="rounded-2xl border border-stone-200 bg-stone-50/70 px-4 py-3">
+                <div key={event.id} className="rounded-2xl bg-stone-50/70 px-4 py-3">
                   <div className="flex min-w-0 items-start justify-between gap-3">
                     <div className="min-w-0">
                       <p className="truncate text-base font-semibold text-stone-950">{display.title}</p>
@@ -14043,7 +14043,7 @@ function TrashEventsSheet({
                         type="button"
                         onClick={() => void onRestore(event)}
                         disabled={isRestoring}
-                        className="rounded-full border border-stone-200 bg-white px-3 py-1.5 text-base font-semibold text-stone-600 transition hover:bg-stone-100 disabled:text-stone-300"
+                        className="rounded-xl bg-white px-3 py-1.5 text-base font-semibold text-stone-600 transition hover:bg-stone-100 disabled:text-stone-300"
                       >
                         {isRestoring ? "Restauration..." : "Restaurer"}
                       </button>
@@ -14096,7 +14096,7 @@ function UserManagementSheet({
             <h2 className="text-base font-semibold text-stone-950">Gestion utilisateurs</h2>
             <p className="mt-1 text-base font-medium text-stone-500">Rôles de l'équipe MSTV.</p>
           </div>
-          <button type="button" onClick={onClose} className="rounded-full border border-stone-200 bg-white px-3 py-1.5 text-base font-semibold text-stone-600 transition hover:bg-stone-50">
+          <button type="button" onClick={onClose} className="rounded-xl bg-stone-50 px-3 py-1.5 text-base font-semibold text-stone-600 transition hover:bg-stone-100">
             Fermer
           </button>
         </div>
@@ -14115,7 +14115,7 @@ function UserManagementSheet({
               const isCurrentProfile = currentProfileId === userProfile.id;
 
               return (
-                <div key={userProfile.id} className="rounded-2xl border border-stone-200 bg-stone-50/70 px-4 py-3">
+                <div key={userProfile.id} className="rounded-2xl bg-stone-50/70 px-4 py-3">
                   <div className="flex min-w-0 flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                     <div className="min-w-0">
                       <p className="truncate text-base font-semibold text-stone-950">
@@ -14341,7 +14341,7 @@ function ExternalCalendarsSheet({
           modalPanelClassName,
           "flex w-full flex-col",
           isMobileFormView
-            ? "h-[100dvh] max-h-[100dvh] rounded-none border-0 px-4 pb-[calc(env(safe-area-inset-bottom)+1rem)] pt-[calc(env(safe-area-inset-top)+1rem)] shadow-none sm:h-auto sm:max-h-[86vh] sm:max-w-2xl sm:rounded-3xl sm:border sm:border-stone-200 sm:p-5 sm:shadow-xl sm:shadow-black/10"
+            ? "h-[100dvh] max-h-[100dvh] rounded-none px-4 pb-[calc(env(safe-area-inset-bottom)+1rem)] pt-[calc(env(safe-area-inset-top)+1rem)] shadow-none sm:h-auto sm:max-h-[86vh] sm:max-w-2xl sm:rounded-2xl sm:p-5 sm:shadow-sm sm:shadow-black/5"
             : "max-h-[86vh] p-4 sm:max-w-2xl sm:p-5",
         )}
         onPointerDown={(pointerEvent) => pointerEvent.stopPropagation()}
@@ -14376,7 +14376,7 @@ function ExternalCalendarsSheet({
               </h2>
             </div>
           </div>
-          <button type="button" onClick={onClose} className="rounded-full border border-stone-200 bg-white px-3 py-1.5 text-base font-semibold text-stone-600 transition hover:bg-stone-50">
+          <button type="button" onClick={onClose} className="rounded-xl bg-stone-50 px-3 py-1.5 text-base font-semibold text-stone-600 transition hover:bg-stone-100">
             Fermer
           </button>
         </div>
@@ -14654,7 +14654,7 @@ function ExternalCalendarsListView({
           )}
 
           {appleConnectOpen && (
-            <div className="rounded-2xl border border-stone-200 bg-stone-50 px-3 py-3">
+            <div className="rounded-2xl bg-stone-50 px-3 py-3">
               <div className="grid gap-2">
                 <label className="grid gap-1">
                   <span className="text-xs font-semibold uppercase text-stone-400">Adresse Apple / iCloud</span>
@@ -14685,7 +14685,7 @@ function ExternalCalendarsListView({
                       setAppleConnectError(null);
                       setAppleConnectOpen(false);
                     }}
-                    className="rounded-full border border-stone-200 bg-white px-3 py-1.5 text-sm font-semibold text-stone-500 transition hover:bg-stone-100"
+                    className="rounded-xl bg-white px-3 py-1.5 text-sm font-semibold text-stone-500 transition hover:bg-stone-100"
                   >
                     Annuler
                   </button>
@@ -14726,7 +14726,7 @@ function ExternalCalendarsListView({
                   <div key={account.id} className="space-y-2">
                     <div className="truncate px-1 text-sm font-semibold text-stone-500">{account.email || account.displayName || "Compte Apple"}</div>
                     {account.lastError && <div className="px-1 text-xs font-semibold text-rose-600">{account.lastError}</div>}
-                    <div className="space-y-3 rounded-2xl border border-stone-200 bg-white px-2.5 py-2.5">
+                    <div className="space-y-3 rounded-2xl bg-white px-2.5 py-2.5">
                       {(() => {
                         const rows = getVisibleAppleProviderCalendars(account.id)
                           .map((calendar) => {
@@ -14811,7 +14811,7 @@ function ExternalCalendarsListView({
                   <div key={account.id} className="space-y-2">
                     <div className="truncate px-1 text-sm font-semibold text-stone-500">{account.email || account.displayName || "Compte Google"}</div>
                     {account.lastError && <div className="px-1 text-xs font-semibold text-rose-600">{account.lastError}</div>}
-                    <div className="space-y-3 rounded-2xl border border-stone-200 bg-white px-2.5 py-2.5">
+                    <div className="space-y-3 rounded-2xl bg-white px-2.5 py-2.5">
                       {(() => {
                         const rows = getVisibleGoogleProviderCalendars(account.id)
                           .map((calendar) => {
@@ -14920,7 +14920,7 @@ function ProviderDisconnectDialog({
             type="button"
             onClick={onClose}
             disabled={busy}
-            className="rounded-full border border-stone-200 bg-white px-4 py-2 text-base font-semibold text-stone-600 transition hover:bg-stone-50 disabled:text-stone-300"
+            className="rounded-xl bg-stone-50 px-4 py-2 text-base font-semibold text-stone-600 transition hover:bg-stone-100 disabled:text-stone-300"
           >
             Annuler
           </button>
@@ -14952,7 +14952,7 @@ function ExternalCalendarAddView({
   onCreate: () => Promise<void>;
 }) {
   return (
-    <div className="rounded-2xl border border-stone-200 bg-stone-50/70 px-4 py-3">
+    <div className="rounded-2xl bg-stone-50/70 px-4 py-3">
       <div className="grid gap-2">
         <input
           value={draft.name}
@@ -14987,7 +14987,7 @@ function ExternalCalendarAddView({
           type="button"
           onClick={() => void onCreate()}
           disabled={saving || !draft.name.trim() || !draft.icsUrl.trim() || !draft.color.trim()}
-          className="justify-self-end rounded-full border border-stone-200 bg-white px-3 py-1.5 text-base font-semibold text-stone-600 transition hover:bg-stone-100 disabled:text-stone-300"
+          className="justify-self-end rounded-xl bg-white px-3 py-1.5 text-base font-semibold text-stone-600 transition hover:bg-stone-100 disabled:text-stone-300"
         >
           {saving ? "Ajout..." : "Ajouter"}
         </button>
@@ -15112,7 +15112,7 @@ function ExternalCalendarSettingsDetail({
 
   return (
     <div className="space-y-4">
-      <div className="rounded-2xl border border-stone-200 bg-white px-4 py-4">
+      <div className="rounded-2xl bg-white px-4 py-4">
         <div className="grid gap-3">
         <div className="flex items-center justify-between gap-3">
           <input
@@ -15193,7 +15193,7 @@ function ExternalCalendarSettingsDetail({
               type="button"
               onClick={() => void handleSave()}
               disabled={saving}
-              className="rounded-full border border-stone-200 bg-white px-3 py-1.5 text-base font-semibold text-stone-600 transition hover:bg-stone-100 disabled:text-stone-300"
+              className="rounded-xl bg-stone-50 px-3 py-1.5 text-base font-semibold text-stone-600 transition hover:bg-stone-100 disabled:text-stone-300"
             >
               {saving ? "Enregistrement..." : "Enregistrer"}
             </button>
@@ -15299,7 +15299,7 @@ function ExternalCalendarEventDetails({
               {event.title}
             </h2>
           </div>
-          <button type="button" onClick={onClose} className="rounded-full border border-stone-200 bg-white px-3 py-1.5 text-base font-semibold text-stone-600 transition hover:bg-stone-50">
+          <button type="button" onClick={onClose} className="rounded-xl bg-stone-50 px-3 py-1.5 text-base font-semibold text-stone-600 transition hover:bg-stone-100">
             Fermer
           </button>
         </div>
@@ -15412,7 +15412,7 @@ function DuplicateEventDialog({
             type="button"
             onClick={onClose}
             disabled={duplicating}
-            className="rounded-full border border-stone-200 bg-white px-4 py-2 text-base font-semibold text-stone-600 disabled:text-stone-300"
+            className="rounded-xl bg-stone-50 px-4 py-2 text-base font-semibold text-stone-600 transition hover:bg-stone-100 disabled:text-stone-300"
           >
             Annuler
           </button>
@@ -15420,7 +15420,7 @@ function DuplicateEventDialog({
             type="button"
             onClick={() => void handleConfirm()}
             disabled={duplicating}
-            className="rounded-full bg-[#bb2720] px-4 py-2 text-base font-semibold text-white disabled:bg-stone-300"
+            className="rounded-xl bg-[#bb2720] px-4 py-2 text-base font-semibold text-white disabled:bg-stone-300"
           >
             {duplicating ? "Duplication..." : "Dupliquer"}
           </button>
@@ -15478,7 +15478,7 @@ function DeleteEventDialog({
             type="button"
             onClick={onClose}
             disabled={deleting}
-            className="rounded-full border border-stone-200 bg-white px-4 py-2 text-base font-semibold text-stone-600 disabled:text-stone-300"
+            className="rounded-xl bg-stone-50 px-4 py-2 text-base font-semibold text-stone-600 transition hover:bg-stone-100 disabled:text-stone-300"
           >
             Annuler
           </button>
@@ -15486,7 +15486,7 @@ function DeleteEventDialog({
             type="button"
             onClick={() => void handleConfirm()}
             disabled={deleting}
-            className="rounded-full bg-[#bb2720] px-4 py-2 text-base font-semibold text-white disabled:bg-stone-300"
+            className="rounded-xl bg-[#bb2720] px-4 py-2 text-base font-semibold text-white disabled:bg-stone-300"
           >
             {deleting ? "Déplacement..." : "Supprimer"}
           </button>
@@ -15539,7 +15539,7 @@ function PermanentDeleteEventDialog({
             type="button"
             onClick={onClose}
             disabled={deleting}
-            className="rounded-full border border-stone-200 bg-white px-4 py-2 text-base font-semibold text-stone-600 disabled:text-stone-300"
+            className="rounded-xl bg-stone-50 px-4 py-2 text-base font-semibold text-stone-600 transition hover:bg-stone-100 disabled:text-stone-300"
           >
             Annuler
           </button>
@@ -15547,7 +15547,7 @@ function PermanentDeleteEventDialog({
             type="button"
             onClick={() => void handleConfirm()}
             disabled={deleting}
-            className="rounded-full bg-[#bb2720] px-4 py-2 text-base font-semibold text-white disabled:bg-stone-300"
+            className="rounded-xl bg-[#bb2720] px-4 py-2 text-base font-semibold text-white disabled:bg-stone-300"
           >
             {deleting ? "Suppression..." : "Supprimer"}
           </button>
@@ -15798,7 +15798,7 @@ function SharedDatePicker({
             type="button"
             onClick={onClose}
             disabled={saving}
-            className="rounded-full border border-stone-200 bg-white px-4 py-2 text-base font-semibold text-stone-600 transition hover:bg-stone-50 disabled:text-stone-300"
+            className="rounded-xl bg-stone-50 px-4 py-2 text-base font-semibold text-stone-600 transition hover:bg-stone-100 disabled:text-stone-300"
           >
             Annuler
           </button>
@@ -15961,7 +15961,7 @@ function DocumentPreviewModal({
             <button
               type="button"
               onClick={() => void downloadPreviewFile()}
-              className="flex h-10 w-10 items-center justify-center rounded-full border border-amber-200 bg-amber-50 text-amber-800 transition hover:bg-amber-100"
+              className="flex h-10 w-10 items-center justify-center rounded-full bg-amber-50 text-amber-800 transition hover:bg-amber-100"
               aria-label="Télécharger ce document"
               title="Télécharger"
             >
@@ -15970,7 +15970,7 @@ function DocumentPreviewModal({
             <button
               type="button"
               onClick={onClose}
-              className="flex h-10 w-10 items-center justify-center rounded-full border border-stone-200 bg-white text-stone-600 transition hover:bg-stone-50"
+              className="flex h-10 w-10 items-center justify-center rounded-full bg-white text-stone-600 transition hover:bg-stone-50"
               aria-label="Fermer l'aperçu"
             >
               <X className="h-4 w-4" />
@@ -15995,7 +15995,7 @@ function DocumentPreviewModal({
 }
 
 const formInputClassName =
-  "h-11 w-full rounded-2xl border border-stone-200 bg-white px-3 text-base font-medium text-stone-950 outline-none transition focus:border-[#bb2720]/50";
+  "h-11 w-full rounded-xl border border-stone-200 bg-white px-3 text-base font-medium text-stone-950 outline-none transition focus:border-[#bb2720]/50";
 
 function TimeTextInput({
   value,
@@ -16046,7 +16046,7 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
 
 function StatusBadge({ status, large = false }: { status: EventStatus; large?: boolean }) {
   return (
-    <span className={cn("inline-flex items-center rounded-full text-base font-bold ring-1", large ? "px-3 py-1.5" : "px-2.5 py-1 leading-tight", statusStyles[status])}>
+    <span className={cn("inline-flex items-center rounded-full text-base font-bold", large ? "px-3 py-1.5" : "px-2.5 py-1 leading-tight", statusStyles[status])}>
       {large && status === "Prêt" ? "PRÊT" : status}
     </span>
   );
@@ -16092,7 +16092,7 @@ function NotificationMenu({
       <button
         type="button"
         onClick={() => setOpen((current) => !current)}
-        className="relative flex h-10 w-10 items-center justify-center rounded-full border border-stone-200/45 bg-white text-stone-600 transition hover:bg-stone-50"
+        className="relative flex h-10 w-10 items-center justify-center rounded-full bg-white text-stone-600 transition hover:bg-stone-50"
         title="Notifications"
         aria-label="Notifications"
       >
@@ -16121,7 +16121,7 @@ function NotificationMenu({
                   {unreadCount > 0 ? `${unreadCount} notification${unreadCount > 1 ? "s" : ""}` : "Tout est à jour"}
                 </p>
               </div>
-              <button type="button" onClick={() => setOpen(false)} className="rounded-full border border-stone-200 bg-white px-3 py-1.5 text-base font-semibold text-stone-600 transition hover:bg-stone-50">
+              <button type="button" onClick={() => setOpen(false)} className="rounded-xl bg-stone-50 px-3 py-1.5 text-base font-semibold text-stone-600 transition hover:bg-stone-100">
                 Fermer
               </button>
             </div>
@@ -16155,7 +16155,7 @@ function NotificationMenu({
                             setOpen(false);
                           }
                         }}
-                        className="shrink-0 rounded-full border border-stone-200 bg-white px-2.5 py-1 text-xs font-semibold text-stone-600 transition hover:bg-stone-50"
+                        className="shrink-0 rounded-xl bg-stone-50 px-2.5 py-1 text-xs font-semibold text-stone-600 transition hover:bg-stone-100"
                       >
                         OK
                       </button>
@@ -16176,7 +16176,7 @@ function HeaderIcon({ label, icon: Icon, onClick }: { label: string; icon: Lucid
     <button
       type="button"
       onClick={onClick}
-      className="flex h-10 w-10 items-center justify-center rounded-full border border-stone-200/45 bg-white text-stone-600 transition hover:bg-stone-50"
+      className="flex h-10 w-10 items-center justify-center rounded-full bg-white text-stone-600 transition hover:bg-stone-50"
       title={label}
       aria-label={label}
     >
@@ -16266,7 +16266,7 @@ function OfflineBanner({ online }: { online: boolean }) {
 
   return (
     <div className="pointer-events-none fixed inset-x-3 bottom-[calc(0.85rem+env(safe-area-inset-bottom))] z-30 flex justify-center sm:bottom-[calc(1rem+env(safe-area-inset-bottom))]">
-      <div className="flex w-full max-w-md items-center justify-center gap-2 rounded-full bg-orange-50/95 px-4 py-3 text-sm font-semibold text-orange-900 shadow-lg shadow-orange-950/10 backdrop-blur-xl sm:w-auto sm:px-5">
+      <div className="flex w-full max-w-md items-center justify-center gap-2 rounded-full bg-orange-50/95 px-4 py-3 text-sm font-semibold text-orange-900 shadow-sm shadow-orange-950/10 sm:w-auto sm:px-5">
         <WifiOff className="h-4 w-4 shrink-0 text-[#bb2720]" aria-hidden="true" />
         <span>Pas de connexion Internet</span>
       </div>
@@ -16313,14 +16313,14 @@ function AccountMenu({
       <button
         type="button"
         onClick={() => setOpen((current) => !current)}
-        className="flex h-10 w-10 items-center justify-center rounded-full border border-stone-200/45 bg-white text-sm font-semibold text-stone-700 transition hover:bg-stone-50"
+        className="flex h-10 w-10 items-center justify-center rounded-full bg-white text-sm font-semibold text-stone-700 transition hover:bg-stone-50"
         aria-label="Compte"
         title={displayName}
       >
         {initials}
       </button>
       {open && (
-        <div className="absolute right-0 top-12 z-40 w-52 rounded-2xl border border-stone-200 bg-white/95 p-1 text-right backdrop-blur-xl">
+        <div className="absolute right-0 top-12 z-40 w-52 rounded-2xl bg-white p-1 text-right shadow-sm shadow-black/5">
           <div className="px-3 py-2">
             <p className="truncate text-sm font-semibold text-stone-950">{displayName}</p>
             <p className="mt-0.5 truncate text-xs font-medium text-stone-500">{profile ? getRoleLabel(profile.role) : email}</p>
@@ -16425,7 +16425,7 @@ function InlineGridDeleteConfirmation({
             onCancel();
           }}
           disabled={deleting}
-          className="flex h-7 w-7 items-center justify-center rounded-full border border-stone-200 bg-white/80 text-stone-500 transition hover:bg-white hover:text-stone-800 disabled:text-stone-300"
+          className="flex h-7 w-7 items-center justify-center rounded-full bg-white/80 text-stone-500 transition hover:bg-white hover:text-stone-800 disabled:text-stone-300"
           aria-label="Annuler"
           title="Annuler"
         >
@@ -16469,7 +16469,7 @@ function CompactGridDeleteDialog({
             type="button"
             onClick={onCancel}
             disabled={deleting}
-            className="rounded-full border border-stone-200 bg-white px-4 py-2 text-base font-semibold text-stone-600 transition hover:bg-stone-50 disabled:text-stone-300"
+            className="rounded-xl bg-stone-50 px-4 py-2 text-base font-semibold text-stone-600 transition hover:bg-stone-100 disabled:text-stone-300"
           >
             Annuler
           </button>
@@ -16489,7 +16489,7 @@ function CompactGridDeleteDialog({
 
 function Panel({ title, children }: { title: string; children: React.ReactNode }) {
   return (
-    <section className="rounded-2xl border-2 border-stone-200 bg-white p-5 sm:p-6">
+    <section className="rounded-2xl bg-white p-5 sm:p-6">
       <h2 className="mb-5 text-base font-semibold uppercase tracking-[0.16em] text-stone-500">{title}</h2>
       {children}
     </section>
@@ -16517,7 +16517,7 @@ function FullScreenStatus({ children, tone = "neutral" }: { children: React.Reac
     <main className="flex h-screen h-[100svh] items-center justify-center bg-[var(--app-background)] p-4 text-stone-950">
       <div
         className={cn(
-          "rounded-3xl px-5 py-4 text-base font-semibold",
+          "rounded-2xl px-5 py-4 text-base font-semibold",
           tone === "error" ? "bg-rose-50 text-rose-700" : "bg-white/55 text-stone-600",
         )}
       >
@@ -16530,7 +16530,7 @@ function FullScreenStatus({ children, tone = "neutral" }: { children: React.Reac
 function AuthRecoveryScreen({ message, onReset }: { message: string; onReset: () => void }) {
   return (
     <main className="flex h-screen h-[100svh] items-center justify-center bg-[var(--app-background)] p-4 text-stone-950">
-      <div className="w-full max-w-sm rounded-3xl bg-white px-5 py-5 text-center shadow-xl shadow-black/5">
+      <div className="w-full max-w-sm rounded-2xl bg-white px-5 py-5 text-center shadow-sm shadow-black/5">
         <AlertCircle className="mx-auto h-5 w-5 text-rose-600" />
         <p className="mt-3 text-base font-semibold text-rose-700">{message}</p>
         <p className="mt-2 text-sm font-medium leading-snug text-stone-500">Réinitialisez la session locale, puis reconnectez-vous.</p>
@@ -16595,7 +16595,7 @@ function UpdatePasswordScreen({
 
   return (
     <main className="flex h-screen h-[100svh] items-center justify-center bg-[var(--app-background)] p-4 text-stone-950">
-      <form onSubmit={submitPassword} className="w-full max-w-sm rounded-3xl border border-stone-200 bg-white p-5 sm:p-6">
+      <form onSubmit={submitPassword} className="w-full max-w-sm rounded-2xl bg-white p-5 shadow-sm shadow-black/5 sm:p-6">
         <div className="mb-6 flex items-center gap-3">
           <img src="/brand/mon-studio-tv-icon.png" alt="Mon Studio TV" className="h-11 w-auto" />
           <div>
@@ -16642,12 +16642,12 @@ function UpdatePasswordScreen({
             type="button"
             onClick={completed ? onComplete : onCancel}
             disabled={submitting}
-            className="h-11 flex-1 rounded-full border border-stone-200 bg-white text-base font-semibold text-stone-600 transition hover:bg-stone-50 disabled:text-stone-300"
+            className="h-11 flex-1 rounded-xl bg-stone-50 text-base font-semibold text-stone-600 transition hover:bg-stone-100 disabled:text-stone-300"
           >
             {completed ? "Continuer" : "Annuler"}
           </button>
           {!completed && (
-            <button type="submit" disabled={submitting} className="h-11 flex-1 rounded-full bg-[#bb2720] text-base font-semibold text-white transition hover:bg-[#a7211b] disabled:bg-stone-300">
+            <button type="submit" disabled={submitting} className="h-11 flex-1 rounded-xl bg-[#bb2720] text-base font-semibold text-white transition hover:bg-[#a7211b] disabled:bg-stone-300">
               {submitting ? "Mise à jour..." : "Valider"}
             </button>
           )}
@@ -16717,7 +16717,7 @@ function LoginScreen({ error }: { error: string | null }) {
 
   return (
     <main className="flex h-screen h-[100svh] items-center justify-center bg-[var(--app-background)] p-4 text-stone-950">
-      <form onSubmit={submitLogin} className="w-full max-w-sm rounded-3xl border border-stone-200 bg-white p-5 sm:p-6">
+      <form onSubmit={submitLogin} className="w-full max-w-sm rounded-2xl bg-white p-5 shadow-sm shadow-black/5 sm:p-6">
         <div className="mb-6 flex items-center gap-3">
           <img src="/brand/mon-studio-tv-icon.png" alt="Mon Studio TV" className="h-11 w-auto" />
           <div>
@@ -16761,7 +16761,7 @@ function LoginScreen({ error }: { error: string | null }) {
         <button
           type="submit"
           disabled={submitting}
-          className="mt-5 h-11 w-full rounded-full bg-[#bb2720] text-base font-semibold text-white transition hover:bg-[#a7211b] disabled:bg-stone-300"
+          className="mt-5 h-11 w-full rounded-xl bg-[#bb2720] text-base font-semibold text-white transition hover:bg-[#a7211b] disabled:bg-stone-300"
         >
           {submitting ? "Connexion..." : "Se connecter"}
         </button>
