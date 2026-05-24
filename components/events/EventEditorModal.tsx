@@ -36,7 +36,6 @@ const modalSheetPositionClassName = "items-end p-3 sm:items-center sm:justify-ce
 const modalPanelClassName = "rounded-3xl border border-stone-200 bg-white shadow-xl shadow-black/10";
 const formInputClassName =
   "h-11 w-full rounded-2xl border border-stone-200 bg-white px-3 text-base font-medium text-stone-950 outline-none transition focus:border-[#bb2720]/50";
-const editorSectionClassName = "rounded-2xl border border-stone-200 bg-stone-50/60";
 
 function useEscapeToClose(onClose: () => void, enabled = true) {
   useEffect(() => {
@@ -104,41 +103,6 @@ function Field({ label, children }: { label: string; children: ReactNode }) {
   );
 }
 
-function hasDetailsValues(form: EventEditorFormInput) {
-  return Boolean(form.location.trim() || form.notes.trim());
-}
-
-function hasLiveTimeValues(form: EventEditorFormInput) {
-  return Boolean(form.startTime.trim() || form.endTime.trim());
-}
-
-function CollapsibleSection({
-  title,
-  open,
-  onToggle,
-  children,
-}: {
-  title: string;
-  open: boolean;
-  onToggle: () => void;
-  children: ReactNode;
-}) {
-  return (
-    <section className={editorSectionClassName}>
-      <button
-        type="button"
-        onClick={onToggle}
-        className="flex w-full items-center justify-between gap-3 px-4 py-2.5 text-left text-base font-semibold text-stone-700"
-        aria-expanded={open}
-      >
-        <span>{title}</span>
-        <span className="flex h-7 w-7 items-center justify-center rounded-full bg-white text-lg leading-none text-stone-400">{open ? "-" : "+"}</span>
-      </button>
-      {open && <div className="space-y-3 border-t border-stone-200 px-4 py-3">{children}</div>}
-    </section>
-  );
-}
-
 function getSubmitErrorMessage(error: unknown) {
   if (error instanceof Error && error.message.trim()) return error.message.trim();
   if (error && typeof error === "object" && "message" in error && typeof (error as { message?: unknown }).message === "string") {
@@ -161,12 +125,9 @@ export function EventEditorModal({
   const currentExternalCalendarId = getCurrentEditorExternalCalendarId(event);
   const [initialForm] = useState<EventEditorFormInput>(() => getEventEditorInitialForm(event, selectedDateKey));
   const [form, setForm] = useState<EventEditorFormInput>(initialForm);
-  const [detailsOpen, setDetailsOpen] = useState(() => hasDetailsValues(initialForm));
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [datePickerOpen, setDatePickerOpen] = useState(false);
-  const hasLiveTimes = hasLiveTimeValues(form);
-  const showLiveTimeFields = !form.isAllDay || hasLiveTimes;
   const selectableSyncCalendars = getSelectableEditorSyncCalendars({
     event,
     syncCalendars,
@@ -263,30 +224,26 @@ export function EventEditorModal({
             </div>
           )}
 
-          {showLiveTimeFields && (
-            <div className="grid grid-cols-2 gap-3">
-              <Field label="Début live/tournage">
-                <TimeTextInput value={form.startTime} onChange={(value) => updateField("startTime", value)} className={formInputClassName} />
-              </Field>
-              <Field label="Fin live/tournage">
-                <TimeTextInput value={form.endTime} onChange={(value) => updateField("endTime", value)} className={formInputClassName} />
-              </Field>
-            </div>
-          )}
-
-          <CollapsibleSection title="Détails" open={detailsOpen} onToggle={() => setDetailsOpen((current) => !current)}>
-            <Field label="Lieu">
-              <input value={form.location} onChange={(inputEvent) => updateField("location", inputEvent.target.value)} className={formInputClassName} />
+          <div className="grid grid-cols-2 gap-3">
+            <Field label="Début live/tournage">
+              <TimeTextInput value={form.startTime} onChange={(value) => updateField("startTime", value)} className={formInputClassName} />
             </Field>
-
-            <Field label="Notes">
-              <textarea
-                value={form.notes}
-                onChange={(inputEvent) => updateField("notes", inputEvent.target.value)}
-                className={cn(formInputClassName, "min-h-24 resize-none py-3")}
-              />
+            <Field label="Fin live/tournage">
+              <TimeTextInput value={form.endTime} onChange={(value) => updateField("endTime", value)} className={formInputClassName} />
             </Field>
-          </CollapsibleSection>
+          </div>
+
+          <Field label="Lieu">
+            <input value={form.location} onChange={(inputEvent) => updateField("location", inputEvent.target.value)} className={formInputClassName} />
+          </Field>
+
+          <Field label="Notes">
+            <textarea
+              value={form.notes}
+              onChange={(inputEvent) => updateField("notes", inputEvent.target.value)}
+              className={cn(formInputClassName, "min-h-24 resize-none py-3")}
+            />
+          </Field>
 
           {((!isEditing && selectableSyncCalendars.length > 0) || Boolean(currentExternalCalendarId)) && (
             <Field label="Calendrier">
