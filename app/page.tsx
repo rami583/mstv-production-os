@@ -331,6 +331,7 @@ type ExternalCalendar = {
   syncCapability: ExternalCalendarSyncCapability;
   syncEnabled: boolean;
   calendarRole: ExternalCalendarRole;
+  sortOrder: number | null;
   lastSyncStatus: string | null;
   lastSyncError: string | null;
   lastSyncFinishedAt: string | null;
@@ -398,6 +399,7 @@ function areExternalCalendarsEqual(left: ExternalCalendar, right: ExternalCalend
     left.syncCapability === right.syncCapability &&
     left.syncEnabled === right.syncEnabled &&
     left.calendarRole === right.calendarRole &&
+    left.sortOrder === right.sortOrder &&
     left.lastSyncStatus === right.lastSyncStatus &&
     left.lastSyncError === right.lastSyncError &&
     left.lastSyncFinishedAt === right.lastSyncFinishedAt &&
@@ -424,6 +426,35 @@ function mergeExternalCalendarList(current: ExternalCalendar[], next: ExternalCa
   }
 
   return merged;
+}
+
+function getExternalCalendarGroupKey(calendar: ExternalCalendar) {
+  return `${calendar.providerType}:${calendar.providerAccountId ?? "local"}`;
+}
+
+function compareExternalCalendarDisplayOrder(left: ExternalCalendar, right: ExternalCalendar) {
+  const leftSortOrder = left.sortOrder ?? Number.MAX_SAFE_INTEGER;
+  const rightSortOrder = right.sortOrder ?? Number.MAX_SAFE_INTEGER;
+  if (leftSortOrder !== rightSortOrder) return leftSortOrder - rightSortOrder;
+
+  const leftCreatedAt = Date.parse(left.createdAt) || 0;
+  const rightCreatedAt = Date.parse(right.createdAt) || 0;
+  if (leftCreatedAt !== rightCreatedAt) return leftCreatedAt - rightCreatedAt;
+
+  return left.name.localeCompare(right.name, "fr", { sensitivity: "base" });
+}
+
+function sortExternalCalendarsForDisplay<T extends { storedCalendar: ExternalCalendar | null; calendar: { name?: string; summary?: string } }>(rows: T[]) {
+  return [...rows].sort((left, right) => {
+    if (left.storedCalendar && right.storedCalendar) {
+      return compareExternalCalendarDisplayOrder(left.storedCalendar, right.storedCalendar);
+    }
+    if (left.storedCalendar) return -1;
+    if (right.storedCalendar) return 1;
+    const leftName = left.calendar.name ?? left.calendar.summary ?? "";
+    const rightName = right.calendar.name ?? right.calendar.summary ?? "";
+    return leftName.localeCompare(rightName, "fr", { sensitivity: "base" });
+  });
 }
 
 type GoogleCalendarAccount = {
@@ -3036,6 +3067,7 @@ function mapExternalCalendar(row: ExternalCalendarRow): ExternalCalendar {
     syncCapability: normalizeExternalCalendarSyncCapability(row.sync_capability),
     syncEnabled: Boolean(row.sync_enabled),
     calendarRole: normalizeExternalCalendarRole(row.calendar_role),
+    sortOrder: row.sort_order ?? null,
     lastSyncStatus: row.last_sync_status ?? null,
     lastSyncError: row.last_sync_error ?? null,
     lastSyncFinishedAt: row.last_sync_finished_at ?? null,
@@ -3401,6 +3433,7 @@ async function fetchExternalCalendars() {
   const { data, error } = await supabase
     .from("external_calendars")
     .select("*")
+    .order("sort_order", { ascending: true, nullsFirst: false })
     .order("created_at", { ascending: true });
 
   if (error) throw error;
@@ -3668,7 +3701,7 @@ export default function Home() {
     [externalCalendars],
   );
   const writableExternalCalendars = useMemo(
-    () => [...writableGoogleCalendars, ...writableAppleCalendars],
+    () => [...writableGoogleCalendars, ...writableAppleCalendars].sort(compareExternalCalendarDisplayOrder),
     [writableAppleCalendars, writableGoogleCalendars],
   );
 
@@ -4774,6 +4807,53 @@ export default function Home() {
 
     if (insertError) throw insertError;
     await refreshExternalCalendarSettings({ silent: true });
+  }
+
+  async function moveExternalCalendar(calendar: ExternalCalendar, direction: "up" | "down") {
+    if (!supabase) throw new Error("Configuration Supabase manquante.");
+    const supabaseClient = supabase;
+    if (!canManageExternalCalendar(permissions, profile, calendar)) {
+      throw new Error("Vous ne pouvez modifier que vos calendriers.");
+    }
+    if (!calendar.syncEnabled) return;
+
+    const activeGroupCalendars = externalCalendars
+      .filter((item) => item.syncEnabled && getExternalCalendarGroupKey(item) === getExternalCalendarGroupKey(calendar))
+      .sort(compareExternalCalendarDisplayOrder);
+    const currentIndex = activeGroupCalendars.findIndex((item) => item.id === calendar.id);
+    const targetIndex = direction === "up" ? currentIndex - 1 : currentIndex + 1;
+    if (currentIndex < 0 || targetIndex < 0 || targetIndex >= activeGroupCalendars.length) return;
+
+    const reorderedCalendars = [...activeGroupCalendars];
+    [reorderedCalendars[currentIndex], reorderedCalendars[targetIndex]] = [reorderedCalendars[targetIndex], reorderedCalendars[currentIndex]];
+    const updates = reorderedCalendars.map((item, index) => ({
+      id: item.id,
+      sortOrder: index + 1,
+    }));
+    const updateById = new Map(updates.map((item) => [item.id, item.sortOrder]));
+    const previousCalendars = externalCalendars;
+
+    setExternalCalendars((current) =>
+      current.map((item) => (
+        updateById.has(item.id)
+          ? { ...item, sortOrder: updateById.get(item.id) ?? item.sortOrder }
+          : item
+      )),
+    );
+
+    const results = await Promise.all(
+      updates.map((item) =>
+        supabaseClient
+          .from("external_calendars")
+          .update({ sort_order: item.sortOrder })
+          .eq("id", item.id),
+      ),
+    );
+    const updateError = results.find((result) => result.error)?.error;
+    if (updateError) {
+      setExternalCalendars(previousCalendars);
+      throw updateError;
+    }
   }
 
   async function updateExternalCalendar(
@@ -9577,6 +9657,7 @@ export default function Home() {
           onClose={() => setExternalCalendarSettingsOpen(false)}
           onCreate={createExternalCalendar}
           onUpdate={updateExternalCalendar}
+          onMove={moveExternalCalendar}
           onConnectGoogle={connectGoogleCalendar}
           onDisconnectGoogle={disconnectGoogleCalendar}
           onConnectApple={connectAppleCalendar}
@@ -14338,6 +14419,7 @@ function ExternalCalendarsSheet({
   onClose,
   onCreate,
   onUpdate,
+  onMove,
   onConnectGoogle,
   onDisconnectGoogle,
   onConnectApple,
@@ -14364,6 +14446,7 @@ function ExternalCalendarsSheet({
   onClose: () => void;
   onCreate: (input: { name: string; icsUrl: string; color: string; visibility: ExternalCalendarVisibility }) => Promise<void>;
   onUpdate: (calendar: ExternalCalendar, input: { name: string; icsUrl: string; color: string; visibility: ExternalCalendarVisibility; syncEnabled?: boolean }) => Promise<void>;
+  onMove: (calendar: ExternalCalendar, direction: "up" | "down") => Promise<void>;
   onConnectGoogle: () => Promise<void>;
   onDisconnectGoogle: (account: GoogleCalendarAccount) => Promise<void>;
   onConnectApple: (input: { appleId: string; appPassword: string }) => Promise<void>;
@@ -14384,6 +14467,12 @@ function ExternalCalendarsSheet({
   const [localError, setLocalError] = useState<string | null>(null);
   const selectedCalendar = selectedCalendarId ? calendars.find((calendar) => calendar.id === selectedCalendarId) ?? null : null;
   const selectedCalendarEvents = selectedCalendar ? events.filter((event) => event.externalCalendarId === selectedCalendar.id) : [];
+  const selectedCalendarActiveGroup = selectedCalendar
+    ? calendars
+        .filter((calendar) => calendar.syncEnabled && getExternalCalendarGroupKey(calendar) === getExternalCalendarGroupKey(selectedCalendar))
+        .sort(compareExternalCalendarDisplayOrder)
+    : [];
+  const selectedCalendarOrderIndex = selectedCalendar ? selectedCalendarActiveGroup.findIndex((calendar) => calendar.id === selectedCalendar.id) : -1;
   const isMobileFormView = view === "add" || view === "detail";
 
   useEffect(() => {
@@ -14535,6 +14624,9 @@ function ExternalCalendarsSheet({
               syncing={syncingCalendarId === selectedCalendar.id}
               syncProgress={syncProgress?.calendarId === selectedCalendar.id ? syncProgress : null}
               onUpdate={onUpdate}
+              canMoveUp={selectedCalendarOrderIndex > 0}
+              canMoveDown={selectedCalendarOrderIndex >= 0 && selectedCalendarOrderIndex < selectedCalendarActiveGroup.length - 1}
+              onMove={onMove}
               onDelete={async (calendar) => {
                 await onDelete(calendar);
                 setSelectedCalendarId(null);
@@ -14911,8 +15003,10 @@ function ExternalCalendarsListView({
                             };
                           })
                           .filter((row): row is NonNullable<typeof row> => Boolean(row));
-                        const activeRows = rows.filter((row) => row.enabled);
-                        const availableRows = rows.filter((row) => !row.enabled);
+                        const activeRows = sortExternalCalendarsForDisplay(rows.filter((row) => row.enabled));
+                        const availableRows = [...rows.filter((row) => !row.enabled)].sort((left, right) =>
+                          left.calendar.name.localeCompare(right.calendar.name, "fr", { sensitivity: "base" }),
+                        );
 
                         if (rows.length === 0) {
                           return <div className="px-1 py-1 text-sm font-semibold text-stone-400">Aucun calendrier Apple chargé.</div>;
@@ -14996,8 +15090,10 @@ function ExternalCalendarsListView({
                             };
                           })
                           .filter((row): row is NonNullable<typeof row> => Boolean(row));
-                        const activeRows = rows.filter((row) => row.enabled);
-                        const availableRows = rows.filter((row) => !row.enabled);
+                        const activeRows = sortExternalCalendarsForDisplay(rows.filter((row) => row.enabled));
+                        const availableRows = [...rows.filter((row) => !row.enabled)].sort((left, right) =>
+                          left.calendar.summary.localeCompare(right.calendar.summary, "fr", { sensitivity: "base" }),
+                        );
 
                         if (rows.length === 0) {
                           return <div className="px-1 py-1 text-sm font-semibold text-stone-400">Aucun calendrier Google chargé.</div>;
@@ -15176,6 +15272,9 @@ function ExternalCalendarSettingsDetail({
   syncing,
   syncProgress,
   onUpdate,
+  canMoveUp,
+  canMoveDown,
+  onMove,
   onDelete,
   onSync,
 }: {
@@ -15186,6 +15285,9 @@ function ExternalCalendarSettingsDetail({
   syncing: boolean;
   syncProgress: ExternalCalendarSyncProgress | null;
   onUpdate: (calendar: ExternalCalendar, input: { name: string; icsUrl: string; color: string; visibility: ExternalCalendarVisibility; syncEnabled?: boolean }) => Promise<void>;
+  canMoveUp: boolean;
+  canMoveDown: boolean;
+  onMove: (calendar: ExternalCalendar, direction: "up" | "down") => Promise<void>;
   onDelete: (calendar: ExternalCalendar) => Promise<void>;
   onSync: (calendar: ExternalCalendar) => Promise<ExternalCalendarSyncResult>;
 }) {
@@ -15198,6 +15300,7 @@ function ExternalCalendarSettingsDetail({
   });
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [moving, setMoving] = useState<"up" | "down" | null>(null);
   const [rowError, setRowError] = useState<string | null>(null);
   const [syncSummary, setSyncSummary] = useState<string | null>(null);
   const canManage = canManageExternalCalendar(permissions, profile, calendar);
@@ -15259,6 +15362,19 @@ function ExternalCalendarSettingsDetail({
     }
   }
 
+  async function handleMove(direction: "up" | "down") {
+    setRowError(null);
+    setSyncSummary(null);
+    setMoving(direction);
+    try {
+      await onMove(calendar, direction);
+    } catch (moveError) {
+      setRowError(getUserFacingErrorMessage(moveError, "Impossible de déplacer ce calendrier."));
+    } finally {
+      setMoving(null);
+    }
+  }
+
   async function handleSync() {
     setRowError(null);
     setSyncSummary(null);
@@ -15316,6 +15432,37 @@ function ExternalCalendarSettingsDetail({
             {draft.syncEnabled ? "Désactiver" : "Activer"}
           </button>
         </div>
+
+        {draft.syncEnabled && (
+          <div className="flex items-center justify-between gap-3 rounded-2xl bg-stone-50 px-3 py-2">
+            <div className="min-w-0">
+              <p className="text-sm font-semibold text-stone-950">Ordre</p>
+              <p className="text-xs font-semibold text-stone-400">Position dans la liste des calendriers actifs</p>
+            </div>
+            <div className="flex shrink-0 items-center gap-1">
+              <button
+                type="button"
+                onClick={() => void handleMove("up")}
+                disabled={!canManage || !canMoveUp || saving || moving !== null}
+                className="flex h-8 w-8 items-center justify-center rounded-full bg-white text-base font-semibold text-stone-500 transition hover:bg-stone-100 disabled:cursor-default disabled:bg-white disabled:text-stone-200"
+                aria-label="Monter ce calendrier"
+                title="Monter"
+              >
+                ↑
+              </button>
+              <button
+                type="button"
+                onClick={() => void handleMove("down")}
+                disabled={!canManage || !canMoveDown || saving || moving !== null}
+                className="flex h-8 w-8 items-center justify-center rounded-full bg-white text-base font-semibold text-stone-500 transition hover:bg-stone-100 disabled:cursor-default disabled:bg-white disabled:text-stone-200"
+                aria-label="Descendre ce calendrier"
+                title="Descendre"
+              >
+                ↓
+              </button>
+            </div>
+          </div>
+        )}
 
         {calendar.providerType === "ics_read_only" && (
           <input

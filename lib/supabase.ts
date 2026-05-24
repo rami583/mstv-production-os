@@ -338,6 +338,7 @@ export type Database = {
           provider_account_id: string | null;
           provider_calendar_id: string | null;
           calendar_role: "business_primary" | "external_context";
+          sort_order: number | null;
           sync_capability: string;
           sync_enabled: boolean;
           last_sync_started_at: string | null;
@@ -359,6 +360,7 @@ export type Database = {
           provider_account_id?: string | null;
           provider_calendar_id?: string | null;
           calendar_role?: "business_primary" | "external_context";
+          sort_order?: number | null;
           sync_capability?: string;
           sync_enabled?: boolean;
           last_sync_started_at?: string | null;
