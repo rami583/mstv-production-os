@@ -9165,6 +9165,7 @@ export default function Home() {
           pendingSyncError={pendingSyncError}
           googleAutoSyncStatus={googleAutoSyncStatus}
           notifications={notifications}
+          notificationsHydrated={notificationsHydrated}
           notificationsOpen={notificationsOpen && !yearOverviewOpen}
           setNotificationsOpen={setNotificationsOpen}
           onOpenNotification={handleNotificationOpen}
@@ -9292,6 +9293,7 @@ export default function Home() {
           pendingSyncError={pendingSyncError}
           googleAutoSyncStatus={googleAutoSyncStatus}
           notifications={notifications}
+          notificationsHydrated={notificationsHydrated}
           notificationsOpen={notificationsOpen}
           setNotificationsOpen={setNotificationsOpen}
           onOpenNotification={handleNotificationOpen}
@@ -9562,6 +9564,7 @@ function AppHeader({
   pendingSyncError,
   googleAutoSyncStatus,
   notifications,
+  notificationsHydrated,
   notificationsOpen,
   setNotificationsOpen,
   onOpenNotification,
@@ -9602,6 +9605,7 @@ function AppHeader({
   pendingSyncError: string | null;
   googleAutoSyncStatus: GoogleAutoSyncStatus;
   notifications: AppNotification[];
+  notificationsHydrated: boolean;
   notificationsOpen: boolean;
   setNotificationsOpen: (open: boolean | ((current: boolean) => boolean)) => void;
   onOpenNotification: (notification: AppNotification) => void;
@@ -9656,6 +9660,7 @@ function AppHeader({
           <HeaderIcon label="Rechercher" icon={Search} onClick={onSearch} />
           <NotificationMenu
             notifications={notifications}
+            hydrated={notificationsHydrated}
             unreadCount={unreadNotificationCount}
             open={notificationsOpen}
             setOpen={setNotificationsOpen}
@@ -9964,6 +9969,7 @@ function YearOverviewOverlay({
   pendingSyncError,
   googleAutoSyncStatus,
   notifications,
+  notificationsHydrated,
   notificationsOpen,
   setNotificationsOpen,
   onOpenNotification,
@@ -10000,6 +10006,7 @@ function YearOverviewOverlay({
   pendingSyncError: string | null;
   googleAutoSyncStatus: GoogleAutoSyncStatus;
   notifications: AppNotification[];
+  notificationsHydrated: boolean;
   notificationsOpen: boolean;
   setNotificationsOpen: (open: boolean | ((current: boolean) => boolean)) => void;
   onOpenNotification: (notification: AppNotification) => void;
@@ -10246,6 +10253,7 @@ function YearOverviewOverlay({
           pendingSyncError={pendingSyncError}
           googleAutoSyncStatus={googleAutoSyncStatus}
           notifications={notifications}
+          notificationsHydrated={notificationsHydrated}
           notificationsOpen={notificationsOpen}
           setNotificationsOpen={setNotificationsOpen}
           onOpenNotification={onOpenNotification}
@@ -16060,6 +16068,7 @@ function formatNotificationRelativeTime(dateValue: string) {
 
 function NotificationMenu({
   notifications,
+  hydrated,
   unreadCount,
   open,
   setOpen,
@@ -16067,6 +16076,7 @@ function NotificationMenu({
   onDismissNotification,
 }: {
   notifications: AppNotification[];
+  hydrated: boolean;
   unreadCount: number;
   open: boolean;
   setOpen: (open: boolean | ((current: boolean) => boolean)) => void;
@@ -16074,6 +16084,7 @@ function NotificationMenu({
   onDismissNotification: (notification: AppNotification) => void;
 }) {
   const visibleNotifications = notifications.filter((notification) => !notification.readAt && importantNotificationTypes.has(notification.type));
+  const showUnreadBadge = hydrated && unreadCount > 0;
   useEscapeToClose(() => setOpen(false), open);
 
   return (
@@ -16086,7 +16097,7 @@ function NotificationMenu({
         aria-label="Notifications"
       >
         <Bell className="h-4 w-4" />
-        {unreadCount > 0 && (
+        {showUnreadBadge && (
           <span className="absolute right-2 top-2 h-2.5 w-2.5 rounded-full border border-white bg-[#bb2720]" aria-hidden="true" />
         )}
       </button>
