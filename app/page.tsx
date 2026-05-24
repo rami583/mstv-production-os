@@ -9185,7 +9185,7 @@ export default function Home() {
 
         <div className="flex min-h-0 flex-1 flex-col">
           {error && <StatusMessage tone="error">{error}</StatusMessage>}
-          {loading && <StatusMessage>Chargement des productions...</StatusMessage>}
+          {loading && <StatusMessage>Chargement du calendrier...</StatusMessage>}
 
           {!loading && screen === "calendar" && (
             <CalendarDashboard
@@ -16477,8 +16477,8 @@ function StatusMessage({ children, tone = "neutral" }: { children: React.ReactNo
   return (
     <div
       className={cn(
-        "mb-4 rounded-2xl border bg-white px-4 py-3 text-base font-medium",
-        tone === "error" ? "border-rose-200 text-rose-700" : "border-stone-200 text-stone-500",
+        "mb-4 rounded-2xl px-4 py-3 text-base font-medium",
+        tone === "error" ? "border border-rose-200 bg-white text-rose-700" : "bg-white/55 text-stone-500",
       )}
     >
       <span className="inline-flex items-center gap-2">
@@ -16494,8 +16494,8 @@ function FullScreenStatus({ children, tone = "neutral" }: { children: React.Reac
     <main className="flex h-screen h-[100svh] items-center justify-center bg-[var(--app-background)] p-4 text-stone-950">
       <div
         className={cn(
-          "rounded-3xl border bg-white px-5 py-4 text-base font-semibold",
-          tone === "error" ? "border-rose-200 text-rose-700" : "border-stone-200 text-stone-600",
+          "rounded-3xl px-5 py-4 text-base font-semibold",
+          tone === "error" ? "border border-rose-200 bg-white text-rose-700" : "bg-white/55 text-stone-600",
         )}
       >
         {children}
