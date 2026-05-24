@@ -121,6 +121,14 @@ function getSubmitErrorMessage(error: unknown) {
   return "";
 }
 
+function isEditableEditorElement(element: Element | null) {
+  return Boolean(element?.closest("input, textarea, select"));
+}
+
+function isInteractiveEditorElement(element: Element | null) {
+  return Boolean(element?.closest("input, textarea, select, button, a, label, [role='button'], [contenteditable='true']"));
+}
+
 export function EventEditorModal({
   selectedDateKey,
   event,
@@ -183,6 +191,15 @@ export function EventEditorModal({
     setTimeKeyboardActive(false);
   }
 
+  function handlePanelPointerDown(pointerEvent: PointerEvent<HTMLFormElement>) {
+    const target = pointerEvent.target instanceof Element ? pointerEvent.target : null;
+    const activeElement = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    if (!activeElement || !isEditableEditorElement(activeElement) || isInteractiveEditorElement(target)) return;
+
+    activeElement.blur();
+    setTimeKeyboardActive(false);
+  }
+
   useEscapeToClose(onClose);
 
   return (
@@ -190,6 +207,7 @@ export function EventEditorModal({
       <form
         onSubmit={handleSubmit}
         className={cn(modalPanelClassName, "flex max-h-[calc(100dvh-1.5rem)] w-full flex-col p-4 sm:max-h-[calc(100dvh-3rem)] sm:max-w-xl sm:p-6")}
+        onPointerDownCapture={handlePanelPointerDown}
         onPointerDown={(pointerEvent) => pointerEvent.stopPropagation()}
       >
         <div className="mb-4 flex shrink-0 items-center justify-between gap-4">
@@ -204,10 +222,6 @@ export function EventEditorModal({
             "min-h-0 flex-1 space-y-3 overflow-y-auto pr-0.5 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden",
             timeKeyboardActive ? "pb-24 sm:pb-0" : "pb-1",
           )}
-          onPointerDown={(pointerEvent) => {
-            const target = pointerEvent.target as HTMLElement | null;
-            if (!target?.closest("input, textarea, select, button")) dismissTimeKeyboard();
-          }}
         >
           <div className="space-y-1">
             <div className="flex items-center justify-between gap-3">
