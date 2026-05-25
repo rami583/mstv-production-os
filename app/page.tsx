@@ -202,6 +202,7 @@ const GOOGLE_AUTO_SYNC_INTERVAL_MS = 3 * 60 * 1000;
 const GOOGLE_AUTO_SYNC_MIN_GAP_MS = 45 * 1000;
 const APPLE_AUTO_SYNC_MIN_GAP_MS = 45 * 1000;
 const APPLE_AUTO_SYNC_LAUNCH_DELAY_MS = 900;
+const APPLE_FOREGROUND_SYNC_DEBOUNCE_MS = 2500;
 
 type EventQueryRow = EventRow & {
   event_options: EventOptionRow[] | null;
@@ -3626,6 +3627,7 @@ export default function Home() {
   const appleAutoSyncRunningRef = useRef(false);
   const appleAutoSyncLastStartedAtRef = useRef(0);
   const appleAutoSyncLaunchKeyRef = useRef<string | null>(null);
+  const appleForegroundSyncLastTriggeredAtRef = useRef(0);
   const selectedIdRef = useRef<string | null>(null);
   const visibleAppleSyncWindowRef = useRef<{ start: Date; end: Date } | null>(null);
   const visibleProductionEventsRef = useRef<ProductionEvent[]>([]);
@@ -5309,7 +5311,7 @@ export default function Home() {
   async function syncAppleCalendarSilently(input: {
     calendar: ExternalCalendar;
     syncWindow: { start: Date; end: Date };
-    source: "interval" | "online" | "visible" | "launch";
+    source: "interval" | "online" | "foreground" | "launch";
     enabledAppleCalendars: number;
   }) {
     const { calendar, syncWindow, source, enabledAppleCalendars } = input;
@@ -5440,7 +5442,7 @@ export default function Home() {
       }
     }
 
-    async function runAutomaticAppleSync(source: "interval" | "online" | "visible" | "launch") {
+    async function runAutomaticAppleSync(source: "interval" | "online" | "foreground" | "launch") {
       const attemptedAt = new Date().toISOString();
       if (!authSession || !profile) {
         console.info("[Apple sync timing] skipped", { source, attemptedAt, reason: "missing_session_or_profile" });
@@ -5475,8 +5477,21 @@ export default function Home() {
       }
 
       const now = Date.now();
+      if (source === "foreground") {
+        const foregroundDebounceRemainingMs = APPLE_FOREGROUND_SYNC_DEBOUNCE_MS - (now - appleForegroundSyncLastTriggeredAtRef.current);
+        if (foregroundDebounceRemainingMs > 0) {
+          console.info("[Apple sync timing] skipped", {
+            source,
+            attemptedAt,
+            reason: "foreground_debounced",
+            foregroundDebounceRemainingMs,
+          });
+          return;
+        }
+        appleForegroundSyncLastTriggeredAtRef.current = now;
+      }
       const throttleRemainingMs = APPLE_AUTO_SYNC_MIN_GAP_MS - (now - appleAutoSyncLastStartedAtRef.current);
-      if (throttleRemainingMs > 0) {
+      if (source !== "foreground" && throttleRemainingMs > 0) {
         console.info("[Apple sync timing] skipped", {
           source,
           attemptedAt,
@@ -5512,7 +5527,7 @@ export default function Home() {
       }
     }
 
-    async function runAutomaticExternalCalendarSync(source: "interval" | "online" | "visible") {
+    async function runAutomaticExternalCalendarSync(source: "interval" | "online") {
       await runAutomaticGoogleSync(source);
       await runAutomaticAppleSync(source);
     }
@@ -5526,14 +5541,28 @@ export default function Home() {
       void runAutomaticExternalCalendarSync("online");
     }
 
+    function handleForeground(source: "visibilitychange" | "focus" | "pageshow") {
+      if (document.visibilityState !== "visible") return;
+      console.info("[Apple sync timing] foreground trigger fired", { source, triggeredAt: new Date().toISOString() });
+      void runAutomaticAppleSync("foreground");
+      void runAutomaticGoogleSync("visible");
+    }
+
     function handleVisibilityChange() {
-      if (document.visibilityState === "visible") {
-        console.info("[Apple sync timing] visibility trigger fired", { triggeredAt: new Date().toISOString() });
-        void runAutomaticExternalCalendarSync("visible");
-      }
+      handleForeground("visibilitychange");
+    }
+
+    function handleFocus() {
+      handleForeground("focus");
+    }
+
+    function handlePageShow() {
+      handleForeground("pageshow");
     }
 
     window.addEventListener("online", handleOnline);
+    window.addEventListener("focus", handleFocus);
+    window.addEventListener("pageshow", handlePageShow);
     document.addEventListener("visibilitychange", handleVisibilityChange);
 
     let launchSyncTimer: number | null = null;
@@ -5559,6 +5588,8 @@ export default function Home() {
       }
       window.clearInterval(intervalId);
       window.removeEventListener("online", handleOnline);
+      window.removeEventListener("focus", handleFocus);
+      window.removeEventListener("pageshow", handlePageShow);
       document.removeEventListener("visibilitychange", handleVisibilityChange);
     };
   }, [authSession, hasMounted, loading, online, profile, syncingExternalCalendarId, writableAppleCalendars, writableGoogleCalendars]);
