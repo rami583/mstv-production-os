@@ -12564,6 +12564,7 @@ function InlineEditableTitle({
     return (
       <input
         ref={inputRef}
+        data-event-item-inline-editor="true"
         value={draft}
         disabled={saving}
         onChange={(event) => setDraft(event.target.value)}
@@ -12672,6 +12673,7 @@ function LinkValueRow({
         <Icon className={cn("h-4 w-4 shrink-0", rowTone.icon)} />
         {editable ? (
           <input
+            data-event-item-inline-editor="true"
             value={localValue}
             disabled={committing}
             onFocus={() => setEditing(true)}
@@ -13434,6 +13436,7 @@ function ContextDetailBlock({
           ) : canEdit ? (
             <form onSubmit={addOptionItem} className="flex min-w-0 flex-col gap-2">
               <textarea
+                data-event-item-inline-editor="true"
                 required
                 rows={3}
                 value={optionItemInput}
@@ -13455,6 +13458,7 @@ function ContextDetailBlock({
               {isEditingNote ? (
                 <div className="flex min-w-0 flex-1 flex-col gap-2">
                   <textarea
+                    data-event-item-inline-editor="true"
                     rows={3}
                     value={editingOptionItemInput}
                     onChange={(event) => setEditingOptionItemInput(event.target.value)}

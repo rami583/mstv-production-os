@@ -9,9 +9,15 @@ function isCapacitorRuntime() {
 
 const appBuildId = process.env.NEXT_PUBLIC_APP_BUILD_ID ?? "local";
 
+function isEventItemInlineEditorFocused() {
+  const activeElement = document.activeElement;
+  return activeElement instanceof HTMLElement && Boolean(activeElement.closest("[data-event-item-inline-editor='true']"));
+}
+
 export function PwaRegistration() {
   useEffect(() => {
     let frameId: number | null = null;
+    let settleTimer: number | null = null;
 
     function updateViewportHeight() {
       if (frameId !== null) {
@@ -20,6 +26,8 @@ export function PwaRegistration() {
 
       frameId = window.requestAnimationFrame(() => {
         frameId = null;
+        if (isEventItemInlineEditorFocused()) return;
+
         const viewportHeight = window.visualViewport?.height ?? window.innerHeight;
         document.documentElement.style.setProperty("--app-height", `${Math.round(viewportHeight)}px`);
         document.documentElement.style.setProperty("--app-viewport-offset-top", `${Math.max(0, Math.round(window.visualViewport?.offsetTop ?? 0))}px`);
@@ -30,6 +38,20 @@ export function PwaRegistration() {
       });
     }
 
+    function updateViewportHeightAfterInlineEdit(event: FocusEvent) {
+      const target = event.target;
+      if (!(target instanceof HTMLElement) || !target.closest("[data-event-item-inline-editor='true']")) return;
+
+      if (settleTimer !== null) {
+        window.clearTimeout(settleTimer);
+      }
+
+      settleTimer = window.setTimeout(() => {
+        settleTimer = null;
+        updateViewportHeight();
+      }, 250);
+    }
+
     updateViewportHeight();
 
     window.addEventListener("resize", updateViewportHeight);
@@ -38,10 +60,14 @@ export function PwaRegistration() {
     window.addEventListener("blur", updateViewportHeight);
     window.visualViewport?.addEventListener("resize", updateViewportHeight);
     window.visualViewport?.addEventListener("scroll", updateViewportHeight);
+    document.addEventListener("focusout", updateViewportHeightAfterInlineEdit);
 
     return () => {
       if (frameId !== null) {
         window.cancelAnimationFrame(frameId);
+      }
+      if (settleTimer !== null) {
+        window.clearTimeout(settleTimer);
       }
 
       window.removeEventListener("resize", updateViewportHeight);
@@ -50,6 +76,7 @@ export function PwaRegistration() {
       window.removeEventListener("blur", updateViewportHeight);
       window.visualViewport?.removeEventListener("resize", updateViewportHeight);
       window.visualViewport?.removeEventListener("scroll", updateViewportHeight);
+      document.removeEventListener("focusout", updateViewportHeightAfterInlineEdit);
     };
   }, []);
 
