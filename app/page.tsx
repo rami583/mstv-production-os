@@ -48,6 +48,7 @@ import {
   useRef,
   useState,
   type Dispatch,
+  type FocusEvent as ReactFocusEvent,
   type PointerEvent as ReactPointerEvent,
   type ReactNode,
   type SetStateAction,
@@ -11776,6 +11777,7 @@ function ProductionDetail({
   const previousContextSelectionKeyRef = useRef<string | null>(null);
   const eventSwipeStartRef = useRef<{ pointerId: number; x: number; y: number; axis: "horizontal" | "vertical" | null } | null>(null);
   const suppressEventSwipeClickRef = useRef(false);
+  const keyboardScrollCleanupRef = useRef<(() => void) | null>(null);
   const eventDisplay = getProductionEventDisplay(event);
 
   const contextSelectionKey =
@@ -11870,6 +11872,112 @@ function ProductionDetail({
     scrollContainer.scrollTop = 0;
     scrollContainer.scrollLeft = 0;
   }, [event.id]);
+
+  useEffect(() => () => {
+    keyboardScrollCleanupRef.current?.();
+    keyboardScrollCleanupRef.current = null;
+  }, []);
+
+  function isMobileEventDetailKeyboardContext() {
+    if (typeof window === "undefined") return false;
+    return window.matchMedia("(hover: none), (pointer: coarse), (max-width: 767px)").matches;
+  }
+
+  function isEventDetailEditableElement(element: Element | null) {
+    return Boolean(element?.closest("input, textarea, select"));
+  }
+
+  function isEventDetailInteractiveElement(element: Element | null) {
+    return Boolean(element?.closest("input, textarea, select, button, a, label, [role='button'], [contenteditable='true']"));
+  }
+
+  function scrollEventDetailFieldIntoKeyboardView(target: HTMLElement, behavior: ScrollBehavior) {
+    const scrollContainer = detailScrollContainerRef.current;
+    if (!scrollContainer || !scrollContainer.contains(target)) return;
+
+    const visualViewport = window.visualViewport;
+    const viewportTop = visualViewport?.offsetTop ?? 0;
+    const viewportBottom = viewportTop + (visualViewport?.height ?? window.innerHeight);
+    const containerBounds = scrollContainer.getBoundingClientRect();
+    const targetBounds = target.getBoundingClientRect();
+    const visibleTop = Math.max(containerBounds.top, viewportTop) + 18;
+    const visibleBottom = Math.min(containerBounds.bottom, viewportBottom) - 28;
+    const targetTop = targetBounds.top - containerBounds.top + scrollContainer.scrollTop;
+    const targetBottom = targetTop + targetBounds.height;
+    const currentVisibleTop = scrollContainer.scrollTop + (visibleTop - containerBounds.top);
+    const currentVisibleBottom = scrollContainer.scrollTop + (visibleBottom - containerBounds.top);
+
+    let nextScrollTop = scrollContainer.scrollTop;
+    if (targetBottom > currentVisibleBottom) {
+      nextScrollTop += targetBottom - currentVisibleBottom;
+    } else if (targetTop < currentVisibleTop) {
+      nextScrollTop -= currentVisibleTop - targetTop;
+    } else {
+      return;
+    }
+
+    const maxScrollTop = Math.max(0, scrollContainer.scrollHeight - scrollContainer.clientHeight);
+    scrollContainer.scrollTo({
+      top: Math.min(maxScrollTop, Math.max(0, nextScrollTop)),
+      behavior,
+    });
+  }
+
+  function keepEventDetailFieldVisible(target: HTMLElement) {
+    if (!isMobileEventDetailKeyboardContext()) return;
+
+    keyboardScrollCleanupRef.current?.();
+
+    const timers: number[] = [];
+    const animationFrames: number[] = [];
+    const scrollNow = (behavior: ScrollBehavior) => scrollEventDetailFieldIntoKeyboardView(target, behavior);
+    const scheduleFrame = (behavior: ScrollBehavior) => {
+      const frame = window.requestAnimationFrame(() => scrollNow(behavior));
+      animationFrames.push(frame);
+    };
+    const scheduleTimer = (delay: number, behavior: ScrollBehavior) => {
+      const timer = window.setTimeout(() => scrollNow(behavior), delay);
+      timers.push(timer);
+    };
+    const handleViewportResize = () => scrollNow("auto");
+
+    scheduleFrame("smooth");
+    scheduleTimer(80, "smooth");
+    scheduleTimer(180, "auto");
+    scheduleTimer(340, "auto");
+    window.visualViewport?.addEventListener("resize", handleViewportResize);
+
+    const cleanup = () => {
+      animationFrames.forEach((frame) => window.cancelAnimationFrame(frame));
+      timers.forEach((timer) => window.clearTimeout(timer));
+      window.visualViewport?.removeEventListener("resize", handleViewportResize);
+    };
+    keyboardScrollCleanupRef.current = cleanup;
+
+    window.setTimeout(() => {
+      if (keyboardScrollCleanupRef.current !== cleanup) return;
+      cleanup();
+      keyboardScrollCleanupRef.current = null;
+    }, 650);
+  }
+
+  function handleEventDetailEditorFocus(focusEvent: ReactFocusEvent<HTMLDivElement>) {
+    if (!(focusEvent.target instanceof HTMLElement)) return;
+    if (!isEventDetailEditableElement(focusEvent.target)) return;
+    keepEventDetailFieldVisible(focusEvent.target);
+  }
+
+  function handleEventDetailEditorPointerDownCapture(pointerEvent: ReactPointerEvent<HTMLDivElement>) {
+    if (!isMobileEventDetailKeyboardContext()) return;
+
+    const activeElement = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    if (!activeElement || !isEventDetailEditableElement(activeElement)) return;
+
+    const target = pointerEvent.target instanceof Element ? pointerEvent.target : null;
+    if (isEventDetailInteractiveElement(target)) return;
+
+    activeElement.blur();
+  }
 
   function selectOption(option: EventOption) {
     setContextSelection((current) =>
@@ -12114,7 +12222,13 @@ function ProductionDetail({
         </div>
       </Card>
 
-      <div key={event.id} ref={detailScrollContainerRef} className="no-scrollbar min-h-0 flex-1 space-y-4 overflow-y-auto overscroll-contain pb-6">
+      <div
+        key={event.id}
+        ref={detailScrollContainerRef}
+        className="no-scrollbar min-h-0 flex-1 space-y-4 overflow-y-auto overscroll-contain pb-6"
+        onFocusCapture={handleEventDetailEditorFocus}
+        onPointerDownCapture={handleEventDetailEditorPointerDownCapture}
+      >
         <Card className="premium-surface overflow-hidden !border-0 p-4 sm:p-5">
           <ProductionTimeCards event={event} />
         </Card>
@@ -12532,7 +12646,7 @@ function InlineEditableTitle({
 
   useEffect(() => {
     if (!editing) return;
-    inputRef.current?.focus();
+    inputRef.current?.focus({ preventScroll: true });
     inputRef.current?.select();
   }, [editing]);
 
@@ -12815,6 +12929,7 @@ function ContextDetailBlock({
   const [uploadingDocumentFiles, setUploadingDocumentFiles] = useState(false);
   const [documentOpenError, setDocumentOpenError] = useState<string | null>(null);
   const linkEntryDraftsRef = useRef(linkEntryDrafts);
+  const editingOptionItemTextareaRef = useRef<HTMLTextAreaElement | null>(null);
 
   useEffect(() => {
     linkEntryDraftsRef.current = linkEntryDrafts;
@@ -12868,6 +12983,13 @@ function ContextDetailBlock({
       setCompletedByExternalName(selectedOption.completedByLabel);
     }
   }, [selectedOptionId, selectedOption?.completedByInitials, selectedOption?.completedByLabel, selectedOption?.status]);
+
+  useEffect(() => {
+    if (!editingOptionItemId) return;
+    const textarea = editingOptionItemTextareaRef.current;
+    textarea?.focus({ preventScroll: true });
+    textarea?.select();
+  }, [editingOptionItemId]);
 
   async function copyLinkValue(value: string | null | undefined, field: string) {
     const valueToCopy = value?.trim();
@@ -13443,11 +13565,11 @@ function ContextDetailBlock({
               {isEditingNote ? (
                 <div className="flex min-w-0 flex-1 flex-col gap-2">
                   <textarea
+                    ref={editingOptionItemTextareaRef}
                     rows={3}
                     value={editingOptionItemInput}
                     onChange={(event) => setEditingOptionItemInput(event.target.value)}
                     className="min-h-20 w-full resize-none rounded-xl border border-transparent bg-emerald-50/40 px-3 py-2 text-base font-medium text-stone-950 outline-none transition placeholder:text-stone-300 focus:border-emerald-300 focus:bg-white"
-                    autoFocus
                   />
                   <div className="flex flex-wrap gap-2">
                     <button
