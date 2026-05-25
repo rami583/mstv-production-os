@@ -52,7 +52,19 @@ export function OPTIONS() {
   });
 }
 
-function getAppleSyncWindow() {
+function getAppleSyncWindow(input?: { start?: unknown; end?: unknown }) {
+  const requestedStart = typeof input?.start === "string" ? new Date(input.start) : null;
+  const requestedEnd = typeof input?.end === "string" ? new Date(input.end) : null;
+  if (
+    requestedStart &&
+    requestedEnd &&
+    Number.isFinite(requestedStart.getTime()) &&
+    Number.isFinite(requestedEnd.getTime()) &&
+    requestedStart < requestedEnd
+  ) {
+    return { start: requestedStart, end: requestedEnd };
+  }
+
   const now = new Date();
   const start = new Date(now);
   start.setMonth(start.getMonth() - 6);
@@ -436,7 +448,7 @@ export async function POST(request: Request) {
     const authResult = await requireAuthenticatedUser(request);
     if ("error" in authResult) return authResult.error;
 
-    const body = (await request.json().catch(() => null)) as { externalCalendarId?: string } | null;
+    const body = (await request.json().catch(() => null)) as { externalCalendarId?: string; syncWindowStart?: string; syncWindowEnd?: string } | null;
     const externalCalendarId = body?.externalCalendarId?.trim();
     if (!externalCalendarId) {
       return appleJsonResponse({ error: "Calendrier Apple manquant." }, { status: 400 });
@@ -472,7 +484,7 @@ export async function POST(request: Request) {
 
     const account = await getOwnedAppleAccount(supabase, calendar.provider_account_id, authResult.user.id);
     const credentials = decryptAppleCredentials(account);
-    const syncWindow = getAppleSyncWindow();
+    const syncWindow = getAppleSyncWindow({ start: body?.syncWindowStart, end: body?.syncWindowEnd });
     const appleEvents = await fetchAppleCalendarEvents({ credentials, calendar, syncWindow });
     const fetchedExternalEventIds = new Set(appleEvents.map((event) => event.externalEventId));
 
@@ -635,6 +647,8 @@ export async function POST(request: Request) {
 
     console.info("Apple pull sync summary", {
       calendarId: calendar.id,
+      syncWindowStart: syncWindow.start.toISOString(),
+      syncWindowEnd: syncWindow.end.toISOString(),
       enabledCalendars: calendar.sync_enabled ? 1 : 0,
       fetched: appleEvents.length,
       created,

@@ -181,6 +181,8 @@ const EXTERNAL_CALENDAR_UPSERT_BATCH_SIZE = 250;
 const EXTERNAL_CALENDAR_FETCH_PAGE_SIZE = 1000;
 const GOOGLE_AUTO_SYNC_INTERVAL_MS = 3 * 60 * 1000;
 const GOOGLE_AUTO_SYNC_MIN_GAP_MS = 45 * 1000;
+const APPLE_AUTO_SYNC_MIN_GAP_MS = 45 * 1000;
+const APPLE_AUTO_SYNC_LAUNCH_DELAY_MS = 900;
 
 type EventQueryRow = EventRow & {
   event_options: EventOptionRow[] | null;
@@ -1349,6 +1351,12 @@ function handleModalBackdropPointerDown(pointerEvent: ReactPointerEvent<HTMLDivE
 
 function formatDateKey(date: Date) {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+}
+
+function getMonthSyncWindow(monthDate: Date) {
+  const start = new Date(monthDate.getFullYear(), monthDate.getMonth() - 1, 1);
+  const end = new Date(monthDate.getFullYear(), monthDate.getMonth() + 2, 1);
+  return { start, end };
 }
 
 function isDateKeyInMarker(dateKey: string, marker: CalendarMarker) {
@@ -3591,6 +3599,9 @@ export default function Home() {
   const appleSyncInFlightRef = useRef(false);
   const appleAutoSyncRunningRef = useRef(false);
   const appleAutoSyncLastStartedAtRef = useRef(0);
+  const appleAutoSyncLaunchKeyRef = useRef<string | null>(null);
+  const selectedIdRef = useRef<string | null>(null);
+  const visibleAppleSyncWindowRef = useRef<{ start: Date; end: Date } | null>(null);
   const onlineRef = useRef(online);
   const processPendingSyncQueueRef = useRef<((options?: { forceOnline?: boolean }) => Promise<void>) | null>(null);
   const googleCalendarBootstrapKeyRef = useRef<string | null>(null);
@@ -3712,6 +3723,19 @@ export default function Home() {
     if (selectedId) return chronologicalEvents.find((item) => item.id === selectedId) ?? null;
     return chronologicalEvents[0] ?? null;
   }, [chronologicalEvents, selectedId]);
+  const visibleAppleSyncWindow = useMemo(() => {
+    if (screen === "detail" && selectedEvent?.date) {
+      const eventDate = new Date(`${selectedEvent.date}T12:00:00`);
+      if (Number.isFinite(eventDate.getTime())) return getMonthSyncWindow(eventDate);
+    }
+    if (yearOverviewOpen) {
+      return {
+        start: new Date(visibleMonth.getFullYear() - 1, 11, 1),
+        end: new Date(visibleMonth.getFullYear() + 1, 1, 1),
+      };
+    }
+    return getMonthSyncWindow(visibleMonth);
+  }, [screen, selectedEvent?.date, visibleMonth, yearOverviewOpen]);
   const selectedEventIndex = selectedEvent ? chronologicalEvents.findIndex((item) => item.id === selectedEvent.id) : -1;
   const hasPreviousEvent = selectedEventIndex > 0;
   const hasNextEvent = selectedEventIndex >= 0 && selectedEventIndex < chronologicalEvents.length - 1;
@@ -3747,6 +3771,10 @@ export default function Home() {
   );
 
   useEffect(() => {
+    visibleAppleSyncWindowRef.current = visibleAppleSyncWindow;
+  }, [visibleAppleSyncWindow]);
+
+  useEffect(() => {
     setEventDetailCarousel(null);
   }, [screen, selectedId]);
 
@@ -3777,6 +3805,10 @@ export default function Home() {
   useEffect(() => {
     onlineRef.current = online;
   }, [online]);
+
+  useEffect(() => {
+    selectedIdRef.current = selectedId;
+  }, [selectedId]);
 
   useEffect(() => {
     void refreshPendingSyncState();
@@ -5002,7 +5034,7 @@ export default function Home() {
     if (isGoogleBidirectionalCalendar && googleSyncInFlightRef.current) {
       throw new Error("Synchronisation Google déjà en cours.");
     }
-    if (isAppleBidirectionalCalendar && appleSyncInFlightRef.current) {
+    if (isAppleBidirectionalCalendar && (appleSyncInFlightRef.current || appleAutoSyncRunningRef.current)) {
       throw new Error("Synchronisation Apple déjà en cours.");
     }
     if (isGoogleBidirectionalCalendar) {
@@ -5230,6 +5262,28 @@ export default function Home() {
     }
   }
 
+  async function syncAppleCalendarSilently(calendar: ExternalCalendar, syncWindow: { start: Date; end: Date }) {
+    const accessToken = await getServerApiAccessToken(authSession?.access_token);
+    const response = await fetch(getAppApiUrl("/api/calendar/apple/sync", "Synchronisation Apple Calendar momentanément indisponible."), {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${accessToken}`,
+      },
+      body: JSON.stringify({
+        externalCalendarId: calendar.id,
+        syncWindowStart: syncWindow.start.toISOString(),
+        syncWindowEnd: syncWindow.end.toISOString(),
+      }),
+    });
+    const syncPayload = (await response.json().catch(() => null)) as GooglePullSyncApiResponse | null;
+    if (!response.ok || syncPayload?.success === false) {
+      throw new Error(syncPayload?.message?.trim() || "Impossible de synchroniser Apple Calendar.");
+    }
+    await reloadData(selectedIdRef.current, { silent: true });
+    return syncPayload;
+  }
+
   useEffect(() => {
     if (typeof window === "undefined" || !hasMounted) return;
 
@@ -5274,23 +5328,25 @@ export default function Home() {
       }
     }
 
-    async function runAutomaticAppleSync(source: "interval" | "online" | "visible") {
+    async function runAutomaticAppleSync(source: "interval" | "online" | "visible" | "launch") {
       if (!authSession || !profile) return;
+      if (loading) return;
       if (!onlineRef.current) return;
       if (document.visibilityState !== "visible") return;
       if (writableAppleCalendars.length === 0) return;
       if (appleAutoSyncRunningRef.current || appleSyncInFlightRef.current || syncingExternalCalendarId) return;
 
       const now = Date.now();
-      if (now - appleAutoSyncLastStartedAtRef.current < GOOGLE_AUTO_SYNC_MIN_GAP_MS) return;
+      if (now - appleAutoSyncLastStartedAtRef.current < APPLE_AUTO_SYNC_MIN_GAP_MS) return;
 
       appleAutoSyncRunningRef.current = true;
       appleAutoSyncLastStartedAtRef.current = now;
 
       try {
+        const syncWindow = visibleAppleSyncWindowRef.current ?? getMonthSyncWindow(new Date());
         for (const calendar of writableAppleCalendars) {
           if (!onlineRef.current || document.visibilityState !== "visible") break;
-          await syncExternalCalendar(calendar);
+          await syncAppleCalendarSilently(calendar, syncWindow);
         }
       } catch (syncError) {
         console.error("Automatic Apple Calendar sync failed", {
@@ -5325,12 +5381,26 @@ export default function Home() {
     window.addEventListener("online", handleOnline);
     document.addEventListener("visibilitychange", handleVisibilityChange);
 
+    let launchSyncTimer: number | null = null;
+    const launchKey = authSession && profile && writableAppleCalendars.length > 0
+      ? `${authSession.user.id}:${writableAppleCalendars.map((calendar) => calendar.id).sort().join(",")}`
+      : null;
+    if (launchKey && appleAutoSyncLaunchKeyRef.current !== launchKey) {
+      launchSyncTimer = window.setTimeout(() => {
+        appleAutoSyncLaunchKeyRef.current = launchKey;
+        void runAutomaticAppleSync("launch");
+      }, APPLE_AUTO_SYNC_LAUNCH_DELAY_MS);
+    }
+
     return () => {
+      if (launchSyncTimer !== null) {
+        window.clearTimeout(launchSyncTimer);
+      }
       window.clearInterval(intervalId);
       window.removeEventListener("online", handleOnline);
       document.removeEventListener("visibilitychange", handleVisibilityChange);
     };
-  }, [authSession, hasMounted, online, profile, selectedId, syncingExternalCalendarId, writableAppleCalendars, writableGoogleCalendars]);
+  }, [authSession, hasMounted, loading, online, profile, syncingExternalCalendarId, writableAppleCalendars, writableGoogleCalendars]);
 
   async function deleteExternalCalendar(calendar: ExternalCalendar) {
     if (!supabase) throw new Error("Configuration Supabase manquante.");
