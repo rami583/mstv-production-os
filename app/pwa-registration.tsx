@@ -9,9 +9,13 @@ function isCapacitorRuntime() {
 
 const appBuildId = process.env.NEXT_PUBLIC_APP_BUILD_ID ?? "local";
 
-function isEventItemInlineEditorFocused() {
+function hasIosKeyboardGuard(element: Element | null) {
+  return Boolean(element?.closest("[data-ios-keyboard-guard='true'], [data-event-item-inline-editor='true']"));
+}
+
+function isIosKeyboardGuardFocused() {
   const activeElement = document.activeElement;
-  return activeElement instanceof HTMLElement && Boolean(activeElement.closest("[data-event-item-inline-editor='true']"));
+  return activeElement instanceof HTMLElement && hasIosKeyboardGuard(activeElement);
 }
 
 export function PwaRegistration() {
@@ -26,7 +30,7 @@ export function PwaRegistration() {
 
       frameId = window.requestAnimationFrame(() => {
         frameId = null;
-        if (isEventItemInlineEditorFocused()) return;
+        if (isIosKeyboardGuardFocused()) return;
 
         const viewportHeight = window.visualViewport?.height ?? window.innerHeight;
         document.documentElement.style.setProperty("--app-height", `${Math.round(viewportHeight)}px`);
@@ -38,9 +42,9 @@ export function PwaRegistration() {
       });
     }
 
-    function updateViewportHeightAfterInlineEdit(event: FocusEvent) {
+    function updateViewportHeightAfterKeyboardGuard(event: FocusEvent) {
       const target = event.target;
-      if (!(target instanceof HTMLElement) || !target.closest("[data-event-item-inline-editor='true']")) return;
+      if (!(target instanceof HTMLElement) || !hasIosKeyboardGuard(target)) return;
 
       if (settleTimer !== null) {
         window.clearTimeout(settleTimer);
@@ -60,7 +64,7 @@ export function PwaRegistration() {
     window.addEventListener("blur", updateViewportHeight);
     window.visualViewport?.addEventListener("resize", updateViewportHeight);
     window.visualViewport?.addEventListener("scroll", updateViewportHeight);
-    document.addEventListener("focusout", updateViewportHeightAfterInlineEdit);
+    document.addEventListener("focusout", updateViewportHeightAfterKeyboardGuard);
 
     return () => {
       if (frameId !== null) {
@@ -76,7 +80,7 @@ export function PwaRegistration() {
       window.removeEventListener("blur", updateViewportHeight);
       window.visualViewport?.removeEventListener("resize", updateViewportHeight);
       window.visualViewport?.removeEventListener("scroll", updateViewportHeight);
-      document.removeEventListener("focusout", updateViewportHeightAfterInlineEdit);
+      document.removeEventListener("focusout", updateViewportHeightAfterKeyboardGuard);
     };
   }, []);
 

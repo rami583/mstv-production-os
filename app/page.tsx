@@ -813,7 +813,7 @@ function shouldShowEventDetailDesktopControls() {
   return !(isCoarseOrTouch && isSmallScreen);
 }
 
-const inlineKeyboardGuardProps = { "data-event-item-inline-editor": "true" } as const;
+const iosKeyboardGuardProps = { "data-ios-keyboard-guard": "true" } as const;
 
 function createLocalId() {
   return globalThis.crypto?.randomUUID?.() ?? `local-${Date.now()}-${Math.random().toString(16).slice(2)}`;
@@ -12828,7 +12828,7 @@ function InlineEditableTitle({
     return (
       <input
         ref={inputRef}
-        {...inlineKeyboardGuardProps}
+        {...iosKeyboardGuardProps}
         value={draft}
         disabled={saving}
         onChange={(event) => setDraft(event.target.value)}
@@ -12937,7 +12937,7 @@ function LinkValueRow({
         <Icon className={cn("h-4 w-4 shrink-0", rowTone.icon)} />
         {editable ? (
           <input
-            {...inlineKeyboardGuardProps}
+            {...iosKeyboardGuardProps}
             value={localValue}
             disabled={committing}
             onFocus={() => setEditing(true)}
@@ -13631,7 +13631,7 @@ function ContextDetailBlock({
           <div className="flex min-w-0 items-center gap-2">
             <span className="max-w-28 truncate text-base font-semibold text-emerald-900">{completedByDisplay}</span>
             <select
-              {...inlineKeyboardGuardProps}
+              {...iosKeyboardGuardProps}
               value={completedByChoiceValue}
               disabled={savingCompletedByOverride}
               onChange={(event) => {
@@ -13662,7 +13662,7 @@ function ContextDetailBlock({
           </div>
           {completedByChoiceValue === "externe" && (
             <input
-              {...inlineKeyboardGuardProps}
+              {...iosKeyboardGuardProps}
               value={completedByExternalName}
               onChange={(event) => setCompletedByExternalName(event.target.value)}
               onBlur={() => void commitCompletedByExternalName()}
@@ -13702,7 +13702,7 @@ function ContextDetailBlock({
           ) : canEdit ? (
             <form onSubmit={addOptionItem} className="flex min-w-0 flex-col gap-2">
               <textarea
-                {...inlineKeyboardGuardProps}
+                {...iosKeyboardGuardProps}
                 required
                 rows={3}
                 value={optionItemInput}
@@ -13724,7 +13724,7 @@ function ContextDetailBlock({
               {isEditingNote ? (
                 <div className="flex min-w-0 flex-1 flex-col gap-2">
                   <textarea
-                    {...inlineKeyboardGuardProps}
+                    {...iosKeyboardGuardProps}
                     rows={3}
                     value={editingOptionItemInput}
                     onChange={(event) => setEditingOptionItemInput(event.target.value)}
