@@ -41,7 +41,6 @@ import {
 } from "lucide-react";
 import { Network } from "@capacitor/network";
 import {
-  Fragment,
   useCallback,
   useEffect,
   useLayoutEffect,
@@ -539,25 +538,6 @@ type DeleteSelection =
   | { type: "option"; optionId: string }
   | { type: "link"; linkId: string }
   | { type: "document"; groupId: string };
-
-type KeyboardDebugSnapshot = {
-  activeLabel: string;
-  activeType: string;
-  activeRectTop: number;
-  activeRectBottom: number;
-  visualViewportHeight: number | null;
-  visualViewportOffsetTop: number | null;
-  windowInnerHeight: number;
-  scrollTop: number;
-  scrollClientHeight: number;
-  scrollHeight: number;
-  keyboardInset: number;
-  bottomPadding: string;
-  fieldBottomBelowVisibleArea: boolean;
-  visibleAreaBottom: number;
-  lastScrollAction: string;
-  capturedAt: string;
-};
 
 type CreateEventInput = EventEditorFormInput;
 
@@ -11727,79 +11707,6 @@ function ExternalInvitationDetailsCard({ event }: { event: ProductionEvent }) {
   );
 }
 
-function KeyboardDebugOverlay({
-  snapshot,
-  onScrollCenter,
-  onScrollNearest,
-  onBlur,
-}: {
-  snapshot: KeyboardDebugSnapshot;
-  onScrollCenter: () => void;
-  onScrollNearest: () => void;
-  onBlur: () => void;
-}) {
-  const rows: Array<[string, string | number | boolean | null]> = [
-    ["Champ", snapshot.activeLabel],
-    ["Type", snapshot.activeType],
-    ["Rect top", snapshot.activeRectTop],
-    ["Rect bottom", snapshot.activeRectBottom],
-    ["visualViewport height", snapshot.visualViewportHeight ?? "n/a"],
-    ["visualViewport offsetTop", snapshot.visualViewportOffsetTop ?? "n/a"],
-    ["window innerHeight", snapshot.windowInnerHeight],
-    ["scrollTop", snapshot.scrollTop],
-    ["clientHeight", snapshot.scrollClientHeight],
-    ["scrollHeight", snapshot.scrollHeight],
-    ["keyboard inset", snapshot.keyboardInset],
-    ["bottom padding", snapshot.bottomPadding],
-    ["below visible area", snapshot.fieldBottomBelowVisibleArea],
-    ["visible area bottom", snapshot.visibleAreaBottom],
-    ["last scroll", snapshot.lastScrollAction],
-    ["capturé", snapshot.capturedAt],
-  ];
-
-  return (
-    <div className="fixed inset-x-3 top-[calc(env(safe-area-inset-top)+0.75rem)] z-[120] max-h-[72vh] overflow-y-auto rounded-2xl bg-stone-950/95 p-3 text-xs font-semibold text-white shadow-lg sm:inset-x-auto sm:right-4 sm:w-96">
-      <div className="mb-2 flex items-center justify-between gap-2">
-        <p className="text-sm font-bold">Debug clavier iPhone</p>
-        <button
-          type="button"
-          onPointerDown={(event) => event.preventDefault()}
-          onClick={onBlur}
-          className="rounded-full bg-white/10 px-2 py-1 text-xs font-bold text-white"
-        >
-          Blur
-        </button>
-      </div>
-      <div className="grid grid-cols-[1fr_auto] gap-x-3 gap-y-1">
-        {rows.map(([label, value]) => (
-          <Fragment key={label}>
-            <span className="text-white/55">{label}</span>
-            <span className={cn("max-w-44 truncate text-right", value === true ? "text-rose-300" : "text-white")}>{String(value)}</span>
-          </Fragment>
-        ))}
-      </div>
-      <div className="mt-3 grid grid-cols-2 gap-2">
-        <button
-          type="button"
-          onPointerDown={(event) => event.preventDefault()}
-          onClick={onScrollCenter}
-          className="rounded-xl bg-white px-3 py-2 text-xs font-bold text-stone-950"
-        >
-          Scroll center
-        </button>
-        <button
-          type="button"
-          onPointerDown={(event) => event.preventDefault()}
-          onClick={onScrollNearest}
-          className="rounded-xl bg-white px-3 py-2 text-xs font-bold text-stone-950"
-        >
-          Scroll nearest
-        </button>
-      </div>
-    </div>
-  );
-}
-
 function ProductionDetail({
   event,
   hasPrevious,
@@ -11871,11 +11778,7 @@ function ProductionDetail({
   const eventSwipeStartRef = useRef<{ pointerId: number; x: number; y: number; axis: "horizontal" | "vertical" | null } | null>(null);
   const suppressEventSwipeClickRef = useRef(false);
   const keyboardPositionTimersRef = useRef<number[]>([]);
-  const keyboardDebugActiveElementRef = useRef<HTMLElement | null>(null);
-  const keyboardDebugLastActionRef = useRef("Aucune action");
   const [eventDetailKeyboardInset, setEventDetailKeyboardInset] = useState(0);
-  const [keyboardDebugEnabled, setKeyboardDebugEnabled] = useState(false);
-  const [keyboardDebugSnapshot, setKeyboardDebugSnapshot] = useState<KeyboardDebugSnapshot | null>(null);
   const eventDisplay = getProductionEventDisplay(event);
 
   const contextSelectionKey =
@@ -11977,22 +11880,6 @@ function ProductionDetail({
   }, []);
 
   useEffect(() => {
-    let enabled = false;
-    try {
-      const params = new URLSearchParams(window.location.search);
-      const queryEnabled = params.get("debugKeyboard") === "1";
-      if (queryEnabled) {
-        window.localStorage.setItem("mstv.debugKeyboard", "1");
-      }
-      enabled = queryEnabled || window.localStorage.getItem("mstv.debugKeyboard") === "1";
-    } catch {
-      enabled = false;
-    }
-
-    setKeyboardDebugEnabled(enabled);
-  }, []);
-
-  useEffect(() => {
     function handleViewportResize() {
       const activeElement = document.activeElement instanceof HTMLElement ? document.activeElement : null;
       const scrollContainer = detailScrollContainerRef.current;
@@ -12001,18 +11888,14 @@ function ProductionDetail({
         return;
       }
       updateEventDetailKeyboardInset();
-      if (keyboardDebugEnabled) {
-        window.requestAnimationFrame(() => captureKeyboardDebugSnapshot("visualViewport resize/scroll"));
-      }
+      window.requestAnimationFrame(() => keepEditableFieldNearest(activeElement));
     }
 
     window.visualViewport?.addEventListener("resize", handleViewportResize);
-    window.visualViewport?.addEventListener("scroll", handleViewportResize);
     return () => {
       window.visualViewport?.removeEventListener("resize", handleViewportResize);
-      window.visualViewport?.removeEventListener("scroll", handleViewportResize);
     };
-  }, [keyboardDebugEnabled]);
+  }, []);
 
   function isMobileEventDetailEditingContext() {
     if (typeof window === "undefined") return false;
@@ -12040,160 +11923,26 @@ function ProductionDetail({
     setEventDetailKeyboardInset(inset > 24 ? Math.ceil(inset + 20) : 0);
   }
 
-  function getEventDetailKeyboardInset() {
-    if (typeof window === "undefined") return 0;
-    const visualViewport = window.visualViewport;
-    const inset = visualViewport ? Math.max(0, window.innerHeight - visualViewport.height - visualViewport.offsetTop) : 0;
-    return inset > 24 ? Math.ceil(inset + 20) : 0;
-  }
-
-  function getKeyboardDebugFieldLabel(target: HTMLElement) {
-    const explicitLabel = target.dataset.keyboardDebugLabel?.trim();
-    if (explicitLabel) return explicitLabel;
-    const ariaLabel = target.getAttribute("aria-label")?.trim();
-    if (ariaLabel) return ariaLabel;
-    const placeholder = target.getAttribute("placeholder")?.trim();
-    if (placeholder) return placeholder;
-    const name = target.getAttribute("name")?.trim();
-    if (name) return name;
-    return "Champ inline";
-  }
-
-  function getActiveEventDetailEditableElement() {
-    const activeElement = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    const scrollContainer = detailScrollContainerRef.current;
-    if (activeElement && scrollContainer?.contains(activeElement) && isEventDetailEditableElement(activeElement)) {
-      keyboardDebugActiveElementRef.current = activeElement;
-      return activeElement;
-    }
-    const cachedElement = keyboardDebugActiveElementRef.current;
-    if (cachedElement && scrollContainer?.contains(cachedElement) && isEventDetailEditableElement(cachedElement)) {
-      return cachedElement;
-    }
-    return null;
-  }
-
-  function captureKeyboardDebugSnapshot(lastScrollAction = keyboardDebugLastActionRef.current) {
-    if (!keyboardDebugEnabled) return;
-    const target = getActiveEventDetailEditableElement();
-    const scrollContainer = detailScrollContainerRef.current;
-    if (!target || !scrollContainer) {
-      setKeyboardDebugSnapshot(null);
-      return;
-    }
-
-    const visualViewport = window.visualViewport;
-    const targetBounds = target.getBoundingClientRect();
-    const containerBounds = scrollContainer.getBoundingClientRect();
-    const keyboardInset = getEventDetailKeyboardInset();
-    const viewportVisibleBottom = visualViewport ? visualViewport.offsetTop + visualViewport.height : window.innerHeight;
-    const visibleAreaBottom = Math.min(containerBounds.bottom, viewportVisibleBottom) - 12;
-    const bottomPadding = getComputedStyle(scrollContainer).paddingBottom;
-
-    setKeyboardDebugSnapshot({
-      activeLabel: getKeyboardDebugFieldLabel(target),
-      activeType: `${target.tagName.toLowerCase()}${target instanceof HTMLInputElement && target.type ? `[${target.type}]` : ""}`,
-      activeRectTop: Math.round(targetBounds.top),
-      activeRectBottom: Math.round(targetBounds.bottom),
-      visualViewportHeight: visualViewport ? Math.round(visualViewport.height) : null,
-      visualViewportOffsetTop: visualViewport ? Math.round(visualViewport.offsetTop) : null,
-      windowInnerHeight: window.innerHeight,
-      scrollTop: Math.round(scrollContainer.scrollTop),
-      scrollClientHeight: scrollContainer.clientHeight,
-      scrollHeight: scrollContainer.scrollHeight,
-      keyboardInset,
-      bottomPadding,
-      fieldBottomBelowVisibleArea: targetBounds.bottom > visibleAreaBottom,
-      visibleAreaBottom: Math.round(visibleAreaBottom),
-      lastScrollAction,
-      capturedAt: new Date().toLocaleTimeString("fr-FR"),
-    });
-  }
-
-  function centerEditableFieldInEventDetail(target: HTMLElement, behavior: ScrollBehavior = "smooth") {
+  function keepEditableFieldNearest(target: HTMLElement) {
     const scrollContainer = detailScrollContainerRef.current;
     if (!scrollContainer || !scrollContainer.contains(target)) return;
-
-    const containerBounds = scrollContainer.getBoundingClientRect();
-    const targetBounds = target.getBoundingClientRect();
-    const targetTop = targetBounds.top - containerBounds.top + scrollContainer.scrollTop;
-    const targetCenter = targetTop + targetBounds.height / 2;
-    const nextScrollTop = targetCenter - scrollContainer.clientHeight / 2;
-    const maxScrollTop = Math.max(0, scrollContainer.scrollHeight - scrollContainer.clientHeight);
-
-    const previousScrollTop = scrollContainer.scrollTop;
-    scrollContainer.scrollTo({
-      top: Math.min(maxScrollTop, Math.max(0, nextScrollTop)),
-      behavior,
-    });
-    keyboardDebugLastActionRef.current = `center ${behavior}: ${Math.round(previousScrollTop)} → ${Math.round(Math.min(maxScrollTop, Math.max(0, nextScrollTop)))}`;
-    window.requestAnimationFrame(() => captureKeyboardDebugSnapshot(keyboardDebugLastActionRef.current));
-  }
-
-  function scrollEditableFieldNearestInEventDetail(target: HTMLElement, behavior: ScrollBehavior = "smooth") {
-    const scrollContainer = detailScrollContainerRef.current;
-    if (!scrollContainer || !scrollContainer.contains(target)) return;
-
-    const containerBounds = scrollContainer.getBoundingClientRect();
-    const targetBounds = target.getBoundingClientRect();
-    const targetTop = targetBounds.top - containerBounds.top + scrollContainer.scrollTop;
-    const targetBottom = targetTop + targetBounds.height;
-    const keyboardInset = getEventDetailKeyboardInset();
-    const visibleTop = scrollContainer.scrollTop + 16;
-    const visibleBottom = scrollContainer.scrollTop + scrollContainer.clientHeight - keyboardInset - 24;
-    const maxScrollTop = Math.max(0, scrollContainer.scrollHeight - scrollContainer.clientHeight);
-    let nextScrollTop = scrollContainer.scrollTop;
-
-    if (targetTop < visibleTop) {
-      nextScrollTop = targetTop - 16;
-    } else if (targetBottom > visibleBottom) {
-      nextScrollTop = targetBottom - (scrollContainer.clientHeight - keyboardInset) + 24;
-    }
-
-    nextScrollTop = Math.min(maxScrollTop, Math.max(0, nextScrollTop));
-    const previousScrollTop = scrollContainer.scrollTop;
-    scrollContainer.scrollTo({ top: nextScrollTop, behavior });
-    keyboardDebugLastActionRef.current = `nearest ${behavior}: ${Math.round(previousScrollTop)} → ${Math.round(nextScrollTop)}`;
-    window.requestAnimationFrame(() => captureKeyboardDebugSnapshot(keyboardDebugLastActionRef.current));
-  }
-
-  function runKeyboardDebugScroll(action: "center" | "nearest") {
-    const target = getActiveEventDetailEditableElement();
-    if (!target) return;
-    if (action === "center") {
-      centerEditableFieldInEventDetail(target, "smooth");
-    } else {
-      scrollEditableFieldNearestInEventDetail(target, "smooth");
-    }
-  }
-
-  function blurKeyboardDebugActiveField() {
-    const target = getActiveEventDetailEditableElement();
-    target?.blur();
-    keyboardDebugLastActionRef.current = "blur manuel";
-    captureKeyboardDebugSnapshot(keyboardDebugLastActionRef.current);
+    target.scrollIntoView({ block: "nearest", inline: "nearest", behavior: "smooth" });
   }
 
   function handleEventDetailEditorFocus(focusEvent: ReactFocusEvent<HTMLDivElement>) {
     if (!(focusEvent.target instanceof HTMLElement)) return;
     if (!isEventDetailEditableElement(focusEvent.target) || !isMobileEventDetailEditingContext()) return;
 
-    keyboardDebugActiveElementRef.current = focusEvent.target;
-    keyboardDebugLastActionRef.current = "focus";
+    const target = focusEvent.target;
     keyboardPositionTimersRef.current.forEach((timer) => window.clearTimeout(timer));
     keyboardPositionTimersRef.current = [];
     updateEventDetailKeyboardInset();
-    captureKeyboardDebugSnapshot("focus");
 
-    window.requestAnimationFrame(() => centerEditableFieldInEventDetail(focusEvent.target as HTMLElement, "smooth"));
+    window.requestAnimationFrame(() => keepEditableFieldNearest(target));
     keyboardPositionTimersRef.current.push(window.setTimeout(() => {
       updateEventDetailKeyboardInset();
-      centerEditableFieldInEventDetail(focusEvent.target as HTMLElement, "smooth");
-    }, 140));
-    keyboardPositionTimersRef.current.push(window.setTimeout(() => {
-      updateEventDetailKeyboardInset();
-      centerEditableFieldInEventDetail(focusEvent.target as HTMLElement, "auto");
-    }, 300));
+      keepEditableFieldNearest(target);
+    }, 160));
   }
 
   function handleEventDetailEditorBlur() {
@@ -12203,10 +11952,6 @@ function ProductionDetail({
       const scrollContainer = detailScrollContainerRef.current;
       if (scrollContainer && activeElement && scrollContainer.contains(activeElement) && isEventDetailEditableElement(activeElement)) return;
       setEventDetailKeyboardInset(0);
-      if (keyboardDebugEnabled) {
-        keyboardDebugLastActionRef.current = "blur";
-        captureKeyboardDebugSnapshot("blur");
-      }
     }, 80);
   }
 
@@ -12475,7 +12220,6 @@ function ProductionDetail({
         onFocusCapture={handleEventDetailEditorFocus}
         onBlurCapture={handleEventDetailEditorBlur}
         onPointerDownCapture={handleEventDetailEditorPointerDownCapture}
-        onScroll={keyboardDebugEnabled ? () => captureKeyboardDebugSnapshot("scroll conteneur") : undefined}
       >
         <Card className="premium-surface overflow-hidden !border-0 p-4 sm:p-5">
           <ProductionTimeCards event={event} />
@@ -12723,14 +12467,6 @@ function ProductionDetail({
         onConfirm={() => void deleteSelectedGridItem()}
       />
     )}
-    {keyboardDebugEnabled && keyboardDebugSnapshot && (
-      <KeyboardDebugOverlay
-        snapshot={keyboardDebugSnapshot}
-        onScrollCenter={() => runKeyboardDebugScroll("center")}
-        onScrollNearest={() => runKeyboardDebugScroll("nearest")}
-        onBlur={blurKeyboardDebugActiveField}
-      />
-    )}
     </>
   );
 }
@@ -12884,14 +12620,12 @@ function InlineEditableTitle({
   className,
   inputClassName,
   editable = true,
-  debugLabel,
 }: {
   value: string;
   onSave: (value: string) => Promise<void>;
   className?: string;
   inputClassName?: string;
   editable?: boolean;
-  debugLabel?: string;
 }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(value);
@@ -12933,8 +12667,6 @@ function InlineEditableTitle({
       <input
         ref={inputRef}
         value={draft}
-        data-keyboard-debug-label={debugLabel}
-        aria-label={debugLabel}
         disabled={saving}
         onChange={(event) => setDraft(event.target.value)}
         onBlur={() => void saveTitle()}
@@ -12983,7 +12715,6 @@ function LinkValueRow({
   onCopy,
   openable = false,
   editable = true,
-  debugLabel,
 }: {
   value: string;
   placeholder: string;
@@ -12996,7 +12727,6 @@ function LinkValueRow({
   onCopy: () => void;
   openable?: boolean;
   editable?: boolean;
-  debugLabel?: string;
 }) {
   const [localValue, setLocalValue] = useState(value);
   const trimmedValue = localValue.trim();
@@ -13045,8 +12775,6 @@ function LinkValueRow({
         {editable ? (
           <input
             value={localValue}
-            data-keyboard-debug-label={debugLabel ?? placeholder}
-            aria-label={debugLabel ?? placeholder}
             disabled={committing}
             onFocus={() => setEditing(true)}
             onChange={(event) => setLocalValue(event.target.value)}
@@ -13528,7 +13256,6 @@ function ContextDetailBlock({
             className="truncate"
             inputClassName="text-sky-950 focus:border-sky-300"
             editable={canRenameSelectedLink}
-            debugLabel="Nom du lien"
           />
             </div>
           </div>
@@ -13552,7 +13279,6 @@ function ContextDetailBlock({
                     onCopy={() => void copyLinkValue(draft.url, getCopiedLinkField(index, "url"))}
                     openable
                     editable={canEditEntry}
-                    debugLabel="URL du lien"
                   />
                   {selectedLinkIsPlatform && (
                     <LinkValueRow
@@ -13566,7 +13292,6 @@ function ContextDetailBlock({
                       onCommit={(value) => saveLinkEntryDraft(index, "streamKey", value)}
                       onCopy={() => void copyLinkValue(draft.streamKey, getCopiedLinkField(index, "streamKey"))}
                       editable={canEditEntry}
-                      debugLabel="Clé de stream"
                     />
                   )}
                 </div>
@@ -13602,7 +13327,6 @@ function ContextDetailBlock({
                 className="truncate"
                 inputClassName="text-amber-950 focus:border-amber-300"
                 editable={canRenameSelectedDocumentGroup}
-                debugLabel="Nom du document"
               />
             </div>
           </div>
@@ -13719,7 +13443,6 @@ function ContextDetailBlock({
             className="truncate"
             inputClassName="text-emerald-950 focus:border-emerald-300"
             editable={canRenameSelectedOption}
-            debugLabel="Nom de l'option"
           />
         </div>
         {canEdit && (
@@ -13816,8 +13539,6 @@ function ContextDetailBlock({
                 value={optionItemInput}
                 onChange={(event) => setOptionItemInput(event.target.value)}
                 placeholder="Nouvelle note"
-                data-keyboard-debug-label="Nouvelle note d'option"
-                aria-label="Nouvelle note d'option"
                 className="min-h-20 w-full resize-none rounded-xl border border-transparent bg-emerald-50/40 px-3 py-2 text-base font-medium text-stone-950 outline-none transition placeholder:text-stone-300 focus:border-emerald-300 focus:bg-white"
               />
               <button disabled={savingOptionItem} className="h-9 w-fit shrink-0 rounded-xl bg-emerald-600 px-3 text-base font-semibold text-white transition hover:bg-emerald-700 disabled:bg-stone-300">
@@ -13837,8 +13558,6 @@ function ContextDetailBlock({
                     rows={3}
                     value={editingOptionItemInput}
                     onChange={(event) => setEditingOptionItemInput(event.target.value)}
-                    data-keyboard-debug-label="Note d'option"
-                    aria-label="Note d'option"
                     className="min-h-20 w-full resize-none rounded-xl border border-transparent bg-emerald-50/40 px-3 py-2 text-base font-medium text-stone-950 outline-none transition placeholder:text-stone-300 focus:border-emerald-300 focus:bg-white"
                     autoFocus
                   />
