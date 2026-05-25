@@ -9301,7 +9301,7 @@ export default function Home() {
   }
 
   return (
-    <main className="relative h-screen h-[100svh] overflow-hidden bg-[var(--app-background)] text-stone-950">
+    <main className="relative h-[var(--app-height)] min-h-[var(--app-height)] overflow-hidden bg-[var(--app-background)] text-stone-950">
       <div
         onDragEnter={(event) => {
           if (!permissions.canManageEvents) return;
@@ -9332,7 +9332,7 @@ export default function Home() {
           }
           openQuoteImportFromDrop(event.dataTransfer, "app-shell");
         }}
-        className="relative mx-auto flex h-full min-h-0 w-full max-w-7xl flex-col px-4 pb-[calc(1.25rem+env(safe-area-inset-bottom))] pt-[calc(1.25rem+env(safe-area-inset-top))] sm:px-6 sm:pb-[calc(1.5rem+env(safe-area-inset-bottom))] sm:pt-[calc(1.5rem+env(safe-area-inset-top))] lg:px-8"
+        className="relative mx-auto flex h-full min-h-0 w-full max-w-7xl flex-col px-4 pb-[calc(1.25rem+env(safe-area-inset-bottom))] pt-[calc(1.25rem+env(safe-area-inset-top)+var(--app-viewport-offset-top))] sm:px-6 sm:pb-[calc(1.5rem+env(safe-area-inset-bottom))] sm:pt-[calc(1.5rem+env(safe-area-inset-top)+var(--app-viewport-offset-top))] lg:px-8"
       >
         <AppHeader
           screen={screen}
@@ -10068,7 +10068,7 @@ function EventSearchOverlay({
       onPointerDown={(pointerEvent) => handleModalBackdropPointerDown(pointerEvent, onClose)}
     >
       <div
-        className={cn(modalPanelClassName, "mx-auto flex h-full w-full max-w-2xl flex-col overflow-hidden p-3 sm:h-auto sm:max-h-[min(760px,calc(100dvh-3rem))]")}
+        className={cn(modalPanelClassName, "mx-auto flex h-full w-full max-w-2xl flex-col overflow-hidden p-3 sm:h-auto sm:max-h-[min(760px,calc(var(--app-height)-3rem))]")}
         onPointerDown={(pointerEvent) => pointerEvent.stopPropagation()}
       >
         <div className="shrink-0 border-b border-stone-100 pb-3">
@@ -10421,7 +10421,7 @@ function YearOverviewOverlay({
   const yearPageStep = getYearPageStep();
 
   return (
-    <div className="fixed inset-0 z-50 overflow-hidden bg-[var(--app-background)] px-2 pb-[calc(1.15rem+env(safe-area-inset-bottom))] pt-[calc(1.25rem+env(safe-area-inset-top))] sm:px-6 sm:pb-[calc(1rem+env(safe-area-inset-bottom))] sm:pt-[calc(1.25rem+env(safe-area-inset-top))] lg:px-8">
+    <div className="fixed inset-x-0 top-0 z-50 h-[var(--app-height)] overflow-hidden bg-[var(--app-background)] px-2 pb-[calc(1.15rem+env(safe-area-inset-bottom))] pt-[calc(1.25rem+env(safe-area-inset-top)+var(--app-viewport-offset-top))] sm:px-6 sm:pb-[calc(1rem+env(safe-area-inset-bottom))] sm:pt-[calc(1.25rem+env(safe-area-inset-top)+var(--app-viewport-offset-top))] lg:px-8">
       <div className="mx-auto flex h-full max-w-7xl flex-col">
         <AppHeader
           screen="calendar"
@@ -14534,7 +14534,7 @@ function ExternalCalendarsSheet({
           modalPanelClassName,
           "flex w-full flex-col",
           isMobileFormView
-            ? "h-[100dvh] max-h-[100dvh] rounded-none px-4 pb-[calc(env(safe-area-inset-bottom)+1rem)] pt-[calc(env(safe-area-inset-top)+1rem)] shadow-none sm:h-auto sm:max-h-[86vh] sm:max-w-2xl sm:rounded-2xl sm:p-5 sm:shadow-sm sm:shadow-black/5"
+            ? "h-[var(--app-height)] max-h-[var(--app-height)] rounded-none px-4 pb-[calc(env(safe-area-inset-bottom)+1rem)] pt-[calc(env(safe-area-inset-top)+var(--app-viewport-offset-top)+1rem)] shadow-none sm:h-auto sm:max-h-[86vh] sm:max-w-2xl sm:rounded-2xl sm:p-5 sm:shadow-sm sm:shadow-black/5"
             : "max-h-[86vh] p-4 sm:max-w-2xl sm:p-5",
         )}
         onPointerDown={(pointerEvent) => pointerEvent.stopPropagation()}
@@ -15722,7 +15722,7 @@ function ExternalCalendarEventDetails({
       onPointerDown={(pointerEvent) => handleModalBackdropPointerDown(pointerEvent, onClose)}
     >
       <div
-        className={cn(modalPanelClassName, "flex max-h-[calc(100dvh-1.5rem)] w-full flex-col overflow-hidden p-4 sm:max-h-[min(760px,calc(100dvh-3rem))] sm:max-w-lg sm:p-5")}
+        className={cn(modalPanelClassName, "flex max-h-[calc(var(--app-height)-1.5rem)] w-full flex-col overflow-hidden p-4 sm:max-h-[min(760px,calc(var(--app-height)-3rem))] sm:max-w-lg sm:p-5")}
         onPointerDown={(pointerEvent) => pointerEvent.stopPropagation()}
       >
         <div className="mb-4 flex shrink-0 items-start justify-between gap-3">
@@ -16957,7 +16957,7 @@ function StatusMessage({ children, tone = "neutral" }: { children: React.ReactNo
 
 function FullScreenStatus({ children, tone = "neutral" }: { children: React.ReactNode; tone?: "neutral" | "error" }) {
   return (
-    <main className="flex h-screen h-[100svh] items-center justify-center bg-[var(--app-background)] p-4 text-stone-950">
+    <main className="flex h-[var(--app-height)] min-h-[var(--app-height)] items-center justify-center bg-[var(--app-background)] p-4 text-stone-950">
       <div
         className={cn(
           "rounded-2xl px-5 py-4 text-base font-semibold",
@@ -16972,7 +16972,7 @@ function FullScreenStatus({ children, tone = "neutral" }: { children: React.Reac
 
 function AuthRecoveryScreen({ message, onReset }: { message: string; onReset: () => void }) {
   return (
-    <main className="flex h-screen h-[100svh] items-center justify-center bg-[var(--app-background)] p-4 text-stone-950">
+    <main className="flex h-[var(--app-height)] min-h-[var(--app-height)] items-center justify-center bg-[var(--app-background)] p-4 text-stone-950">
       <div className="w-full max-w-sm rounded-2xl bg-white px-5 py-5 text-center shadow-sm shadow-black/5">
         <AlertCircle className="mx-auto h-5 w-5 text-rose-600" />
         <p className="mt-3 text-base font-semibold text-rose-700">{message}</p>
@@ -17037,7 +17037,7 @@ function UpdatePasswordScreen({
   }
 
   return (
-    <main className="flex h-screen h-[100svh] items-center justify-center bg-[var(--app-background)] p-4 text-stone-950">
+    <main className="flex h-[var(--app-height)] min-h-[var(--app-height)] items-center justify-center bg-[var(--app-background)] p-4 text-stone-950">
       <form onSubmit={submitPassword} className="w-full max-w-sm rounded-2xl bg-white p-5 shadow-sm shadow-black/5 sm:p-6">
         <div className="mb-6 flex items-center gap-3">
           <img src="/brand/mon-studio-tv-icon.png" alt="Mon Studio TV" className="h-11 w-auto" />
@@ -17159,7 +17159,7 @@ function LoginScreen({ error }: { error: string | null }) {
   }
 
   return (
-    <main className="flex h-screen h-[100svh] items-center justify-center bg-[var(--app-background)] p-4 text-stone-950">
+    <main className="flex h-[var(--app-height)] min-h-[var(--app-height)] items-center justify-center bg-[var(--app-background)] p-4 text-stone-950">
       <form onSubmit={submitLogin} className="w-full max-w-sm rounded-2xl bg-white p-5 shadow-sm shadow-black/5 sm:p-6">
         <div className="mb-6 flex items-center gap-3">
           <img src="/brand/mon-studio-tv-icon.png" alt="Mon Studio TV" className="h-11 w-auto" />

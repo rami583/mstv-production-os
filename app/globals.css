@@ -8,6 +8,8 @@
   --app-background-base: #2f8fe5;
   --app-background: color-mix(in srgb, var(--app-background-base) 4.6%, white);
   --app-weekend-background: color-mix(in srgb, var(--app-background-base) 2.6%, white);
+  --app-height: 100svh;
+  --app-viewport-offset-top: 0px;
   --surface-card: #ffffff;
   --surface-muted: color-mix(in srgb, var(--app-background-base) 3%, white);
   --surface-soft-border: rgba(214, 205, 193, 0.38);
@@ -33,12 +35,12 @@ html {
 
 body {
   margin: 0;
-  height: 100%;
-  min-height: 100vh;
-  min-height: 100svh;
+  height: var(--app-height);
+  min-height: var(--app-height);
   overflow: hidden;
   font-family: var(--font-ui);
   background: var(--app-background);
+  overscroll-behavior: none;
 }
 
 button,

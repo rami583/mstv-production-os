@@ -36,7 +36,7 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="fr">
-      <body className="min-h-screen bg-[#f7f9fb] text-stone-950 antialiased">
+      <body className="bg-[var(--app-background)] text-stone-950 antialiased">
         <PwaRegistration />
         {children}
       </body>

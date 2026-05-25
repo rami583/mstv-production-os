@@ -206,7 +206,7 @@ export function EventEditorModal({
     <div className={cn(modalBackdropClassName, modalSheetPositionClassName)} onPointerDown={(pointerEvent) => handleModalBackdropPointerDown(pointerEvent, onClose)}>
       <form
         onSubmit={handleSubmit}
-        className={cn(modalPanelClassName, "flex max-h-[calc(100dvh-1.5rem)] w-full flex-col p-4 sm:max-h-[calc(100dvh-3rem)] sm:max-w-xl sm:p-6")}
+        className={cn(modalPanelClassName, "flex max-h-[calc(var(--app-height)-1.5rem)] w-full flex-col p-4 sm:max-h-[calc(var(--app-height)-3rem)] sm:max-w-xl sm:p-6")}
         onPointerDownCapture={handlePanelPointerDown}
         onPointerDown={(pointerEvent) => pointerEvent.stopPropagation()}
       >

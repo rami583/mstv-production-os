@@ -9,6 +9,49 @@ function isCapacitorRuntime() {
 
 export function PwaRegistration() {
   useEffect(() => {
+    let frameId: number | null = null;
+
+    function updateViewportHeight() {
+      if (frameId !== null) {
+        window.cancelAnimationFrame(frameId);
+      }
+
+      frameId = window.requestAnimationFrame(() => {
+        frameId = null;
+        const viewportHeight = window.visualViewport?.height ?? window.innerHeight;
+        document.documentElement.style.setProperty("--app-height", `${Math.round(viewportHeight)}px`);
+        document.documentElement.style.setProperty("--app-viewport-offset-top", `${Math.max(0, Math.round(window.visualViewport?.offsetTop ?? 0))}px`);
+
+        if (document.scrollingElement && document.scrollingElement.scrollTop !== 0) {
+          document.scrollingElement.scrollTop = 0;
+        }
+      });
+    }
+
+    updateViewportHeight();
+
+    window.addEventListener("resize", updateViewportHeight);
+    window.addEventListener("orientationchange", updateViewportHeight);
+    window.addEventListener("focus", updateViewportHeight);
+    window.addEventListener("blur", updateViewportHeight);
+    window.visualViewport?.addEventListener("resize", updateViewportHeight);
+    window.visualViewport?.addEventListener("scroll", updateViewportHeight);
+
+    return () => {
+      if (frameId !== null) {
+        window.cancelAnimationFrame(frameId);
+      }
+
+      window.removeEventListener("resize", updateViewportHeight);
+      window.removeEventListener("orientationchange", updateViewportHeight);
+      window.removeEventListener("focus", updateViewportHeight);
+      window.removeEventListener("blur", updateViewportHeight);
+      window.visualViewport?.removeEventListener("resize", updateViewportHeight);
+      window.visualViewport?.removeEventListener("scroll", updateViewportHeight);
+    };
+  }, []);
+
+  useEffect(() => {
     if (!("serviceWorker" in navigator)) return;
     if (isCapacitorRuntime()) {
       navigator.serviceWorker.getRegistrations().then((registrations) => {
