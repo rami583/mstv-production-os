@@ -7,6 +7,8 @@ function isCapacitorRuntime() {
   return window.location.protocol === "capacitor:" || Boolean(maybeCapacitor?.isNativePlatform?.());
 }
 
+const appBuildId = process.env.NEXT_PUBLIC_APP_BUILD_ID ?? "local";
+
 export function PwaRegistration() {
   useEffect(() => {
     let frameId: number | null = null;
@@ -75,7 +77,11 @@ export function PwaRegistration() {
 
     if (process.env.NODE_ENV !== "production") return;
 
-    navigator.serviceWorker.register("/sw.js").catch((error) => {
+    const swUrl = `/sw.js?v=${encodeURIComponent(appBuildId)}`;
+
+    navigator.serviceWorker.register(swUrl).then((registration) => {
+      void registration.update();
+    }).catch((error) => {
       console.error("Failed to register MSTV PWA service worker", error);
     });
   }, []);
