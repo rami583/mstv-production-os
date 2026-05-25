@@ -223,6 +223,34 @@ export function EventEditorModal({
             timeKeyboardActive ? "pb-24 sm:pb-0" : "pb-1",
           )}
         >
+          {((!isEditing && selectableSyncCalendars.length > 0) || Boolean(currentExternalCalendarId)) && (
+            <Field label="Calendrier">
+              <div className="space-y-1.5">
+                <select
+                  value={form.syncExternalCalendarId ?? selectableSyncCalendars[0]?.id ?? ""}
+                  onChange={(selectEvent) => {
+                    const nextValue = selectEvent.target.value || null;
+                    setForm((current) => ({
+                      ...current,
+                      syncExternalCalendarId: nextValue,
+                    }));
+                  }}
+                  disabled={!isEditing && selectableSyncCalendars.length === 0}
+                  className={cn(formInputClassName, selectableSyncCalendars.length === 0 && "bg-stone-50 text-stone-400")}
+                >
+                  {selectableSyncCalendars.map((calendar) => (
+                    <option key={calendar.id} value={calendar.id}>
+                      {calendar.name}
+                    </option>
+                  ))}
+                </select>
+                {!isEditing && selectableSyncCalendars.length === 0 ? (
+                  <p className="text-sm font-semibold text-stone-400">Aucun calendrier disponible.</p>
+                ) : null}
+              </div>
+            </Field>
+          )}
+
           <div className="space-y-1">
             <div className="flex items-center justify-between gap-3">
               <span className="text-sm font-semibold text-stone-500">Date</span>
@@ -285,34 +313,6 @@ export function EventEditorModal({
               className={cn(formInputClassName, "min-h-24 resize-none py-3")}
             />
           </Field>
-
-          {((!isEditing && selectableSyncCalendars.length > 0) || Boolean(currentExternalCalendarId)) && (
-            <Field label="Calendrier">
-              <div className="space-y-1.5">
-                <select
-                  value={form.syncExternalCalendarId ?? selectableSyncCalendars[0]?.id ?? ""}
-                  onChange={(selectEvent) => {
-                    const nextValue = selectEvent.target.value || null;
-                    setForm((current) => ({
-                      ...current,
-                      syncExternalCalendarId: nextValue,
-                    }));
-                  }}
-                  disabled={!isEditing && selectableSyncCalendars.length === 0}
-                  className={cn(formInputClassName, selectableSyncCalendars.length === 0 && "bg-stone-50 text-stone-400")}
-                >
-                  {selectableSyncCalendars.map((calendar) => (
-                    <option key={calendar.id} value={calendar.id}>
-                      {calendar.name}
-                    </option>
-                  ))}
-                </select>
-                {!isEditing && selectableSyncCalendars.length === 0 ? (
-                  <p className="text-sm font-semibold text-stone-400">Aucun calendrier disponible.</p>
-                ) : null}
-              </div>
-            </Field>
-          )}
         </div>
 
         {error && <div className="mt-4 rounded-2xl bg-rose-50 px-4 py-3 text-base font-medium text-rose-700">{error}</div>}

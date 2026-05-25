@@ -75,6 +75,7 @@ import {
   normalizeEventTimeInput,
   sanitizeTimeDraft,
   toTimeInputValue,
+  type EventEditorExternalCalendar,
   type EventEditorFormInput,
 } from "@/lib/events/editor";
 import {
@@ -2435,8 +2436,8 @@ function getQuoteImportDifferences(existingEvent: ProductionEvent, input: Create
 
   addDifference("Client", existingEvent.clientName, input.clientName);
   addDifference("Date", formatFullDate(existingEvent.date), formatFullDate(input.date));
-  addDifference("Début", toTimeInputValue(existingEvent.startTime), input.startTime);
-  addDifference("Fin", toTimeInputValue(existingEvent.endTime), input.endTime);
+  addDifference("Début", toTimeInputValue(existingEvent.clientArrivalTime), input.clientArrivalTime);
+  addDifference("Fin", toTimeInputValue(existingEvent.endOfDayTime), input.endOfDayTime);
 
   const existingOptionKeys = new Set(existingEvent.options.map((option) => normalizeLabel(option.label)));
   const importedOptionKeys = new Set((input.optionLabels ?? []).map(normalizeLabel));
@@ -9607,6 +9608,7 @@ export default function Home() {
           online={online}
           initialFile={quoteImportFile}
           selectedDateKey={selectedDateKey}
+          syncCalendars={writableExternalCalendars}
           events={visibleProductionEvents}
           onClose={() => {
             setQuoteImportOpen(false);
@@ -13736,6 +13738,7 @@ function QuoteImportModal({
   online,
   initialFile,
   selectedDateKey,
+  syncCalendars,
   events,
   onClose,
   onCreateEvent,
@@ -13746,6 +13749,7 @@ function QuoteImportModal({
   online: boolean;
   initialFile?: File | null;
   selectedDateKey: string;
+  syncCalendars: EventEditorExternalCalendar[];
   events: ProductionEvent[];
   onClose: () => void;
   onCreateEvent: (input: CreateEventInput) => Promise<void>;
@@ -13765,6 +13769,7 @@ function QuoteImportModal({
     endOfDayTime: "",
     location: "",
     notes: "",
+    syncExternalCalendarId: syncCalendars[0]?.id ?? null,
     optionLabels: [],
   });
   const [serviceText, setServiceText] = useState("");
@@ -13777,8 +13782,29 @@ function QuoteImportModal({
   const [dropActive, setDropActive] = useState(false);
   const initialFileProcessedRef = useRef<File | null>(null);
 
+  useEffect(() => {
+    if (form.syncExternalCalendarId || syncCalendars.length === 0) return;
+    setForm((current) => ({
+      ...current,
+      syncExternalCalendarId: current.syncExternalCalendarId ?? syncCalendars[0]?.id ?? null,
+    }));
+  }, [form.syncExternalCalendarId, syncCalendars]);
+
   function updateField<Key extends keyof CreateEventInput>(key: Key, value: CreateEventInput[Key]) {
     setForm((current) => ({ ...current, [key]: value }));
+    if (key === "syncExternalCalendarId") {
+      setResolution((current) =>
+        current
+          ? {
+              ...current,
+              input: {
+                ...current.input,
+                syncExternalCalendarId: value as string | null,
+              },
+            }
+          : current,
+      );
+    }
   }
 
   async function handleFile(file: File | null) {
@@ -13825,22 +13851,23 @@ function QuoteImportModal({
       }
 
       const extracted = payload.extracted;
-      setForm({
+      setForm((current) => ({
         clientName: extracted.clientName,
         eventName: "Événement",
         date: extracted.date,
         isAllDay: false,
-        clientArrivalTime: "",
-        startTime: extracted.startTime,
-        endTime: extracted.endTime,
-        endOfDayTime: "",
+        clientArrivalTime: extracted.startTime,
+        startTime: "",
+        endTime: "",
+        endOfDayTime: extracted.endTime,
         location: "",
         notes: "",
+        syncExternalCalendarId: current.syncExternalCalendarId ?? syncCalendars[0]?.id ?? null,
         optionLabels: extracted.services,
         quoteReference: extracted.quoteReference || null,
         quoteVersion: extracted.quoteVersion || null,
         sourceQuoteText: extracted.sourceQuoteText || null,
-      });
+      }));
       setServiceText(extracted.services.join("\n"));
       setResolution(null);
       setStep("review");
@@ -13940,6 +13967,24 @@ function QuoteImportModal({
             Fermer
           </button>
         </div>
+
+        {step !== "upload" && syncCalendars.length > 0 && (
+          <div className="mb-4">
+            <Field label="Calendrier">
+              <select
+                value={form.syncExternalCalendarId ?? syncCalendars[0]?.id ?? ""}
+                onChange={(selectEvent) => updateField("syncExternalCalendarId", selectEvent.target.value || null)}
+                className={formInputClassName}
+              >
+                {syncCalendars.map((calendar) => (
+                  <option key={calendar.id} value={calendar.id}>
+                    {calendar.name}
+                  </option>
+                ))}
+              </select>
+            </Field>
+          </div>
+        )}
 
         {step === "upload" ? (
           <label
@@ -14050,19 +14095,19 @@ function QuoteImportModal({
 
             <div className="mt-3 grid grid-cols-2 gap-3">
               <Field label="Début">
-                <TimeTextInput value={form.startTime} onChange={(value) => updateField("startTime", value)} className={formInputClassName} />
+                <TimeTextInput value={form.clientArrivalTime} onChange={(value) => updateField("clientArrivalTime", value)} className={formInputClassName} />
               </Field>
               <Field label="Fin">
-                <TimeTextInput value={form.endTime} onChange={(value) => updateField("endTime", value)} className={formInputClassName} />
+                <TimeTextInput value={form.endOfDayTime} onChange={(value) => updateField("endOfDayTime", value)} className={formInputClassName} />
               </Field>
             </div>
 
             <div className="mt-3 grid grid-cols-2 gap-3">
               <Field label="Début live/tournage">
-                <TimeTextInput value={form.clientArrivalTime} onChange={(value) => updateField("clientArrivalTime", value)} className={formInputClassName} />
+                <TimeTextInput value={form.startTime} onChange={(value) => updateField("startTime", value)} className={formInputClassName} />
               </Field>
               <Field label="Fin live/tournage">
-                <TimeTextInput value={form.endOfDayTime} onChange={(value) => updateField("endOfDayTime", value)} className={formInputClassName} />
+                <TimeTextInput value={form.endTime} onChange={(value) => updateField("endTime", value)} className={formInputClassName} />
               </Field>
             </div>
 
