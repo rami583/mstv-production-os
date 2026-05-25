@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, type ComponentType, type FormEvent, type PointerEvent, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ComponentType, type FormEvent, type PointerEvent, type ReactNode } from "react";
 import {
   getCurrentEditorExternalCalendarId,
   getEventEditorInitialForm,
@@ -147,6 +147,8 @@ export function EventEditorModal({
   const [error, setError] = useState<string | null>(null);
   const [datePickerOpen, setDatePickerOpen] = useState(false);
   const [timeKeyboardActive, setTimeKeyboardActive] = useState(false);
+  const [textKeyboardActive, setTextKeyboardActive] = useState(false);
+  const scrollContainerRef = useRef<HTMLDivElement | null>(null);
   const selectableSyncCalendars = getSelectableEditorSyncCalendars({
     event,
     syncCalendars,
@@ -189,6 +191,42 @@ export function EventEditorModal({
       document.activeElement.blur();
     }
     setTimeKeyboardActive(false);
+    setTextKeyboardActive(false);
+  }
+
+  function scrollFocusedFieldIntoView(element: HTMLElement) {
+    const scrollContainer = scrollContainerRef.current;
+    if (!scrollContainer) {
+      window.setTimeout(() => element.scrollIntoView({ block: "center", behavior: "smooth" }), 80);
+      return;
+    }
+    const modalScrollContainer = scrollContainer;
+
+    function scrollWithinModal(behavior: ScrollBehavior) {
+      const containerBounds = modalScrollContainer.getBoundingClientRect();
+      const fieldBounds = element.getBoundingClientRect();
+      const fieldTop = fieldBounds.top - containerBounds.top + modalScrollContainer.scrollTop;
+      const fieldHeight = fieldBounds.height;
+      const targetTop = fieldTop - Math.max(24, (modalScrollContainer.clientHeight - fieldHeight) / 2);
+      const maxScrollTop = Math.max(0, modalScrollContainer.scrollHeight - modalScrollContainer.clientHeight);
+
+      modalScrollContainer.scrollTo({
+        top: Math.min(maxScrollTop, Math.max(0, targetTop)),
+        behavior,
+      });
+    }
+
+    window.setTimeout(() => scrollWithinModal("smooth"), 80);
+    window.setTimeout(() => scrollWithinModal("auto"), 260);
+  }
+
+  function handleTextFieldFocus(element: HTMLElement) {
+    setTextKeyboardActive(true);
+    scrollFocusedFieldIntoView(element);
+  }
+
+  function handleTextFieldBlur() {
+    setTextKeyboardActive(false);
   }
 
   function handlePanelPointerDown(pointerEvent: PointerEvent<HTMLFormElement>) {
@@ -198,9 +236,11 @@ export function EventEditorModal({
 
     activeElement.blur();
     setTimeKeyboardActive(false);
+    setTextKeyboardActive(false);
   }
 
   useEscapeToClose(onClose);
+  const editorKeyboardActive = timeKeyboardActive || textKeyboardActive;
 
   return (
     <div className={cn(modalBackdropClassName, modalSheetPositionClassName)} onPointerDown={(pointerEvent) => handleModalBackdropPointerDown(pointerEvent, onClose)}>
@@ -218,9 +258,10 @@ export function EventEditorModal({
         </div>
 
         <div
+          ref={scrollContainerRef}
           className={cn(
             "min-h-0 flex-1 space-y-3 overflow-y-auto pr-0.5 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden",
-            timeKeyboardActive ? "pb-24 sm:pb-0" : "pb-1",
+            editorKeyboardActive ? "pb-28 sm:pb-0" : "pb-1",
           )}
         >
           {((!isEditing && selectableSyncCalendars.length > 0) || Boolean(currentExternalCalendarId)) && (
@@ -275,10 +316,22 @@ export function EventEditorModal({
 
           <div className="grid gap-3 sm:grid-cols-2">
             <Field label="Événement">
-              <input value={form.clientName} onChange={(inputEvent) => updateField("clientName", inputEvent.target.value)} className={formInputClassName} />
+              <input
+                value={form.clientName}
+                onChange={(inputEvent) => updateField("clientName", inputEvent.target.value)}
+                onFocus={(inputEvent) => handleTextFieldFocus(inputEvent.currentTarget)}
+                onBlur={handleTextFieldBlur}
+                className={formInputClassName}
+              />
             </Field>
             <Field label="Titre">
-              <input value={form.eventName} onChange={(inputEvent) => updateField("eventName", inputEvent.target.value)} className={formInputClassName} />
+              <input
+                value={form.eventName}
+                onChange={(inputEvent) => updateField("eventName", inputEvent.target.value)}
+                onFocus={(inputEvent) => handleTextFieldFocus(inputEvent.currentTarget)}
+                onBlur={handleTextFieldBlur}
+                className={formInputClassName}
+              />
             </Field>
           </div>
 
@@ -303,13 +356,21 @@ export function EventEditorModal({
           </div>
 
           <Field label="Lieu">
-            <input value={form.location} onChange={(inputEvent) => updateField("location", inputEvent.target.value)} className={formInputClassName} />
+            <input
+              value={form.location}
+              onChange={(inputEvent) => updateField("location", inputEvent.target.value)}
+              onFocus={(inputEvent) => handleTextFieldFocus(inputEvent.currentTarget)}
+              onBlur={handleTextFieldBlur}
+              className={formInputClassName}
+            />
           </Field>
 
           <Field label="Notes">
             <textarea
               value={form.notes}
               onChange={(inputEvent) => updateField("notes", inputEvent.target.value)}
+              onFocus={(inputEvent) => handleTextFieldFocus(inputEvent.currentTarget)}
+              onBlur={handleTextFieldBlur}
               className={cn(formInputClassName, "min-h-24 resize-none py-3")}
             />
           </Field>
