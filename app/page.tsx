@@ -55,6 +55,7 @@ import {
   type TransitionEvent as ReactTransitionEvent,
   type WheelEvent as ReactWheelEvent,
 } from "react";
+import { flushSync } from "react-dom";
 import { Card } from "@/components/ui/card";
 import { EventEditorModal } from "@/components/events/EventEditorModal";
 import type { Session } from "@supabase/supabase-js";
@@ -12821,7 +12822,7 @@ function MobileItemKeyboardEditor({
 
   return (
     <form
-      className="fixed inset-x-3 bottom-[calc(env(safe-area-inset-bottom)+0.75rem)] z-[120] rounded-2xl bg-white p-3 shadow-[0_12px_40px_rgba(28,25,23,0.16)] sm:hidden"
+      className="fixed bottom-[calc(env(safe-area-inset-bottom)+0.75rem)] left-1/2 z-[120] w-[min(calc(100vw-1.5rem),24rem)] -translate-x-1/2 rounded-2xl bg-white p-3 shadow-[0_12px_40px_rgba(28,25,23,0.16)] sm:hidden"
       onSubmit={(submitEvent) => {
         submitEvent.preventDefault();
         void saveEditor();
@@ -12846,16 +12847,18 @@ function MobileItemKeyboardEditor({
           ref={(node) => {
             fieldRef.current = node;
           }}
+          data-mobile-item-keyboard-editor-field
           value={draft}
           onChange={(event) => setDraft(event.target.value)}
           rows={3}
-          className={cn("max-h-32 min-h-20 w-full resize-none rounded-xl border border-transparent bg-stone-50 px-3 py-2 text-base font-medium text-stone-950 outline-none transition focus:bg-white", tone.focus)}
+          className={cn("max-h-32 min-h-20 w-full resize-none rounded-xl border border-transparent bg-stone-50 px-3 py-2 text-base font-medium leading-relaxed text-stone-950 outline-none transition focus:bg-white", tone.focus)}
         />
       ) : (
         <input
           ref={(node) => {
             fieldRef.current = node;
           }}
+          data-mobile-item-keyboard-editor-field
           value={draft}
           onChange={(event) => setDraft(event.target.value)}
           className={cn("h-10 w-full rounded-xl border border-transparent bg-stone-50 px-3 text-base font-semibold text-stone-950 outline-none transition focus:bg-white", tone.focus)}
@@ -13029,7 +13032,15 @@ function ContextDetailBlock({
   }, [selectedOptionId, selectedOption?.completedByInitials, selectedOption?.completedByLabel, selectedOption?.status]);
 
   function openMobileItemEditor(config: MobileItemKeyboardEditorConfig) {
-    setMobileItemKeyboardEditor(config);
+    flushSync(() => {
+      setMobileItemKeyboardEditor(config);
+    });
+
+    const field = document.querySelector<HTMLElement>("[data-mobile-item-keyboard-editor-field]");
+    field?.focus();
+    if (field instanceof HTMLInputElement || field instanceof HTMLTextAreaElement) {
+      field.select();
+    }
   }
 
   function getMobileTitleEditHandler(input: {
