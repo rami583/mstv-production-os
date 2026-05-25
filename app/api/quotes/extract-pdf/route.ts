@@ -164,12 +164,12 @@ function parseFrenchTimeMatch(hours: string, minutes?: string) {
 }
 
 function parseFrenchTimeRange(value: string) {
-  const match = value.match(/\b(\d{1,2})\s*(?:h|H|:)\s*(\d{2})?\s*(?:-|–|—|à|a|jusqu(?:'|’)?a)\s*(\d{1,2})\s*(?:h|H|:)\s*(\d{2})?\b/i);
+  const match = value.match(/\b(?:de\s+)?(\d{1,2})\s*(?:(?:h|H)\s*(\d{2})?|:\s*(\d{2}))\s*(?:-|–|—|à|a|jusqu(?:'|’)?a)\s*(\d{1,2})\s*(?:(?:h|H)\s*(\d{2})?|:\s*(\d{2}))\b/i);
   if (!match) return { startTime: "", endTime: "" };
 
   return {
-    startTime: parseFrenchTimeMatch(match[1], match[2]),
-    endTime: parseFrenchTimeMatch(match[3], match[4]),
+    startTime: parseFrenchTimeMatch(match[1], match[2] ?? match[3]),
+    endTime: parseFrenchTimeMatch(match[4], match[5] ?? match[6]),
   };
 }
 

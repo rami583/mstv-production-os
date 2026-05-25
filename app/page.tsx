@@ -1876,12 +1876,12 @@ function parseFrenchTimeMatch(hours: string, minutes?: string) {
 }
 
 function parseFrenchTimeRange(value: string) {
-  const match = value.match(/\b(\d{1,2})\s*(?:h|H|:)\s*(\d{2})?\s*(?:-|–|—|à|a|jusqu(?:'|’)?a)\s*(\d{1,2})\s*(?:h|H|:)\s*(\d{2})?\b/i);
+  const match = value.match(/\b(?:de\s+)?(\d{1,2})\s*(?:(?:h|H)\s*(\d{2})?|:\s*(\d{2}))\s*(?:-|–|—|à|a|jusqu(?:'|’)?a)\s*(\d{1,2})\s*(?:(?:h|H)\s*(\d{2})?|:\s*(\d{2}))\b/i);
   if (!match) return { startTime: "", endTime: "" };
 
   return {
-    startTime: parseFrenchTimeMatch(match[1], match[2]),
-    endTime: parseFrenchTimeMatch(match[3], match[4]),
+    startTime: parseFrenchTimeMatch(match[1], match[2] ?? match[3]),
+    endTime: parseFrenchTimeMatch(match[4], match[5] ?? match[6]),
   };
 }
 
@@ -2119,10 +2119,10 @@ function extractQuoteFields(text: string, fallbackDate: string, fileName: string
     eventName: "Événement",
     date,
     isAllDay: false,
-    clientArrivalTime: productionTimeRange.startTime,
-    startTime: "",
-    endTime: "",
-    endOfDayTime: productionTimeRange.endTime,
+    clientArrivalTime: "",
+    startTime: productionTimeRange.startTime,
+    endTime: productionTimeRange.endTime,
+    endOfDayTime: "",
     services,
     quoteReference,
     quoteVersion,
@@ -13830,10 +13830,10 @@ function QuoteImportModal({
         eventName: "Événement",
         date: extracted.date,
         isAllDay: false,
-        clientArrivalTime: extracted.startTime,
-        startTime: "",
-        endTime: "",
-        endOfDayTime: extracted.endTime,
+        clientArrivalTime: "",
+        startTime: extracted.startTime,
+        endTime: extracted.endTime,
+        endOfDayTime: "",
         location: "",
         notes: "",
         optionLabels: extracted.services,
@@ -14046,11 +14046,23 @@ function QuoteImportModal({
                   {formatFullDate(form.date)}
                 </button>
               </Field>
+            </div>
+
+            <div className="mt-3 grid grid-cols-2 gap-3">
               <Field label="Début">
                 <TimeTextInput value={form.startTime} onChange={(value) => updateField("startTime", value)} className={formInputClassName} />
               </Field>
               <Field label="Fin">
                 <TimeTextInput value={form.endTime} onChange={(value) => updateField("endTime", value)} className={formInputClassName} />
+              </Field>
+            </div>
+
+            <div className="mt-3 grid grid-cols-2 gap-3">
+              <Field label="Début live/tournage">
+                <TimeTextInput value={form.clientArrivalTime} onChange={(value) => updateField("clientArrivalTime", value)} className={formInputClassName} />
+              </Field>
+              <Field label="Fin live/tournage">
+                <TimeTextInput value={form.endOfDayTime} onChange={(value) => updateField("endOfDayTime", value)} className={formInputClassName} />
               </Field>
             </div>
 
