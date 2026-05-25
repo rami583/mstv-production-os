@@ -1144,6 +1144,36 @@ function getCalendarVisibilityViewer(profile: UserProfile | null, fallbackId?: s
   };
 }
 
+function getVisibleProductionEventsForSelection(events: ProductionEvent[], externalCalendars: ExternalCalendar[], viewer: CalendarVisibilityViewer) {
+  const visibilityState = buildExternalCalendarVisibilityState(externalCalendars, viewer);
+  return events
+    .filter((event) => isProductionEventVisibleByCalendarState(event, visibilityState, { nativeMstvIcsImportSource }))
+    .sort((a, b) => eventSortValue(a) - eventSortValue(b));
+}
+
+function resolveSelectedEventIdForVisibleEvents(input: {
+  currentSelectedId: string | null;
+  requestedSelectedId?: string | null;
+  events: ProductionEvent[];
+  externalCalendars: ExternalCalendar[];
+  viewer: CalendarVisibilityViewer;
+}) {
+  if (input.requestedSelectedId === null) return null;
+
+  const visibleEvents = getVisibleProductionEventsForSelection(input.events, input.externalCalendars, input.viewer);
+
+  if (input.requestedSelectedId !== undefined) {
+    if (visibleEvents.some((event) => event.id === input.requestedSelectedId)) return input.requestedSelectedId;
+    return visibleEvents[0]?.id ?? null;
+  }
+
+  if (input.currentSelectedId && visibleEvents.some((event) => event.id === input.currentSelectedId)) {
+    return input.currentSelectedId;
+  }
+
+  return visibleEvents[0]?.id ?? null;
+}
+
 function prepareCachedAppData(data: Omit<CachedAppData, "cachedAt">, viewer: CalendarVisibilityViewer): Omit<CachedAppData, "cachedAt"> {
   const visibilityState = buildExternalCalendarVisibilityState(data.externalCalendars, viewer);
   const sortedProductionEvents = data.events
@@ -3588,8 +3618,12 @@ export default function Home() {
       setExternalCalendars(cachedState.appData.externalCalendars);
       setExternalCalendarEvents(cachedState.appData.externalCalendarEvents);
       setSelectedId((current) => {
-        if (current && cachedState.appData?.events.some((event) => event.id === current)) return current;
-        return cachedState.appData?.events[0]?.id ?? null;
+        return resolveSelectedEventIdForVisibleEvents({
+          currentSelectedId: current,
+          events: cachedState.appData?.events ?? [],
+          externalCalendars: cachedState.appData?.externalCalendars ?? [],
+          viewer: getCalendarVisibilityViewer(cachedState.profile, cachedState.session?.user.id ?? null),
+        });
       });
     }
 
@@ -3671,7 +3705,10 @@ export default function Home() {
     [events, isProductionEventVisible],
   );
   const chronologicalEvents = useMemo(() => [...visibleProductionEvents].sort((a, b) => eventSortValue(a) - eventSortValue(b)), [visibleProductionEvents]);
-  const selectedEvent = useMemo(() => chronologicalEvents.find((item) => item.id === selectedId) ?? chronologicalEvents[0] ?? null, [chronologicalEvents, selectedId]);
+  const selectedEvent = useMemo(() => {
+    if (selectedId) return chronologicalEvents.find((item) => item.id === selectedId) ?? null;
+    return chronologicalEvents[0] ?? null;
+  }, [chronologicalEvents, selectedId]);
   const selectedEventIndex = selectedEvent ? chronologicalEvents.findIndex((item) => item.id === selectedEvent.id) : -1;
   const hasPreviousEvent = selectedEventIndex > 0;
   const hasNextEvent = selectedEventIndex >= 0 && selectedEventIndex < chronologicalEvents.length - 1;
@@ -4094,8 +4131,12 @@ export default function Home() {
         setExternalCalendars(cachedData.externalCalendars);
         setExternalCalendarEvents(cachedData.externalCalendarEvents);
         setSelectedId((current) => {
-          if (current && cachedData.events.some((event) => event.id === current)) return current;
-          return cachedData.events[0]?.id ?? null;
+          return resolveSelectedEventIdForVisibleEvents({
+            currentSelectedId: current,
+            events: cachedData.events,
+            externalCalendars: cachedData.externalCalendars,
+            viewer: getCalendarVisibilityViewer(profile, authSession.user.id),
+          });
         });
       }
       setLoading(false);
@@ -4247,9 +4288,13 @@ export default function Home() {
       setExternalCalendars((current) => mergeExternalCalendarList(current, nextExternalCalendars));
       setExternalCalendarEvents(nextExternalEvents);
       setSelectedId((current) => {
-        if (nextSelectedId !== undefined) return nextSelectedId;
-        if (current && nextEvents.some((event) => event.id === current)) return current;
-        return nextEvents[0]?.id ?? null;
+        return resolveSelectedEventIdForVisibleEvents({
+          currentSelectedId: current,
+          requestedSelectedId: nextSelectedId,
+          events: nextEvents,
+          externalCalendars: nextExternalCalendars,
+          viewer: getCalendarVisibilityViewer(profile, authSession?.user.id ?? null),
+        });
       });
     } catch (supabaseError) {
       const cachedData = authSession?.user.id ? getCachedAppData(authSession.user.id) : null;
@@ -4258,9 +4303,13 @@ export default function Home() {
         setExternalCalendars(cachedData.externalCalendars);
         setExternalCalendarEvents(cachedData.externalCalendarEvents);
         setSelectedId((current) => {
-          if (nextSelectedId !== undefined) return nextSelectedId;
-          if (current && cachedData.events.some((event) => event.id === current)) return current;
-          return cachedData.events[0]?.id ?? null;
+          return resolveSelectedEventIdForVisibleEvents({
+            currentSelectedId: current,
+            requestedSelectedId: nextSelectedId,
+            events: cachedData.events,
+            externalCalendars: cachedData.externalCalendars,
+            viewer: getCalendarVisibilityViewer(profile, authSession?.user.id ?? null),
+          });
         });
         setError(null);
         setOnline(false);
@@ -4315,8 +4364,17 @@ export default function Home() {
         fetchExternalCalendars(),
         fetchExternalCalendarEvents(),
       ]);
+      const nextMergedCalendars = mergeExternalCalendarList(externalCalendars, nextCalendars);
       setExternalCalendars((current) => mergeExternalCalendarList(current, nextCalendars));
       setExternalCalendarEvents(nextEvents);
+      setSelectedId((current) =>
+        resolveSelectedEventIdForVisibleEvents({
+          currentSelectedId: current,
+          events,
+          externalCalendars: nextMergedCalendars,
+          viewer: getCalendarVisibilityViewer(profile, authSession?.user.id ?? null),
+        }),
+      );
     } catch (calendarError) {
       console.error("Failed to load external calendars. Apply supabase/migrations/023_external_calendars.sql if needed.", calendarError);
       setExternalCalendarSettingsError("Impossible de charger les calendriers.");
