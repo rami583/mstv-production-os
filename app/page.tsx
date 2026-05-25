@@ -154,6 +154,25 @@ type GooglePullSyncErrorPayload = {
     | null;
 };
 type GooglePullSyncApiResponse = Partial<ExternalCalendarSyncResult> & GooglePullSyncErrorPayload;
+type ApplePullSyncDiagnostics = {
+  triggerSource?: string;
+  routeStartedAt?: string;
+  routeFinishedAt?: string;
+  routeDurationMs?: number;
+  requestedSyncWindow?: boolean;
+  syncWindowStart?: string;
+  syncWindowEnd?: string;
+  enabledAppleCalendars?: number;
+  calDavRequestStartedAt?: string | null;
+  calDavRequestFinishedAt?: string | null;
+  calDavDurationMs?: number;
+  calDavEventsFetched?: number;
+  rawResponseCount?: number;
+};
+type ApplePullSyncApiResponse = GooglePullSyncApiResponse & {
+  skipped?: number;
+  diagnostics?: ApplePullSyncDiagnostics;
+};
 type AppleConnectFailurePayload = {
   error?: string | null;
   message?: string | null;
@@ -1357,6 +1376,13 @@ function getMonthSyncWindow(monthDate: Date) {
   const start = new Date(monthDate.getFullYear(), monthDate.getMonth() - 1, 1);
   const end = new Date(monthDate.getFullYear(), monthDate.getMonth() + 2, 1);
   return { start, end };
+}
+
+function getProductionEventSignature(events: ProductionEvent[]) {
+  return events
+    .map((event) => `${event.id}:${event.updatedAt ?? ""}:${event.deletedAt ?? ""}`)
+    .sort()
+    .join("|");
 }
 
 function isDateKeyInMarker(dateKey: string, marker: CalendarMarker) {
@@ -3602,6 +3628,7 @@ export default function Home() {
   const appleAutoSyncLaunchKeyRef = useRef<string | null>(null);
   const selectedIdRef = useRef<string | null>(null);
   const visibleAppleSyncWindowRef = useRef<{ start: Date; end: Date } | null>(null);
+  const visibleProductionEventsRef = useRef<ProductionEvent[]>([]);
   const onlineRef = useRef(online);
   const processPendingSyncQueueRef = useRef<((options?: { forceOnline?: boolean }) => Promise<void>) | null>(null);
   const googleCalendarBootstrapKeyRef = useRef<string | null>(null);
@@ -3773,6 +3800,10 @@ export default function Home() {
   useEffect(() => {
     visibleAppleSyncWindowRef.current = visibleAppleSyncWindow;
   }, [visibleAppleSyncWindow]);
+
+  useEffect(() => {
+    visibleProductionEventsRef.current = visibleProductionEvents;
+  }, [visibleProductionEvents]);
 
   useEffect(() => {
     setEventDetailCarousel(null);
@@ -4331,6 +4362,12 @@ export default function Home() {
           viewer: getCalendarVisibilityViewer(profile, authSession?.user.id ?? null),
         });
       });
+      return {
+        events: nextEvents,
+        externalCalendars: nextExternalCalendars,
+        externalCalendarEvents: nextExternalEvents,
+        fromCache: false,
+      };
     } catch (supabaseError) {
       const cachedData = authSession?.user.id ? getCachedAppData(authSession.user.id) : null;
       if (cachedData && isNetworkOrUnavailableError(supabaseError)) {
@@ -4348,9 +4385,16 @@ export default function Home() {
         });
         setError(null);
         setOnline(false);
+        return {
+          events: cachedData.events,
+          externalCalendars: cachedData.externalCalendars,
+          externalCalendarEvents: cachedData.externalCalendarEvents,
+          fromCache: true,
+        };
       } else {
         setError(getUserFacingErrorMessage(supabaseError, "Impossible de charger les données."));
       }
+      return null;
     } finally {
       if (!options.silent) {
         setLoading(false);
@@ -5094,9 +5138,9 @@ export default function Home() {
             "Content-Type": "application/json",
             Authorization: `Bearer ${accessToken}`,
           },
-          body: JSON.stringify({ externalCalendarId: calendar.id }),
+          body: JSON.stringify({ externalCalendarId: calendar.id, triggerSource: "manual" }),
         });
-        const syncPayload = (await response.json().catch(() => null)) as GooglePullSyncApiResponse | null;
+        const syncPayload = (await response.json().catch(() => null)) as ApplePullSyncApiResponse | null;
         if (!response.ok || syncPayload?.success === false) {
           console.error("Apple pull sync failed response", {
             status: response.status,
@@ -5262,8 +5306,29 @@ export default function Home() {
     }
   }
 
-  async function syncAppleCalendarSilently(calendar: ExternalCalendar, syncWindow: { start: Date; end: Date }) {
+  async function syncAppleCalendarSilently(input: {
+    calendar: ExternalCalendar;
+    syncWindow: { start: Date; end: Date };
+    source: "interval" | "online" | "visible" | "launch";
+    enabledAppleCalendars: number;
+  }) {
+    const { calendar, syncWindow, source, enabledAppleCalendars } = input;
+    const syncStartedAt = new Date().toISOString();
+    const syncStartMs = performance.now();
+    const beforeVisibleEvents = visibleProductionEventsRef.current;
+    const beforeVisibleSignature = getProductionEventSignature(beforeVisibleEvents);
+    console.info("[Apple sync timing] start", {
+      source,
+      calendarId: calendar.id,
+      calendarName: calendar.name,
+      enabledAppleCalendars,
+      syncStartedAt,
+      syncWindowStart: syncWindow.start.toISOString(),
+      syncWindowEnd: syncWindow.end.toISOString(),
+    });
+
     const accessToken = await getServerApiAccessToken(authSession?.access_token);
+    const requestStartMs = performance.now();
     const response = await fetch(getAppApiUrl("/api/calendar/apple/sync", "Synchronisation Apple Calendar momentanément indisponible."), {
       method: "POST",
       headers: {
@@ -5274,13 +5339,60 @@ export default function Home() {
         externalCalendarId: calendar.id,
         syncWindowStart: syncWindow.start.toISOString(),
         syncWindowEnd: syncWindow.end.toISOString(),
+        triggerSource: source,
       }),
     });
-    const syncPayload = (await response.json().catch(() => null)) as GooglePullSyncApiResponse | null;
+    const requestDurationMs = Math.round(performance.now() - requestStartMs);
+    const syncPayload = (await response.json().catch(() => null)) as ApplePullSyncApiResponse | null;
     if (!response.ok || syncPayload?.success === false) {
+      console.info("[Apple sync timing] failed", {
+        source,
+        calendarId: calendar.id,
+        status: response.status,
+        requestDurationMs,
+        payload: syncPayload,
+      });
       throw new Error(syncPayload?.message?.trim() || "Impossible de synchroniser Apple Calendar.");
     }
-    await reloadData(selectedIdRef.current, { silent: true });
+    const reloadStartMs = performance.now();
+    const reloadResult = await reloadData(selectedIdRef.current, { silent: true });
+    const reloadDurationMs = Math.round(performance.now() - reloadStartMs);
+    const viewer = getCalendarVisibilityViewer(profile, authSession?.user.id ?? null);
+    const afterVisibleEvents = reloadResult
+      ? getVisibleProductionEventsForSelection(reloadResult.events, reloadResult.externalCalendars, viewer)
+      : [];
+    const afterVisibleSignature = reloadResult ? getProductionEventSignature(afterVisibleEvents) : "";
+    console.info("[Apple sync timing] complete", {
+      source,
+      calendarId: calendar.id,
+      calendarName: calendar.name,
+      enabledAppleCalendars,
+      syncStartedAt,
+      syncFinishedAt: new Date().toISOString(),
+      syncWindowStart: syncWindow.start.toISOString(),
+      syncWindowEnd: syncWindow.end.toISOString(),
+      requestedSyncWindowAccepted: syncPayload?.diagnostics?.requestedSyncWindow ?? null,
+      routeSyncWindowStart: syncPayload?.diagnostics?.syncWindowStart ?? null,
+      routeSyncWindowEnd: syncPayload?.diagnostics?.syncWindowEnd ?? null,
+      requestDurationMs,
+      routeDurationMs: syncPayload?.diagnostics?.routeDurationMs ?? null,
+      calDavRequestStartedAt: syncPayload?.diagnostics?.calDavRequestStartedAt ?? null,
+      calDavRequestFinishedAt: syncPayload?.diagnostics?.calDavRequestFinishedAt ?? null,
+      calDavDurationMs: syncPayload?.diagnostics?.calDavDurationMs ?? null,
+      rawResponseCount: syncPayload?.diagnostics?.rawResponseCount ?? null,
+      eventsFetched: syncPayload?.diagnostics?.calDavEventsFetched ?? syncPayload?.synced ?? 0,
+      created: syncPayload?.created ?? 0,
+      updated: syncPayload?.updated ?? 0,
+      deleted: syncPayload?.deleted ?? 0,
+      skipped: syncPayload?.skipped ?? 0,
+      totalSyncDurationMs: Math.round(performance.now() - syncStartMs),
+      reloadDataCalled: true,
+      reloadDurationMs,
+      reloadFromCache: reloadResult?.fromCache ?? null,
+      visibleEventsBefore: beforeVisibleEvents.length,
+      visibleEventsAfter: afterVisibleEvents.length,
+      visibleEventsChanged: beforeVisibleSignature !== afterVisibleSignature,
+    });
     return syncPayload;
   }
 
@@ -5329,15 +5441,51 @@ export default function Home() {
     }
 
     async function runAutomaticAppleSync(source: "interval" | "online" | "visible" | "launch") {
-      if (!authSession || !profile) return;
-      if (loading) return;
-      if (!onlineRef.current) return;
-      if (document.visibilityState !== "visible") return;
-      if (writableAppleCalendars.length === 0) return;
-      if (appleAutoSyncRunningRef.current || appleSyncInFlightRef.current || syncingExternalCalendarId) return;
+      const attemptedAt = new Date().toISOString();
+      if (!authSession || !profile) {
+        console.info("[Apple sync timing] skipped", { source, attemptedAt, reason: "missing_session_or_profile" });
+        return;
+      }
+      if (loading) {
+        console.info("[Apple sync timing] skipped", { source, attemptedAt, reason: "initial_data_loading" });
+        return;
+      }
+      if (!onlineRef.current) {
+        console.info("[Apple sync timing] skipped", { source, attemptedAt, reason: "offline" });
+        return;
+      }
+      if (document.visibilityState !== "visible") {
+        console.info("[Apple sync timing] skipped", { source, attemptedAt, reason: "not_visible", visibilityState: document.visibilityState });
+        return;
+      }
+      if (writableAppleCalendars.length === 0) {
+        console.info("[Apple sync timing] skipped", { source, attemptedAt, reason: "no_enabled_apple_calendars" });
+        return;
+      }
+      if (appleAutoSyncRunningRef.current || appleSyncInFlightRef.current || syncingExternalCalendarId) {
+        console.info("[Apple sync timing] skipped", {
+          source,
+          attemptedAt,
+          reason: "sync_in_flight",
+          appleAutoSyncRunning: appleAutoSyncRunningRef.current,
+          appleSyncInFlight: appleSyncInFlightRef.current,
+          syncingExternalCalendarId,
+        });
+        return;
+      }
 
       const now = Date.now();
-      if (now - appleAutoSyncLastStartedAtRef.current < APPLE_AUTO_SYNC_MIN_GAP_MS) return;
+      const throttleRemainingMs = APPLE_AUTO_SYNC_MIN_GAP_MS - (now - appleAutoSyncLastStartedAtRef.current);
+      if (throttleRemainingMs > 0) {
+        console.info("[Apple sync timing] skipped", {
+          source,
+          attemptedAt,
+          reason: "throttled",
+          throttleRemainingMs,
+          lastStartedAtMs: appleAutoSyncLastStartedAtRef.current,
+        });
+        return;
+      }
 
       appleAutoSyncRunningRef.current = true;
       appleAutoSyncLastStartedAtRef.current = now;
@@ -5346,7 +5494,12 @@ export default function Home() {
         const syncWindow = visibleAppleSyncWindowRef.current ?? getMonthSyncWindow(new Date());
         for (const calendar of writableAppleCalendars) {
           if (!onlineRef.current || document.visibilityState !== "visible") break;
-          await syncAppleCalendarSilently(calendar, syncWindow);
+          await syncAppleCalendarSilently({
+            calendar,
+            syncWindow,
+            source,
+            enabledAppleCalendars: writableAppleCalendars.length,
+          });
         }
       } catch (syncError) {
         console.error("Automatic Apple Calendar sync failed", {
@@ -5369,11 +5522,13 @@ export default function Home() {
     }, GOOGLE_AUTO_SYNC_INTERVAL_MS);
 
     function handleOnline() {
+      console.info("[Apple sync timing] online trigger fired", { triggeredAt: new Date().toISOString() });
       void runAutomaticExternalCalendarSync("online");
     }
 
     function handleVisibilityChange() {
       if (document.visibilityState === "visible") {
+        console.info("[Apple sync timing] visibility trigger fired", { triggeredAt: new Date().toISOString() });
         void runAutomaticExternalCalendarSync("visible");
       }
     }
@@ -5386,8 +5541,14 @@ export default function Home() {
       ? `${authSession.user.id}:${writableAppleCalendars.map((calendar) => calendar.id).sort().join(",")}`
       : null;
     if (launchKey && appleAutoSyncLaunchKeyRef.current !== launchKey) {
+      console.info("[Apple sync timing] launch trigger scheduled", {
+        scheduledAt: new Date().toISOString(),
+        delayMs: APPLE_AUTO_SYNC_LAUNCH_DELAY_MS,
+        enabledAppleCalendars: writableAppleCalendars.length,
+      });
       launchSyncTimer = window.setTimeout(() => {
         appleAutoSyncLaunchKeyRef.current = launchKey;
+        console.info("[Apple sync timing] launch trigger fired", { triggeredAt: new Date().toISOString() });
         void runAutomaticAppleSync("launch");
       }, APPLE_AUTO_SYNC_LAUNCH_DELAY_MS);
     }

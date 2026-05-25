@@ -62,7 +62,7 @@ function getAppleSyncWindow(input?: { start?: unknown; end?: unknown }) {
     Number.isFinite(requestedEnd.getTime()) &&
     requestedStart < requestedEnd
   ) {
-    return { start: requestedStart, end: requestedEnd };
+    return { start: requestedStart, end: requestedEnd, requested: true };
   }
 
   const now = new Date();
@@ -70,7 +70,7 @@ function getAppleSyncWindow(input?: { start?: unknown; end?: unknown }) {
   start.setMonth(start.getMonth() - 6);
   const end = new Date(now);
   end.setMonth(end.getMonth() + 18);
-  return { start, end };
+  return { start, end, requested: false };
 }
 
 function toCalDavDateTime(value: Date) {
@@ -358,9 +358,21 @@ async function fetchAppleCalendarEvents(input: {
   calendar: ExternalCalendarRow;
   syncWindow: ReturnType<typeof getAppleSyncWindow>;
 }) {
-  if (!input.calendar.provider_calendar_id) return [];
+  if (!input.calendar.provider_calendar_id) {
+    return {
+      events: [],
+      diagnostics: {
+        calDavRequestStartedAt: null,
+        calDavRequestFinishedAt: null,
+        calDavDurationMs: 0,
+        rawResponseCount: 0,
+      },
+    };
+  }
 
   const calendarUrl = joinCalDavUrl(input.credentials.serverUrl, input.calendar.provider_calendar_id);
+  const calDavRequestStartedAt = new Date().toISOString();
+  const calDavStartMs = Date.now();
   const xml = await calDavReport({
     url: calendarUrl,
     appleId: input.credentials.appleId,
@@ -381,14 +393,26 @@ async function fetchAppleCalendarEvents(input: {
   </c:filter>
 </c:calendar-query>`,
   });
+  const calDavRequestFinishedAt = new Date().toISOString();
+  const responses = getXmlResponses(xml);
 
-  return getXmlResponses(xml).flatMap((responseXml) => {
+  const events = responses.flatMap((responseXml) => {
     const href = getFirstXmlTagValue(responseXml, "href");
     const etag = getFirstXmlTagValue(responseXml, "getetag");
     const calendarData = getFirstXmlTagValue(responseXml, "calendar-data");
     if (!calendarData || !/BEGIN:VEVENT/i.test(calendarData)) return [];
     return parseAppleVEvents(xmlDecode(calendarData), { etag, href });
   });
+
+  return {
+    events,
+    diagnostics: {
+      calDavRequestStartedAt,
+      calDavRequestFinishedAt,
+      calDavDurationMs: Date.now() - calDavStartMs,
+      rawResponseCount: responses.length,
+    },
+  };
 }
 
 function getSafeSupabaseError(error: unknown) {
@@ -444,11 +468,14 @@ async function insertAppleExternalEventLinkOrRollback(params: {
 }
 
 export async function POST(request: Request) {
+  const routeStartedAt = new Date().toISOString();
+  const routeStartMs = Date.now();
   try {
     const authResult = await requireAuthenticatedUser(request);
     if ("error" in authResult) return authResult.error;
 
-    const body = (await request.json().catch(() => null)) as { externalCalendarId?: string; syncWindowStart?: string; syncWindowEnd?: string } | null;
+    const body = (await request.json().catch(() => null)) as { externalCalendarId?: string; syncWindowStart?: string; syncWindowEnd?: string; triggerSource?: string } | null;
+    const triggerSource = body?.triggerSource?.trim() || "unknown";
     const externalCalendarId = body?.externalCalendarId?.trim();
     if (!externalCalendarId) {
       return appleJsonResponse({ error: "Calendrier Apple manquant." }, { status: 400 });
@@ -485,7 +512,7 @@ export async function POST(request: Request) {
     const account = await getOwnedAppleAccount(supabase, calendar.provider_account_id, authResult.user.id);
     const credentials = decryptAppleCredentials(account);
     const syncWindow = getAppleSyncWindow({ start: body?.syncWindowStart, end: body?.syncWindowEnd });
-    const appleEvents = await fetchAppleCalendarEvents({ credentials, calendar, syncWindow });
+    const { events: appleEvents, diagnostics: calDavDiagnostics } = await fetchAppleCalendarEvents({ credentials, calendar, syncWindow });
     const fetchedExternalEventIds = new Set(appleEvents.map((event) => event.externalEventId));
 
     let created = 0;
@@ -646,9 +673,14 @@ export async function POST(request: Request) {
     }
 
     console.info("Apple pull sync summary", {
+      triggerSource,
       calendarId: calendar.id,
       syncWindowStart: syncWindow.start.toISOString(),
       syncWindowEnd: syncWindow.end.toISOString(),
+      requestedSyncWindow: syncWindow.requested,
+      routeStartedAt,
+      routeDurationMs: Date.now() - routeStartMs,
+      ...calDavDiagnostics,
       enabledCalendars: calendar.sync_enabled ? 1 : 0,
       fetched: appleEvents.length,
       created,
@@ -681,8 +713,16 @@ export async function POST(request: Request) {
       skipped,
       linksCreated,
       diagnostics: {
+        triggerSource,
+        routeStartedAt,
+        routeFinishedAt: new Date().toISOString(),
+        routeDurationMs: Date.now() - routeStartMs,
+        requestedSyncWindow: syncWindow.requested,
+        syncWindowStart: syncWindow.start.toISOString(),
+        syncWindowEnd: syncWindow.end.toISOString(),
         enabledAppleCalendars: calendar.sync_enabled ? 1 : 0,
         calDavEventsFetched: appleEvents.length,
+        ...calDavDiagnostics,
       },
     });
   } catch (error) {
