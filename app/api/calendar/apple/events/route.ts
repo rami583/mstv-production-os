@@ -342,6 +342,8 @@ async function createAppleEvent(supabase: ReturnType<typeof getServiceSupabaseCl
     last_synced_at: now,
     last_external_updated_at: now,
     last_sync_error: null,
+    deleted_locally_at: null,
+    deleted_externally_at: null,
     raw_external_event: rawExternalEvent,
     created_at: now,
     updated_at: now,
@@ -371,6 +373,8 @@ async function createAppleEvent(supabase: ReturnType<typeof getServiceSupabaseCl
       last_synced_at: linkPayload.last_synced_at,
       last_external_updated_at: linkPayload.last_external_updated_at,
       last_sync_error: linkPayload.last_sync_error,
+      deleted_locally_at: linkPayload.deleted_locally_at,
+      deleted_externally_at: linkPayload.deleted_externally_at,
       raw_external_event: linkPayload.raw_external_event,
       updated_at: linkPayload.updated_at,
     }).eq("id", existingLink.id);

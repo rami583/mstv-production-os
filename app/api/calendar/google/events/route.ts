@@ -193,6 +193,8 @@ async function createGoogleEvent(supabase: ReturnType<typeof getServiceSupabaseC
     last_synced_at: now,
     last_external_updated_at: googleEvent.updated ?? now,
     last_sync_error: null,
+    deleted_locally_at: null,
+    deleted_externally_at: null,
     updated_at: now,
   };
 

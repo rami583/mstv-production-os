@@ -422,6 +422,8 @@ type ExternalEventLink = {
   conflictDetectedAt: string | null;
   conflictReason: string | null;
   lastSyncError: string | null;
+  deletedLocallyAt: string | null;
+  deletedExternallyAt: string | null;
   calendarName: string;
   calendarColor: string | null;
   calendarProviderAccountId: string | null;
@@ -3122,6 +3124,8 @@ function mapExternalEventLink(row: ExternalEventLinkQueryRow): ExternalEventLink
     conflictDetectedAt: row.conflict_detected_at,
     conflictReason: row.conflict_reason,
     lastSyncError: row.last_sync_error,
+    deletedLocallyAt: row.deleted_locally_at ?? null,
+    deletedExternallyAt: row.deleted_externally_at ?? null,
     calendarName: calendar?.name ?? "Calendrier",
     calendarColor: calendar?.color ?? null,
     calendarProviderAccountId: calendar?.provider_account_id ?? null,
@@ -3413,12 +3417,15 @@ async function fetchEvents(filter: "active" | "deleted" = "active") {
   }
 
   if (eventIds.length > 0) {
-    const { data: externalLinkData, error: externalLinkError } = await supabase
+    let externalLinkQuery = supabase
       .from("external_event_links")
       .select("*, external_calendars (*)")
       .in("event_id", eventIds)
-      .is("deleted_locally_at", null)
       .order("created_at", { ascending: true });
+    if (filter !== "deleted") {
+      externalLinkQuery = externalLinkQuery.is("deleted_locally_at", null);
+    }
+    const { data: externalLinkData, error: externalLinkError } = await externalLinkQuery;
 
     if (externalLinkError) {
       console.warn("External event links could not be loaded; continuing without Google sync status.", getDebugError(externalLinkError));
@@ -9743,6 +9750,38 @@ export default function Home() {
       applyOptimisticRestore(data.updated_at);
       setSelectedDateKey(data.date);
       setVisibleMonth(new Date(`${data.date}T12:00:00`));
+      const providerLinksToRestore = getEventWritableExternalLinks(eventToRestore).filter(
+        (link) => link.deletedLocallyAt || link.deletedExternallyAt,
+      );
+      let providerRestoreFailed = false;
+      for (const link of providerLinksToRestore) {
+        try {
+          await syncProviderEventAction("create", eventToRestore.id, link.externalCalendarId);
+        } catch (providerRestoreError) {
+          providerRestoreFailed = true;
+          console.error("Linked calendar event restore failed", {
+            eventId: eventToRestore.id,
+            externalCalendarId: link.externalCalendarId,
+            providerType: link.providerType,
+            error: getDebugError(providerRestoreError),
+          });
+        }
+      }
+      if (providerRestoreFailed) {
+        const warning = "L'événement a été restauré dans MSTV, mais pas encore dans le calendrier externe.";
+        setTrashError(warning);
+        setError(warning);
+        await createNotification(
+          {
+            type: "google_calendar_sync_failed",
+            title: "Restauration calendrier incomplète",
+            body: warning,
+            relatedEventId: eventToRestore.id,
+          },
+          { persist: false },
+        );
+      }
+      await reloadData(eventToRestore.id, { silent: true, source: "restore-event" });
     } catch (restoreError) {
       setTrashError(getUserFacingErrorMessage(restoreError, "Impossible de restaurer cet événement."));
     } finally {
