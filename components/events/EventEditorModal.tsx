@@ -1,7 +1,6 @@
 "use client";
 
-import { Keyboard } from "@capacitor/keyboard";
-import { useEffect, useRef, useState, type ComponentType, type FormEvent, type PointerEvent, type ReactNode } from "react";
+import { useEffect, useState, type ComponentType, type FormEvent, type PointerEvent, type ReactNode } from "react";
 import {
   getCurrentEditorExternalCalendarId,
   getEventEditorInitialForm,
@@ -13,6 +12,7 @@ import {
   type EventEditorExternalCalendar,
   type EventEditorFormInput,
 } from "@/lib/events/editor";
+import { useNativeKeyboardVisibility } from "@/lib/use-native-keyboard-visibility";
 import { cn } from "@/lib/utils";
 
 type DatePickerProps = {
@@ -38,12 +38,6 @@ const modalPanelClassName = "rounded-2xl bg-white shadow-sm shadow-black/5";
 const formInputClassName =
   "h-11 w-full rounded-xl border border-stone-200 bg-white px-3 text-base font-medium text-stone-950 outline-none transition focus:border-[#bb2720]/50";
 const iosKeyboardGuardProps = { "data-ios-keyboard-guard": "true" } as const;
-
-function isNativeMobileRuntime() {
-  if (typeof window === "undefined") return false;
-  const maybeCapacitor = (window as Window & { Capacitor?: { isNativePlatform?: () => boolean } }).Capacitor;
-  return window.location.protocol === "capacitor:" || Boolean(maybeCapacitor?.isNativePlatform?.());
-}
 
 function useEscapeToClose(onClose: () => void, enabled = true) {
   useEffect(() => {
@@ -164,49 +158,12 @@ export function EventEditorModal({
   const [error, setError] = useState<string | null>(null);
   const [datePickerOpen, setDatePickerOpen] = useState(false);
   const [timeKeyboardActive, setTimeKeyboardActive] = useState(false);
-  const [nativeKeyboardInset, setNativeKeyboardInset] = useState(0);
-  const scrollContainerRef = useRef<HTMLDivElement | null>(null);
-  const activeNativeFieldRef = useRef<HTMLElement | null>(null);
-  const nativeKeyboardInsetRef = useRef(0);
+  const nativeKeyboard = useNativeKeyboardVisibility<HTMLDivElement>();
   const selectableSyncCalendars = getSelectableEditorSyncCalendars({
     event,
     syncCalendars,
     currentExternalCalendarId,
   });
-
-  function scrollEditorFieldIntoView(target: HTMLElement, behavior: ScrollBehavior = "smooth") {
-    const container = scrollContainerRef.current;
-    if (!container || !container.contains(target)) return;
-
-    const containerRect = container.getBoundingClientRect();
-    const targetRect = target.getBoundingClientRect();
-    const viewportBottom = (() => {
-      if (typeof window === "undefined") return containerRect.bottom;
-      const visualViewport = window.visualViewport;
-      if (visualViewport && visualViewport.height < window.innerHeight - 48) {
-        return visualViewport.offsetTop + visualViewport.height;
-      }
-      return window.innerHeight - Math.max(nativeKeyboardInsetRef.current, 0);
-    })();
-    const visibleBottom = Math.min(containerRect.bottom, viewportBottom) - 20;
-    const visibleTop = containerRect.top + 12;
-
-    if (targetRect.bottom > visibleBottom) {
-      container.scrollBy({ top: targetRect.bottom - visibleBottom, behavior });
-      return;
-    }
-
-    if (targetRect.top < visibleTop) {
-      container.scrollBy({ top: targetRect.top - visibleTop, behavior });
-    }
-  }
-
-  function handleEditorFieldFocus(target: HTMLElement) {
-    if (!isNativeMobileRuntime()) return false;
-    activeNativeFieldRef.current = target;
-    window.setTimeout(() => scrollEditorFieldIntoView(target, "smooth"), 120);
-    return true;
-  }
 
   useEffect(() => {
     if (isEditing || form.syncExternalCalendarId || selectableSyncCalendars.length === 0) return;
@@ -215,59 +172,6 @@ export function EventEditorModal({
       syncExternalCalendarId: current.syncExternalCalendarId ?? selectableSyncCalendars[0]?.id ?? null,
     }));
   }, [form.syncExternalCalendarId, isEditing, selectableSyncCalendars]);
-
-  useEffect(() => {
-    if (!isNativeMobileRuntime()) return;
-
-    let disposed = false;
-    const handles: Array<{ remove: () => Promise<void> | void }> = [];
-
-    function updateKeyboardInset(keyboardHeight: number) {
-      if (disposed) return;
-      const nextInset = Math.max(0, Math.round(keyboardHeight));
-      nativeKeyboardInsetRef.current = nextInset;
-      setNativeKeyboardInset(nextInset);
-      const target = activeNativeFieldRef.current;
-      if (!target) return;
-      window.setTimeout(() => scrollEditorFieldIntoView(target, "smooth"), 80);
-    }
-
-    Keyboard.addListener("keyboardWillShow", (info) => updateKeyboardInset(info.keyboardHeight)).then((handle) => {
-      if (disposed) {
-        void handle.remove();
-        return;
-      }
-      handles.push(handle);
-    });
-    Keyboard.addListener("keyboardDidShow", (info) => updateKeyboardInset(info.keyboardHeight)).then((handle) => {
-      if (disposed) {
-        void handle.remove();
-        return;
-      }
-      handles.push(handle);
-    });
-    Keyboard.addListener("keyboardWillHide", () => {
-      if (disposed) return;
-      nativeKeyboardInsetRef.current = 0;
-      setNativeKeyboardInset(0);
-      activeNativeFieldRef.current = null;
-    }).then((handle) => {
-      if (disposed) {
-        void handle.remove();
-        return;
-      }
-      handles.push(handle);
-    });
-
-    return () => {
-      disposed = true;
-      nativeKeyboardInsetRef.current = 0;
-      activeNativeFieldRef.current = null;
-      handles.forEach((handle) => {
-        void handle.remove();
-      });
-    };
-  }, []);
 
   async function handleSubmit(formEvent: FormEvent<HTMLFormElement>) {
     formEvent.preventDefault();
@@ -326,12 +230,12 @@ export function EventEditorModal({
         </div>
 
         <div
-          ref={scrollContainerRef}
+          ref={nativeKeyboard.scrollContainerRef}
           className={cn(
             "min-h-0 flex-1 space-y-3 overflow-y-auto pr-0.5 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden",
             timeKeyboardActive ? "pb-24 sm:pb-0" : "pb-1",
           )}
-          style={nativeKeyboardInset > 0 ? { paddingBottom: `calc(${nativeKeyboardInset}px + 6rem + env(safe-area-inset-bottom))` } : undefined}
+          style={nativeKeyboard.scrollContainerStyle}
         >
           {((!isEditing && selectableSyncCalendars.length > 0) || Boolean(currentExternalCalendarId)) && (
             <Field label="Calendrier">
@@ -339,7 +243,7 @@ export function EventEditorModal({
                 <select
                   {...iosKeyboardGuardProps}
                   value={form.syncExternalCalendarId ?? selectableSyncCalendars[0]?.id ?? ""}
-                  onFocus={(selectEvent) => handleEditorFieldFocus(selectEvent.currentTarget)}
+                  onFocus={(selectEvent) => nativeKeyboard.handleFieldFocus(selectEvent.currentTarget)}
                   onChange={(selectEvent) => {
                     const nextValue = selectEvent.target.value || null;
                     setForm((current) => ({
@@ -372,7 +276,7 @@ export function EventEditorModal({
                   {...iosKeyboardGuardProps}
                   type="checkbox"
                   checked={form.isAllDay}
-                  onFocus={(inputEvent) => handleEditorFieldFocus(inputEvent.currentTarget)}
+                  onFocus={(inputEvent) => nativeKeyboard.handleFieldFocus(inputEvent.currentTarget)}
                   onChange={(inputEvent) => updateField("isAllDay", inputEvent.target.checked)}
                   className="h-5 w-5 accent-[#bb2720]"
                 />
@@ -381,7 +285,7 @@ export function EventEditorModal({
             <button
               {...iosKeyboardGuardProps}
               type="button"
-              onFocus={(buttonEvent) => handleEditorFieldFocus(buttonEvent.currentTarget)}
+              onFocus={(buttonEvent) => nativeKeyboard.handleFieldFocus(buttonEvent.currentTarget)}
               onClick={() => setDatePickerOpen(true)}
               className={cn(formInputClassName, "flex items-center text-left")}
             >
@@ -394,7 +298,7 @@ export function EventEditorModal({
               <input
                 {...iosKeyboardGuardProps}
                 value={form.clientName}
-                onFocus={(inputEvent) => handleEditorFieldFocus(inputEvent.currentTarget)}
+                onFocus={(inputEvent) => nativeKeyboard.handleFieldFocus(inputEvent.currentTarget)}
                 onChange={(inputEvent) => updateField("clientName", inputEvent.target.value)}
                 className={formInputClassName}
               />
@@ -403,7 +307,7 @@ export function EventEditorModal({
               <input
                 {...iosKeyboardGuardProps}
                 value={form.eventName}
-                onFocus={(inputEvent) => handleEditorFieldFocus(inputEvent.currentTarget)}
+                onFocus={(inputEvent) => nativeKeyboard.handleFieldFocus(inputEvent.currentTarget)}
                 onChange={(inputEvent) => updateField("eventName", inputEvent.target.value)}
                 className={formInputClassName}
               />
@@ -413,20 +317,20 @@ export function EventEditorModal({
           {!form.isAllDay && (
             <div className="grid grid-cols-2 gap-3">
               <Field label="Début">
-                <TimeTextInput value={form.clientArrivalTime} onChange={(value) => updateField("clientArrivalTime", value)} onEditingChange={setTimeKeyboardActive} onFocusTarget={handleEditorFieldFocus} className={formInputClassName} />
+                <TimeTextInput value={form.clientArrivalTime} onChange={(value) => updateField("clientArrivalTime", value)} onEditingChange={setTimeKeyboardActive} onFocusTarget={nativeKeyboard.handleFieldFocus} className={formInputClassName} />
               </Field>
               <Field label="Fin">
-                <TimeTextInput value={form.endOfDayTime} onChange={(value) => updateField("endOfDayTime", value)} onEditingChange={setTimeKeyboardActive} onFocusTarget={handleEditorFieldFocus} className={formInputClassName} />
+                <TimeTextInput value={form.endOfDayTime} onChange={(value) => updateField("endOfDayTime", value)} onEditingChange={setTimeKeyboardActive} onFocusTarget={nativeKeyboard.handleFieldFocus} className={formInputClassName} />
               </Field>
             </div>
           )}
 
           <div className="grid grid-cols-2 gap-3">
             <Field label="Début live/tournage">
-              <TimeTextInput value={form.startTime} onChange={(value) => updateField("startTime", value)} onEditingChange={setTimeKeyboardActive} onFocusTarget={handleEditorFieldFocus} className={formInputClassName} />
+              <TimeTextInput value={form.startTime} onChange={(value) => updateField("startTime", value)} onEditingChange={setTimeKeyboardActive} onFocusTarget={nativeKeyboard.handleFieldFocus} className={formInputClassName} />
             </Field>
             <Field label="Fin live/tournage">
-              <TimeTextInput value={form.endTime} onChange={(value) => updateField("endTime", value)} onEditingChange={setTimeKeyboardActive} onFocusTarget={handleEditorFieldFocus} className={formInputClassName} />
+              <TimeTextInput value={form.endTime} onChange={(value) => updateField("endTime", value)} onEditingChange={setTimeKeyboardActive} onFocusTarget={nativeKeyboard.handleFieldFocus} className={formInputClassName} />
             </Field>
           </div>
 
@@ -434,7 +338,7 @@ export function EventEditorModal({
             <input
               {...iosKeyboardGuardProps}
               value={form.location}
-              onFocus={(inputEvent) => handleEditorFieldFocus(inputEvent.currentTarget)}
+              onFocus={(inputEvent) => nativeKeyboard.handleFieldFocus(inputEvent.currentTarget)}
               onChange={(inputEvent) => updateField("location", inputEvent.target.value)}
               className={formInputClassName}
             />
@@ -444,7 +348,7 @@ export function EventEditorModal({
             <textarea
               {...iosKeyboardGuardProps}
               value={form.notes}
-              onFocus={(textareaEvent) => handleEditorFieldFocus(textareaEvent.currentTarget)}
+              onFocus={(textareaEvent) => nativeKeyboard.handleFieldFocus(textareaEvent.currentTarget)}
               onChange={(inputEvent) => updateField("notes", inputEvent.target.value)}
               className={cn(formInputClassName, "min-h-24 resize-none py-3")}
             />
@@ -463,7 +367,7 @@ export function EventEditorModal({
 
         <div
           className="sticky bottom-0 -mx-4 mt-4 flex shrink-0 justify-end gap-2 border-t border-stone-100 bg-white px-4 pb-[calc(env(safe-area-inset-bottom)+1rem)] pt-4 sm:static sm:mx-0 sm:px-0 sm:pb-0"
-          style={nativeKeyboardInset > 0 ? { marginBottom: `${nativeKeyboardInset}px` } : undefined}
+          style={nativeKeyboard.footerLiftStyle}
         >
           <button type="button" onClick={onClose} className="rounded-xl bg-stone-50 px-4 py-2 text-base font-semibold text-stone-600 transition hover:bg-stone-100">
             Annuler

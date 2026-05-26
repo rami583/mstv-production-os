@@ -88,6 +88,7 @@ import {
   normalizeProviderCalendarKey,
   type CalendarVisibilityViewer,
 } from "@/lib/events/visibility";
+import { useNativeKeyboardVisibility } from "@/lib/use-native-keyboard-visibility";
 import { cn } from "@/lib/utils";
 import {
   supabase,
@@ -12326,10 +12327,16 @@ function ProductionDetail({
   const [deletingItem, setDeletingItem] = useState(false);
   const detailScrollContainerRef = useRef<HTMLDivElement | null>(null);
   const detailBlockRef = useRef<HTMLDivElement | null>(null);
+  const nativeKeyboard = useNativeKeyboardVisibility<HTMLDivElement>();
   const previousContextSelectionKeyRef = useRef<string | null>(null);
   const eventSwipeStartRef = useRef<{ pointerId: number; x: number; y: number; axis: "horizontal" | "vertical" | null } | null>(null);
   const suppressEventSwipeClickRef = useRef(false);
   const eventDisplay = getProductionEventDisplay(event);
+
+  const setDetailScrollContainerNode = useCallback((node: HTMLDivElement | null) => {
+    detailScrollContainerRef.current = node;
+    nativeKeyboard.scrollContainerRef.current = node;
+  }, [nativeKeyboard.scrollContainerRef]);
 
   const contextSelectionKey =
     contextSelection?.type === "option"
@@ -12669,8 +12676,9 @@ function ProductionDetail({
 
       <div
         key={event.id}
-        ref={detailScrollContainerRef}
+        ref={setDetailScrollContainerNode}
         className="no-scrollbar min-h-0 flex-1 space-y-4 overflow-y-auto overscroll-contain pb-6"
+        style={nativeKeyboard.scrollContainerStyle}
       >
         <Card className="premium-surface overflow-hidden !border-0 p-4 sm:p-5">
           <ProductionTimeCards event={event} />
@@ -12907,6 +12915,7 @@ function ProductionDetail({
             onDownloadDocument={onDownloadDocument}
             permissions={permissions}
             profile={profile}
+            onNativeFieldFocus={nativeKeyboard.handleFieldFocus}
           />
         </div>
       </div>
@@ -13071,12 +13080,14 @@ function InlineEditableTitle({
   className,
   inputClassName,
   editable = true,
+  onFocusTarget,
 }: {
   value: string;
   onSave: (value: string) => Promise<void>;
   className?: string;
   inputClassName?: string;
   editable?: boolean;
+  onFocusTarget?: (target: HTMLElement) => boolean;
 }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(value);
@@ -13091,7 +13102,10 @@ function InlineEditableTitle({
     if (!editing) return;
     inputRef.current?.focus();
     inputRef.current?.select();
-  }, [editing]);
+    if (inputRef.current) {
+      onFocusTarget?.(inputRef.current);
+    }
+  }, [editing, onFocusTarget]);
 
   async function saveTitle() {
     if (saving) return;
@@ -13120,6 +13134,7 @@ function InlineEditableTitle({
         {...iosKeyboardGuardProps}
         value={draft}
         disabled={saving}
+        onFocus={(event) => onFocusTarget?.(event.currentTarget)}
         onChange={(event) => setDraft(event.target.value)}
         onBlur={() => void saveTitle()}
         onKeyDown={(event) => {
@@ -13167,6 +13182,7 @@ function LinkValueRow({
   onCopy,
   openable = false,
   editable = true,
+  onFocusTarget,
 }: {
   value: string;
   placeholder: string;
@@ -13179,6 +13195,7 @@ function LinkValueRow({
   onCopy: () => void;
   openable?: boolean;
   editable?: boolean;
+  onFocusTarget?: (target: HTMLElement) => boolean;
 }) {
   const [localValue, setLocalValue] = useState(value);
   const trimmedValue = localValue.trim();
@@ -13229,7 +13246,10 @@ function LinkValueRow({
             {...iosKeyboardGuardProps}
             value={localValue}
             disabled={committing}
-            onFocus={() => setEditing(true)}
+            onFocus={(event) => {
+              setEditing(true);
+              onFocusTarget?.(event.currentTarget);
+            }}
             onChange={(event) => setLocalValue(event.target.value)}
             onBlur={() => {
               if (skipBlurCommitRef.current) {
@@ -13325,6 +13345,7 @@ function ContextDetailBlock({
   onDownloadDocument,
   permissions,
   profile,
+  onNativeFieldFocus,
 }: {
   event: ProductionEvent;
   selection: ContextSelection;
@@ -13343,6 +13364,7 @@ function ContextDetailBlock({
   onDownloadDocument: (document: EventDocument) => Promise<void>;
   permissions: AppPermissions;
   profile: UserProfile | null;
+  onNativeFieldFocus: (target: HTMLElement) => boolean;
 }) {
   const selectedOption = selection?.type === "option" ? event.options.find((option) => option.id === selection.optionId) ?? null : null;
   const selectedLink = selection?.type === "link" ? event.links.find((link) => link.id === selection.linkId) ?? null : null;
@@ -13709,6 +13731,7 @@ function ContextDetailBlock({
             className="truncate"
             inputClassName="text-sky-950 focus:border-sky-300"
             editable={canRenameSelectedLink}
+            onFocusTarget={onNativeFieldFocus}
           />
             </div>
           </div>
@@ -13732,6 +13755,7 @@ function ContextDetailBlock({
                     onCopy={() => void copyLinkValue(draft.url, getCopiedLinkField(index, "url"))}
                     openable
                     editable={canEditEntry}
+                    onFocusTarget={onNativeFieldFocus}
                   />
                   {selectedLinkIsPlatform && (
                     <LinkValueRow
@@ -13745,6 +13769,7 @@ function ContextDetailBlock({
                       onCommit={(value) => saveLinkEntryDraft(index, "streamKey", value)}
                       onCopy={() => void copyLinkValue(draft.streamKey, getCopiedLinkField(index, "streamKey"))}
                       editable={canEditEntry}
+                      onFocusTarget={onNativeFieldFocus}
                     />
                   )}
                 </div>
@@ -13780,6 +13805,7 @@ function ContextDetailBlock({
                 className="truncate"
                 inputClassName="text-amber-950 focus:border-amber-300"
                 editable={canRenameSelectedDocumentGroup}
+                onFocusTarget={onNativeFieldFocus}
               />
             </div>
           </div>
@@ -13896,6 +13922,7 @@ function ContextDetailBlock({
             className="truncate"
             inputClassName="text-emerald-950 focus:border-emerald-300"
             editable={canRenameSelectedOption}
+            onFocusTarget={onNativeFieldFocus}
           />
         </div>
         {canEdit && (
@@ -13923,6 +13950,7 @@ function ContextDetailBlock({
               {...iosKeyboardGuardProps}
               value={completedByChoiceValue}
               disabled={savingCompletedByOverride}
+              onFocus={(event) => onNativeFieldFocus(event.currentTarget)}
               onChange={(event) => {
                 const nextValue = event.target.value;
                 setCompletedByOverrideChoiceValue(nextValue);
@@ -13953,6 +13981,7 @@ function ContextDetailBlock({
             <input
               {...iosKeyboardGuardProps}
               value={completedByExternalName}
+              onFocus={(event) => onNativeFieldFocus(event.currentTarget)}
               onChange={(event) => setCompletedByExternalName(event.target.value)}
               onBlur={() => void commitCompletedByExternalName()}
               onKeyDown={(event) => {
@@ -13995,6 +14024,7 @@ function ContextDetailBlock({
                 required
                 rows={3}
                 value={optionItemInput}
+                onFocus={(event) => onNativeFieldFocus(event.currentTarget)}
                 onChange={(event) => setOptionItemInput(event.target.value)}
                 placeholder="Nouvelle note"
                 className="min-h-20 w-full resize-none rounded-xl border border-transparent bg-emerald-50/40 px-3 py-2 text-base font-medium text-stone-950 outline-none transition placeholder:text-stone-300 focus:border-emerald-300 focus:bg-white"
@@ -14016,6 +14046,7 @@ function ContextDetailBlock({
                     {...iosKeyboardGuardProps}
                     rows={3}
                     value={editingOptionItemInput}
+                    onFocus={(event) => onNativeFieldFocus(event.currentTarget)}
                     onChange={(event) => setEditingOptionItemInput(event.target.value)}
                     className="min-h-20 w-full resize-none rounded-xl border border-transparent bg-emerald-50/40 px-3 py-2 text-base font-medium text-stone-950 outline-none transition placeholder:text-stone-300 focus:border-emerald-300 focus:bg-white"
                     autoFocus
@@ -14329,6 +14360,7 @@ function QuoteImportModal({
   onAuthExpired?: () => Promise<void>;
 }) {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const nativeKeyboard = useNativeKeyboardVisibility<HTMLFormElement>();
   const [fileName, setFileName] = useState("");
   const [form, setForm] = useState<CreateEventInput>({
     clientName: "",
@@ -14527,7 +14559,13 @@ function QuoteImportModal({
 
   return (
     <div className={cn(modalBackdropClassName, modalSheetPositionClassName)} onPointerDown={(pointerEvent) => handleModalBackdropPointerDown(pointerEvent, onClose)}>
-      <form onSubmit={handleSubmit} className={cn(modalPanelClassName, "w-full p-5 sm:max-w-2xl sm:p-6")} onPointerDown={(pointerEvent) => pointerEvent.stopPropagation()}>
+      <form
+        ref={nativeKeyboard.scrollContainerRef}
+        onSubmit={handleSubmit}
+        className={cn(modalPanelClassName, "max-h-[calc(var(--app-height)-1.5rem)] w-full overflow-y-auto p-5 sm:max-h-[calc(var(--app-height)-3rem)] sm:max-w-2xl sm:p-6")}
+        style={nativeKeyboard.scrollContainerStyle}
+        onPointerDown={(pointerEvent) => pointerEvent.stopPropagation()}
+      >
         <div className="mb-5 flex items-center justify-between gap-4">
           <div>
             <h2 className="text-base font-semibold text-stone-950">
@@ -14544,7 +14582,9 @@ function QuoteImportModal({
           <div className="mb-4">
             <Field label="Calendrier">
               <select
+                {...iosKeyboardGuardProps}
                 value={form.syncExternalCalendarId ?? syncCalendars[0]?.id ?? ""}
+                onFocus={(event) => nativeKeyboard.handleFieldFocus(event.currentTarget)}
                 onChange={(selectEvent) => updateField("syncExternalCalendarId", selectEvent.target.value || null)}
                 className={formInputClassName}
               >
@@ -14652,7 +14692,14 @@ function QuoteImportModal({
           <>
             <div className="grid gap-3 sm:grid-cols-2">
               <Field label="Client">
-                <input required value={form.clientName} onChange={(event) => updateField("clientName", event.target.value)} className={formInputClassName} />
+                <input
+                  {...iosKeyboardGuardProps}
+                  required
+                  value={form.clientName}
+                  onFocus={(event) => nativeKeyboard.handleFieldFocus(event.currentTarget)}
+                  onChange={(event) => updateField("clientName", event.target.value)}
+                  className={formInputClassName}
+                />
               </Field>
               <Field label="Date">
                 <button
@@ -14667,26 +14714,28 @@ function QuoteImportModal({
 
             <div className="mt-3 grid grid-cols-2 gap-3">
               <Field label="Début">
-                <TimeTextInput value={form.clientArrivalTime} onChange={(value) => updateField("clientArrivalTime", value)} className={formInputClassName} />
+                <TimeTextInput value={form.clientArrivalTime} onChange={(value) => updateField("clientArrivalTime", value)} onFocusTarget={nativeKeyboard.handleFieldFocus} className={formInputClassName} />
               </Field>
               <Field label="Fin">
-                <TimeTextInput value={form.endOfDayTime} onChange={(value) => updateField("endOfDayTime", value)} className={formInputClassName} />
+                <TimeTextInput value={form.endOfDayTime} onChange={(value) => updateField("endOfDayTime", value)} onFocusTarget={nativeKeyboard.handleFieldFocus} className={formInputClassName} />
               </Field>
             </div>
 
             <div className="mt-3 grid grid-cols-2 gap-3">
               <Field label="Début live/tournage">
-                <TimeTextInput value={form.startTime} onChange={(value) => updateField("startTime", value)} className={formInputClassName} />
+                <TimeTextInput value={form.startTime} onChange={(value) => updateField("startTime", value)} onFocusTarget={nativeKeyboard.handleFieldFocus} className={formInputClassName} />
               </Field>
               <Field label="Fin live/tournage">
-                <TimeTextInput value={form.endTime} onChange={(value) => updateField("endTime", value)} className={formInputClassName} />
+                <TimeTextInput value={form.endTime} onChange={(value) => updateField("endTime", value)} onFocusTarget={nativeKeyboard.handleFieldFocus} className={formInputClassName} />
               </Field>
             </div>
 
             <label className="mt-3 block text-base font-semibold text-stone-500">
               <span className="mb-1.5 block">Services / options détectés</span>
               <textarea
+                {...iosKeyboardGuardProps}
                 value={serviceText}
+                onFocus={(event) => nativeKeyboard.handleFieldFocus(event.currentTarget)}
                 onChange={(event) => setServiceText(event.target.value)}
                 rows={4}
                 className="w-full resize-none rounded-xl border border-stone-200 bg-white px-3 py-2 text-base font-medium text-stone-950 outline-none transition focus:border-[#bb2720]/50"
@@ -15155,6 +15204,7 @@ function ExternalCalendarsSheet({
   });
   const [savingNew, setSavingNew] = useState(false);
   const [localError, setLocalError] = useState<string | null>(null);
+  const nativeKeyboard = useNativeKeyboardVisibility<HTMLDivElement>();
   const selectedCalendar = selectedCalendarId ? calendars.find((calendar) => calendar.id === selectedCalendarId) ?? null : null;
   const selectedCalendarEvents = selectedCalendar ? events.filter((event) => event.externalCalendarId === selectedCalendar.id) : [];
   const isMobileFormView = view === "add" || view === "detail";
@@ -15263,7 +15313,11 @@ function ExternalCalendarsSheet({
 
         {(error || localError) && <div className="mb-3 rounded-2xl bg-rose-50 px-4 py-3 text-base font-medium text-rose-700">{localError || error}</div>}
 
-        <div className={cn("no-scrollbar min-h-0 flex-1 overflow-y-auto overscroll-contain", isMobileFormView && "pb-8 sm:pb-0")}>
+        <div
+          ref={nativeKeyboard.scrollContainerRef}
+          className={cn("no-scrollbar min-h-0 flex-1 overflow-y-auto overscroll-contain", isMobileFormView && "pb-8 sm:pb-0")}
+          style={nativeKeyboard.scrollContainerStyle}
+        >
           {view === "list" && (
             <ExternalCalendarsListView
               calendars={calendars}
@@ -15284,6 +15338,7 @@ function ExternalCalendarsSheet({
               onConnectApple={onConnectApple}
               onDisconnectApple={onDisconnectApple}
               onReorderCalendars={onReorder}
+              onNativeFieldFocus={nativeKeyboard.handleFieldFocus}
               onOpenCalendarDetail={(calendar) => {
                 setSelectedCalendarId(calendar.id);
                 setView("detail");
@@ -15298,6 +15353,7 @@ function ExternalCalendarsSheet({
               saving={savingNew}
               onChange={setDraft}
               onCreate={handleCreate}
+              onNativeFieldFocus={nativeKeyboard.handleFieldFocus}
             />
           )}
 
@@ -15316,6 +15372,7 @@ function ExternalCalendarsSheet({
                 setView("list");
               }}
               onSync={onSync}
+              onNativeFieldFocus={nativeKeyboard.handleFieldFocus}
             />
           )}
         </div>
@@ -15584,6 +15641,7 @@ function ExternalCalendarsListView({
   onConnectApple,
   onDisconnectApple,
   onReorderCalendars,
+  onNativeFieldFocus,
   onOpenCalendarDetail,
 }: {
   calendars: ExternalCalendar[];
@@ -15604,6 +15662,7 @@ function ExternalCalendarsListView({
   onConnectApple: (input: { appleId: string; appPassword: string }) => Promise<void>;
   onDisconnectApple: (account: AppleCalendarAccount) => Promise<void>;
   onReorderCalendars: (orderedCalendars: ExternalCalendar[]) => Promise<void>;
+  onNativeFieldFocus: (target: HTMLElement) => boolean;
   onOpenCalendarDetail: (calendar: ExternalCalendar) => void;
 }) {
   const [appleConnectOpen, setAppleConnectOpen] = useState(false);
@@ -15717,7 +15776,9 @@ function ExternalCalendarsListView({
                 <label className="grid gap-1">
                   <span className="text-xs font-semibold uppercase text-stone-400">Adresse Apple / iCloud</span>
                   <input
+                    {...iosKeyboardGuardProps}
                     value={appleDraft.appleId}
+                    onFocus={(event) => onNativeFieldFocus(event.currentTarget)}
                     onChange={(event) => {
                       setAppleConnectDiagnostic(null);
                       setAppleDraft((current) => ({ ...current, appleId: event.target.value }));
@@ -15733,7 +15794,9 @@ function ExternalCalendarsListView({
                 <label className="grid gap-1">
                   <span className="text-xs font-semibold uppercase text-stone-400">Mot de passe d’app Apple</span>
                   <input
+                    {...iosKeyboardGuardProps}
                     value={appleDraft.appPassword}
+                    onFocus={(event) => onNativeFieldFocus(event.currentTarget)}
                     onChange={(event) => {
                       setAppleConnectDiagnostic(null);
                       setAppleDraft((current) => ({ ...current, appPassword: event.target.value }));
@@ -16072,24 +16135,30 @@ function ExternalCalendarAddView({
   saving,
   onChange,
   onCreate,
+  onNativeFieldFocus,
 }: {
   draft: { name: string; icsUrl: string; color: string; visibility: ExternalCalendarVisibility };
   permissions: AppPermissions;
   saving: boolean;
   onChange: Dispatch<SetStateAction<{ name: string; icsUrl: string; color: string; visibility: ExternalCalendarVisibility }>>;
   onCreate: () => Promise<void>;
+  onNativeFieldFocus: (target: HTMLElement) => boolean;
 }) {
   return (
     <div className="rounded-2xl bg-stone-50/70 px-4 py-3">
       <div className="grid gap-2">
         <input
+          {...iosKeyboardGuardProps}
           value={draft.name}
+          onFocus={(event) => onNativeFieldFocus(event.currentTarget)}
           onChange={(event) => onChange((current) => ({ ...current, name: event.target.value }))}
           placeholder="Nom"
           className="h-10 rounded-xl border border-stone-200 bg-white px-3 text-base font-semibold text-stone-950 outline-none transition placeholder:text-stone-300 focus:border-[#bb2720]/40"
         />
         <input
+          {...iosKeyboardGuardProps}
           value={draft.icsUrl}
+          onFocus={(event) => onNativeFieldFocus(event.currentTarget)}
           onChange={(event) => onChange((current) => ({ ...current, icsUrl: event.target.value }))}
           onBlur={() => onChange((current) => ({ ...current, icsUrl: normalizeExternalCalendarIcsUrl(current.icsUrl) }))}
           placeholder="URL ICS"
@@ -16102,7 +16171,9 @@ function ExternalCalendarAddView({
             onChange={(nextColor) => onChange((current) => ({ ...current, color: nextColor }))}
           />
           <select
+            {...iosKeyboardGuardProps}
             value={draft.visibility}
+            onFocus={(event) => onNativeFieldFocus(event.currentTarget)}
             onChange={(event) => onChange((current) => ({ ...current, visibility: event.target.value as ExternalCalendarVisibility }))}
             className="h-10 rounded-xl border border-stone-200 bg-white px-3 text-base font-semibold text-stone-700 outline-none"
           >
@@ -16134,6 +16205,7 @@ function ExternalCalendarSettingsDetail({
   onUpdate,
   onDelete,
   onSync,
+  onNativeFieldFocus,
 }: {
   calendar: ExternalCalendar;
   events: ExternalCalendarEvent[];
@@ -16144,6 +16216,7 @@ function ExternalCalendarSettingsDetail({
   onUpdate: (calendar: ExternalCalendar, input: { name: string; icsUrl: string; color: string; visibility: ExternalCalendarVisibility; syncEnabled?: boolean }) => Promise<void>;
   onDelete: (calendar: ExternalCalendar) => Promise<void>;
   onSync: (calendar: ExternalCalendar) => Promise<ExternalCalendarSyncResult>;
+  onNativeFieldFocus: (target: HTMLElement) => boolean;
 }) {
   const [draft, setDraft] = useState<{ name: string; icsUrl: string; color: string; visibility: ExternalCalendarVisibility; syncEnabled: boolean }>({
     name: calendar.name,
@@ -16244,7 +16317,9 @@ function ExternalCalendarSettingsDetail({
         <div className="grid gap-3">
         <div className="flex items-center justify-between gap-3">
           <input
+            {...iosKeyboardGuardProps}
             value={draft.name}
+            onFocus={(event) => onNativeFieldFocus(event.currentTarget)}
             onChange={(event) => setDraft((current) => ({ ...current, name: event.target.value }))}
             readOnly={!canManage}
             className="min-w-0 flex-1 bg-transparent text-base font-semibold text-stone-950 outline-none"
@@ -16275,7 +16350,9 @@ function ExternalCalendarSettingsDetail({
 
         {calendar.providerType === "ics_read_only" && (
           <input
+            {...iosKeyboardGuardProps}
             value={draft.icsUrl}
+            onFocus={(event) => onNativeFieldFocus(event.currentTarget)}
             onChange={(event) => setDraft((current) => ({ ...current, icsUrl: event.target.value }))}
             onBlur={() => setDraft((current) => ({ ...current, icsUrl: normalizeExternalCalendarIcsUrl(current.icsUrl) }))}
             placeholder="URL ICS"
@@ -16297,7 +16374,9 @@ function ExternalCalendarSettingsDetail({
           <label>
             <span className="mb-1.5 block text-xs font-semibold uppercase text-stone-400">Visible par</span>
           <select
+            {...iosKeyboardGuardProps}
             value={draft.visibility}
+            onFocus={(event) => onNativeFieldFocus(event.currentTarget)}
             onChange={(event) => setDraft((current) => ({ ...current, visibility: event.target.value as ExternalCalendarVisibility }))}
             disabled={!canManage || !permissions.canManageEvents}
             className="h-10 w-full rounded-xl border border-stone-200 bg-white px-3 text-base font-semibold text-stone-700 outline-none"
@@ -17129,10 +17208,12 @@ function TimeTextInput({
   value,
   onChange,
   className,
+  onFocusTarget,
 }: {
   value: string;
   onChange: (value: string) => void;
   className?: string;
+  onFocusTarget?: (target: HTMLElement) => boolean;
 }) {
   function commitValue() {
     onChange(normalizeCompactTimeInput(value));
@@ -17140,13 +17221,18 @@ function TimeTextInput({
 
   return (
     <input
+      {...iosKeyboardGuardProps}
       type="text"
       inputMode="numeric"
       placeholder="--:--"
       value={value}
       onChange={(event) => onChange(sanitizeTimeDraft(event.target.value))}
       onBlur={commitValue}
-      onFocus={(event) => event.currentTarget.select()}
+      onFocus={(event) => {
+        const target = event.currentTarget;
+        target.select();
+        onFocusTarget?.(target);
+      }}
       onKeyDown={(event) => {
         if (event.key === "Enter") {
           event.preventDefault();
