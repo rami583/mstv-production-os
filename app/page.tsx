@@ -204,6 +204,29 @@ const APPLE_AUTO_SYNC_MIN_GAP_MS = 45 * 1000;
 const APPLE_AUTO_SYNC_LAUNCH_DELAY_MS = 900;
 const APPLE_FOREGROUND_SYNC_DEBOUNCE_MS = 2500;
 
+function isNetworkDebugEnabled() {
+  if (typeof window === "undefined") return false;
+  try {
+    const params = new URLSearchParams(window.location.search);
+    return params.get("debugNetwork") === "1" || window.localStorage.getItem("mstv.debugNetwork") === "1";
+  } catch {
+    return false;
+  }
+}
+
+function getApproxJsonBytes(value: unknown) {
+  try {
+    return new TextEncoder().encode(JSON.stringify(value)).length;
+  } catch {
+    return null;
+  }
+}
+
+function logNetworkDebug(eventName: string, payload: Record<string, unknown>) {
+  if (!isNetworkDebugEnabled()) return;
+  console.info(`[MSTV network] ${eventName}`, payload);
+}
+
 type EventQueryRow = EventRow & {
   event_options: EventOptionRow[] | null;
   event_links: EventLinkRow[] | null;
@@ -1197,6 +1220,22 @@ function resolveSelectedEventIdForVisibleEvents(input: {
   }
 
   return visibleEvents[0]?.id ?? null;
+}
+
+function getProductionEventNetworkCounts(events: ProductionEvent[]) {
+  return {
+    events: events.length,
+    options: events.reduce((total, event) => total + event.options.length, 0),
+    optionItems: events.reduce((total, event) => total + event.options.reduce((optionTotal, option) => optionTotal + option.items.length, 0), 0),
+    links: events.reduce((total, event) => total + event.links.length, 0),
+    linkEntries: events.reduce((total, event) => total + event.links.reduce((linkTotal, link) => linkTotal + link.entries.length, 0), 0),
+    documentGroups: events.reduce((total, event) => total + event.documentGroups.length, 0),
+    documents: events.reduce(
+      (total, event) => total + event.documentGroups.reduce((groupTotal, group) => groupTotal + group.files.length, 0),
+      0,
+    ),
+    externalLinks: events.reduce((total, event) => total + event.externalLinks.length, 0),
+  };
 }
 
 function prepareCachedAppData(data: Omit<CachedAppData, "cachedAt">, viewer: CalendarVisibilityViewer): Omit<CachedAppData, "cachedAt"> {
@@ -3157,7 +3196,7 @@ function mapExternalCalendarEvent(row: ExternalCalendarEventQueryRow): ExternalC
     startTime: row.start_time,
     endTime: row.end_time,
     allDay: Boolean(row.all_day),
-    rawEvent: row.raw_event,
+    rawEvent: row.raw_event ?? null,
     lastSyncedAt: row.last_synced_at,
     calendarName: row.external_calendars?.name ?? "Calendrier",
     calendarColor: row.external_calendars?.color ?? null,
@@ -3320,7 +3359,7 @@ async function fetchEvents(filter: "active" | "deleted" = "active") {
     from += supabaseFetchPageSize;
   }
 
-  console.info("MSTV events loaded", {
+  logNetworkDebug("events-loaded", {
     filter,
     count: rows.length,
     firstDate: rows[0]?.date ?? null,
@@ -3523,7 +3562,21 @@ async function fetchExternalCalendarEvents() {
     const to = from + EXTERNAL_CALENDAR_FETCH_PAGE_SIZE - 1;
     const { data, error } = await supabase
       .from("external_calendar_events")
-      .select("*, external_calendars (*)")
+      .select(
+        `
+          id,
+          external_calendar_id,
+          external_event_id,
+          title,
+          description,
+          location,
+          start_time,
+          end_time,
+          all_day,
+          last_synced_at,
+          external_calendars (*)
+        `,
+      )
       .order("start_time", { ascending: true })
       .range(from, to);
 
@@ -4211,7 +4264,7 @@ export default function Home() {
       setError(null);
       return;
     }
-    void reloadData();
+    void reloadData(undefined, { source: "auth-online" });
   }, [authSession?.user.id, profile?.id, online]);
 
   useEffect(() => {
@@ -4276,7 +4329,7 @@ export default function Home() {
               setProfile(nextProfile);
             }
 
-            await reloadData(undefined, { silent: true });
+            await reloadData(undefined, { silent: true, source: "realtime" });
             await refreshNotifications({ silent: true });
 
             if (trashOpen) {
@@ -4333,7 +4386,17 @@ export default function Home() {
     };
   }, [authSession?.user.id, profile?.id, profile?.role, trashOpen, historyOpen, selectedEvent?.id, userManagementOpen, externalCalendarSettingsOpen, permissions.canManageUsers]);
 
-  async function reloadData(nextSelectedId?: string | null, options: { silent?: boolean } = {}) {
+  async function reloadData(nextSelectedId?: string | null, options: { silent?: boolean; source?: string } = {}) {
+    const source = options.source ?? "unspecified";
+    const startedAt = new Date().toISOString();
+    const startMs = performance.now();
+    logNetworkDebug("reloadData:start", {
+      source,
+      startedAt,
+      silent: Boolean(options.silent),
+      requestedSelectedId: nextSelectedId ?? null,
+      currentSelectedId: selectedIdRef.current,
+    });
     if (!options.silent) {
       setLoading(true);
     }
@@ -4345,6 +4408,24 @@ export default function Home() {
         fetchExternalCalendars(),
         fetchExternalCalendarEvents(),
       ]);
+      const eventCounts = getProductionEventNetworkCounts(nextEvents);
+      logNetworkDebug("reloadData:complete", {
+        source,
+        startedAt,
+        finishedAt: new Date().toISOString(),
+        durationMs: Math.round(performance.now() - startMs),
+        fromCache: false,
+        counts: {
+          ...eventCounts,
+          externalCalendars: nextExternalCalendars.length,
+          legacyExternalCalendarEvents: nextExternalEvents.length,
+        },
+        approxJsonBytes: {
+          events: getApproxJsonBytes(nextEvents),
+          externalCalendars: getApproxJsonBytes(nextExternalCalendars),
+          legacyExternalCalendarEvents: getApproxJsonBytes(nextExternalEvents),
+        },
+      });
       if (authSession?.user.id) {
         cacheAppData(authSession.user.id, {
           events: nextEvents,
@@ -4373,6 +4454,17 @@ export default function Home() {
     } catch (supabaseError) {
       const cachedData = authSession?.user.id ? getCachedAppData(authSession.user.id) : null;
       if (cachedData && isNetworkOrUnavailableError(supabaseError)) {
+        logNetworkDebug("reloadData:cache-fallback", {
+          source,
+          startedAt,
+          durationMs: Math.round(performance.now() - startMs),
+          error: getRawErrorMessage(supabaseError),
+          counts: {
+            ...getProductionEventNetworkCounts(cachedData.events),
+            externalCalendars: cachedData.externalCalendars.length,
+            legacyExternalCalendarEvents: cachedData.externalCalendarEvents.length,
+          },
+        });
         setEvents(cachedData.events);
         setExternalCalendars(cachedData.externalCalendars);
         setExternalCalendarEvents(cachedData.externalCalendarEvents);
@@ -4394,6 +4486,12 @@ export default function Home() {
           fromCache: true,
         };
       } else {
+        logNetworkDebug("reloadData:error", {
+          source,
+          startedAt,
+          durationMs: Math.round(performance.now() - startMs),
+          error: getRawErrorMessage(supabaseError),
+        });
         setError(getUserFacingErrorMessage(supabaseError, "Impossible de charger les données."));
       }
       return null;
@@ -4435,6 +4533,12 @@ export default function Home() {
   }
 
   async function refreshExternalCalendarSettings(options: { silent?: boolean } = {}) {
+    const startMs = performance.now();
+    logNetworkDebug("calendar-settings-refresh:start", {
+      silent: Boolean(options.silent),
+      opened: externalCalendarSettingsOpen,
+      startedAt: new Date().toISOString(),
+    });
     if (!options.silent) {
       setExternalCalendarSettingsLoading(true);
     }
@@ -4445,6 +4549,15 @@ export default function Home() {
         fetchExternalCalendars(),
         fetchExternalCalendarEvents(),
       ]);
+      logNetworkDebug("calendar-settings-refresh:complete", {
+        durationMs: Math.round(performance.now() - startMs),
+        externalCalendars: nextCalendars.length,
+        legacyExternalCalendarEvents: nextEvents.length,
+        approxJsonBytes: {
+          externalCalendars: getApproxJsonBytes(nextCalendars),
+          legacyExternalCalendarEvents: getApproxJsonBytes(nextEvents),
+        },
+      });
       const nextMergedCalendars = mergeExternalCalendarList(externalCalendars, nextCalendars);
       setExternalCalendars((current) => mergeExternalCalendarList(current, nextCalendars));
       setExternalCalendarEvents(nextEvents);
@@ -4735,7 +4848,7 @@ export default function Home() {
       removeLocalStorageKey(`${cachedAppDataKeyPrefix}${authSession.user.id}`);
       await refreshAppleCalendarAccounts();
       await refreshExternalCalendarSettings({ silent: true });
-      await reloadData(selectedId, { silent: true });
+      await reloadData(selectedId, { silent: true, source: "apple-connect" });
     } catch (disconnectError) {
       setExternalCalendarSettingsError(getUserFacingErrorMessage(disconnectError, "Impossible de déconnecter Apple Calendar."));
     } finally {
@@ -4807,7 +4920,7 @@ export default function Home() {
       removeLocalStorageKey(`${cachedAppDataKeyPrefix}${authSession.user.id}`);
       await refreshGoogleCalendarAccounts();
       await refreshExternalCalendarSettings({ silent: true });
-      await reloadData(selectedId, { silent: true });
+      await reloadData(selectedId, { silent: true, source: "google-disconnect" });
     } catch (disconnectError) {
       setExternalCalendarSettingsError(getUserFacingErrorMessage(disconnectError, "Impossible de déconnecter Google Calendar."));
     } finally {
@@ -5066,7 +5179,12 @@ export default function Home() {
     }
   }
 
-  async function syncExternalCalendar(calendar: ExternalCalendar): Promise<ExternalCalendarSyncResult> {
+  async function syncExternalCalendar(
+    calendar: ExternalCalendar,
+    options: { postSyncRefresh?: boolean; source?: string } = {},
+  ): Promise<ExternalCalendarSyncResult> {
+    const postSyncRefresh = options.postSyncRefresh ?? true;
+    const source = options.source ?? "manual";
     if (!supabase) throw new Error("Configuration Supabase manquante.");
     if (!canManageExternalCalendar(permissions, profile, calendar)) {
       throw new Error("Vous ne pouvez synchroniser que vos calendriers.");
@@ -5096,6 +5214,14 @@ export default function Home() {
 
     try {
       const accessToken = await getServerApiAccessToken(authSession?.access_token);
+      const syncStartMs = performance.now();
+      logNetworkDebug("provider-sync:start", {
+        source,
+        calendarId: calendar.id,
+        calendarName: calendar.name,
+        providerType: calendar.providerType,
+        postSyncRefresh,
+      });
 
       if (calendar.providerType === "google" && calendar.syncCapability === "bidirectional") {
         const response = await fetch(getAppApiUrl("/api/calendar/google/sync", "Synchronisation Google Calendar momentanément indisponible."), {
@@ -5120,8 +5246,21 @@ export default function Home() {
           });
           throw new Error(syncPayload?.message?.trim() || "Impossible de synchroniser Google Calendar.");
         }
-        await refreshExternalCalendarSettings({ silent: true });
-        await reloadData(selectedId, { silent: true });
+        if (postSyncRefresh) {
+          await refreshExternalCalendarSettings({ silent: true });
+          await reloadData(selectedId, { silent: true, source: source === "manual" ? "google-manual-sync" : source });
+        }
+        logNetworkDebug("provider-sync:complete", {
+          source,
+          calendarId: calendar.id,
+          providerType: calendar.providerType,
+          durationMs: Math.round(performance.now() - syncStartMs),
+          synced: syncPayload?.synced ?? 0,
+          created: syncPayload?.created ?? 0,
+          updated: syncPayload?.updated ?? 0,
+          deleted: syncPayload?.deleted ?? 0,
+          postSyncRefresh,
+        });
         return {
           synced: syncPayload?.synced ?? 0,
           total: syncPayload?.total ?? 0,
@@ -5150,8 +5289,21 @@ export default function Home() {
           });
           throw new Error(syncPayload?.message?.trim() || "Impossible de synchroniser Apple Calendar.");
         }
-        await refreshExternalCalendarSettings({ silent: true });
-        await reloadData(selectedId, { silent: true });
+        if (postSyncRefresh) {
+          await refreshExternalCalendarSettings({ silent: true });
+          await reloadData(selectedId, { silent: true, source: source === "manual" ? "apple-manual-sync" : source });
+        }
+        logNetworkDebug("provider-sync:complete", {
+          source,
+          calendarId: calendar.id,
+          providerType: calendar.providerType,
+          durationMs: Math.round(performance.now() - syncStartMs),
+          synced: syncPayload?.synced ?? 0,
+          created: syncPayload?.created ?? 0,
+          updated: syncPayload?.updated ?? 0,
+          deleted: syncPayload?.deleted ?? 0,
+          postSyncRefresh,
+        });
         return {
           synced: syncPayload?.synced ?? 0,
           total: syncPayload?.total ?? 0,
@@ -5313,17 +5465,19 @@ export default function Home() {
     syncWindow: { start: Date; end: Date };
     source: "interval" | "online" | "foreground" | "launch";
     enabledAppleCalendars: number;
+    reloadAfter?: boolean;
   }) {
-    const { calendar, syncWindow, source, enabledAppleCalendars } = input;
+    const { calendar, syncWindow, source, enabledAppleCalendars, reloadAfter = true } = input;
     const syncStartedAt = new Date().toISOString();
     const syncStartMs = performance.now();
     const beforeVisibleEvents = visibleProductionEventsRef.current;
     const beforeVisibleSignature = getProductionEventSignature(beforeVisibleEvents);
-    console.info("[Apple sync timing] start", {
+    logNetworkDebug("apple-sync:start", {
       source,
       calendarId: calendar.id,
       calendarName: calendar.name,
       enabledAppleCalendars,
+      reloadAfter,
       syncStartedAt,
       syncWindowStart: syncWindow.start.toISOString(),
       syncWindowEnd: syncWindow.end.toISOString(),
@@ -5347,7 +5501,7 @@ export default function Home() {
     const requestDurationMs = Math.round(performance.now() - requestStartMs);
     const syncPayload = (await response.json().catch(() => null)) as ApplePullSyncApiResponse | null;
     if (!response.ok || syncPayload?.success === false) {
-      console.info("[Apple sync timing] failed", {
+      logNetworkDebug("apple-sync:failed", {
         source,
         calendarId: calendar.id,
         status: response.status,
@@ -5356,19 +5510,24 @@ export default function Home() {
       });
       throw new Error(syncPayload?.message?.trim() || "Impossible de synchroniser Apple Calendar.");
     }
-    const reloadStartMs = performance.now();
-    const reloadResult = await reloadData(selectedIdRef.current, { silent: true });
-    const reloadDurationMs = Math.round(performance.now() - reloadStartMs);
+    let reloadResult: Awaited<ReturnType<typeof reloadData>> = null;
+    let reloadDurationMs: number | null = null;
+    if (reloadAfter) {
+      const reloadStartMs = performance.now();
+      reloadResult = await reloadData(selectedIdRef.current, { silent: true, source: `apple-auto-${source}` });
+      reloadDurationMs = Math.round(performance.now() - reloadStartMs);
+    }
     const viewer = getCalendarVisibilityViewer(profile, authSession?.user.id ?? null);
     const afterVisibleEvents = reloadResult
       ? getVisibleProductionEventsForSelection(reloadResult.events, reloadResult.externalCalendars, viewer)
-      : [];
+      : beforeVisibleEvents;
     const afterVisibleSignature = reloadResult ? getProductionEventSignature(afterVisibleEvents) : "";
-    console.info("[Apple sync timing] complete", {
+    logNetworkDebug("apple-sync:complete", {
       source,
       calendarId: calendar.id,
       calendarName: calendar.name,
       enabledAppleCalendars,
+      reloadAfter,
       syncStartedAt,
       syncFinishedAt: new Date().toISOString(),
       syncWindowStart: syncWindow.start.toISOString(),
@@ -5388,12 +5547,12 @@ export default function Home() {
       deleted: syncPayload?.deleted ?? 0,
       skipped: syncPayload?.skipped ?? 0,
       totalSyncDurationMs: Math.round(performance.now() - syncStartMs),
-      reloadDataCalled: true,
+      reloadDataCalled: reloadAfter,
       reloadDurationMs,
       reloadFromCache: reloadResult?.fromCache ?? null,
       visibleEventsBefore: beforeVisibleEvents.length,
       visibleEventsAfter: afterVisibleEvents.length,
-      visibleEventsChanged: beforeVisibleSignature !== afterVisibleSignature,
+      visibleEventsChanged: reloadAfter ? beforeVisibleSignature !== afterVisibleSignature : null,
     });
     return syncPayload;
   }
@@ -5414,18 +5573,39 @@ export default function Home() {
       googleAutoSyncRunningRef.current = true;
       googleAutoSyncLastStartedAtRef.current = now;
       setGoogleAutoSyncStatus((current) => ({ ...current, state: "syncing", error: null }));
+      const syncResults: ExternalCalendarSyncResult[] = [];
 
       try {
+        const batchStartMs = performance.now();
         for (const calendar of writableGoogleCalendars) {
           if (!onlineRef.current || document.visibilityState !== "visible") break;
-          await syncExternalCalendar(calendar);
+          const result = await syncExternalCalendar(calendar, { postSyncRefresh: false, source: `google-auto-${source}` });
+          syncResults.push(result);
         }
+        if (syncResults.length > 0) {
+          await reloadData(selectedIdRef.current, { silent: true, source: `google-auto-${source}-batch` });
+        }
+        logNetworkDebug("google-sync:batch-complete", {
+          source,
+          finishedAt: new Date().toISOString(),
+          enabledGoogleCalendars: writableGoogleCalendars.length,
+          syncedCalendars: syncResults.length,
+          synced: syncResults.reduce((total, result) => total + (result.synced ?? 0), 0),
+          created: syncResults.reduce((total, result) => total + (result.created ?? 0), 0),
+          updated: syncResults.reduce((total, result) => total + (result.updated ?? 0), 0),
+          deleted: syncResults.reduce((total, result) => total + (result.deleted ?? 0), 0),
+          totalDurationMs: Math.round(performance.now() - batchStartMs),
+          reloadDataCalled: syncResults.length > 0,
+        });
         setGoogleAutoSyncStatus({
           state: "idle",
           lastSyncedAt: new Date().toISOString(),
           error: null,
         });
       } catch (syncError) {
+        if (syncResults.length > 0) {
+          await reloadData(selectedIdRef.current, { silent: true, source: `google-auto-${source}-partial` });
+        }
         const message = getUserFacingErrorMessage(syncError, "Erreur de synchronisation Google.");
         console.error("Automatic Google Calendar sync failed", {
           source,
@@ -5445,27 +5625,27 @@ export default function Home() {
     async function runAutomaticAppleSync(source: "interval" | "online" | "foreground" | "launch") {
       const attemptedAt = new Date().toISOString();
       if (!authSession || !profile) {
-        console.info("[Apple sync timing] skipped", { source, attemptedAt, reason: "missing_session_or_profile" });
+        logNetworkDebug("apple-sync:skipped", { source, attemptedAt, reason: "missing_session_or_profile" });
         return;
       }
       if (loading) {
-        console.info("[Apple sync timing] skipped", { source, attemptedAt, reason: "initial_data_loading" });
+        logNetworkDebug("apple-sync:skipped", { source, attemptedAt, reason: "initial_data_loading" });
         return;
       }
       if (!onlineRef.current) {
-        console.info("[Apple sync timing] skipped", { source, attemptedAt, reason: "offline" });
+        logNetworkDebug("apple-sync:skipped", { source, attemptedAt, reason: "offline" });
         return;
       }
       if (document.visibilityState !== "visible") {
-        console.info("[Apple sync timing] skipped", { source, attemptedAt, reason: "not_visible", visibilityState: document.visibilityState });
+        logNetworkDebug("apple-sync:skipped", { source, attemptedAt, reason: "not_visible", visibilityState: document.visibilityState });
         return;
       }
       if (writableAppleCalendars.length === 0) {
-        console.info("[Apple sync timing] skipped", { source, attemptedAt, reason: "no_enabled_apple_calendars" });
+        logNetworkDebug("apple-sync:skipped", { source, attemptedAt, reason: "no_enabled_apple_calendars" });
         return;
       }
       if (appleAutoSyncRunningRef.current || appleSyncInFlightRef.current || syncingExternalCalendarId) {
-        console.info("[Apple sync timing] skipped", {
+        logNetworkDebug("apple-sync:skipped", {
           source,
           attemptedAt,
           reason: "sync_in_flight",
@@ -5480,7 +5660,7 @@ export default function Home() {
       if (source === "foreground") {
         const foregroundDebounceRemainingMs = APPLE_FOREGROUND_SYNC_DEBOUNCE_MS - (now - appleForegroundSyncLastTriggeredAtRef.current);
         if (foregroundDebounceRemainingMs > 0) {
-          console.info("[Apple sync timing] skipped", {
+          logNetworkDebug("apple-sync:skipped", {
             source,
             attemptedAt,
             reason: "foreground_debounced",
@@ -5492,7 +5672,7 @@ export default function Home() {
       }
       const throttleRemainingMs = APPLE_AUTO_SYNC_MIN_GAP_MS - (now - appleAutoSyncLastStartedAtRef.current);
       if (source !== "foreground" && throttleRemainingMs > 0) {
-        console.info("[Apple sync timing] skipped", {
+        logNetworkDebug("apple-sync:skipped", {
           source,
           attemptedAt,
           reason: "throttled",
@@ -5504,19 +5684,60 @@ export default function Home() {
 
       appleAutoSyncRunningRef.current = true;
       appleAutoSyncLastStartedAtRef.current = now;
+      const syncResults: ApplePullSyncApiResponse[] = [];
 
       try {
         const syncWindow = visibleAppleSyncWindowRef.current ?? getMonthSyncWindow(new Date());
+        const batchStartMs = performance.now();
+        const beforeVisibleEvents = visibleProductionEventsRef.current;
+        const beforeVisibleSignature = getProductionEventSignature(beforeVisibleEvents);
         for (const calendar of writableAppleCalendars) {
           if (!onlineRef.current || document.visibilityState !== "visible") break;
-          await syncAppleCalendarSilently({
+          const syncResult = await syncAppleCalendarSilently({
             calendar,
             syncWindow,
             source,
             enabledAppleCalendars: writableAppleCalendars.length,
+            reloadAfter: false,
           });
+          syncResults.push(syncResult ?? {});
         }
+        const reloadStartMs = performance.now();
+        const reloadResult = syncResults.length > 0
+          ? await reloadData(selectedIdRef.current, { silent: true, source: `apple-auto-${source}-batch` })
+          : null;
+        const reloadDurationMs = syncResults.length > 0 ? Math.round(performance.now() - reloadStartMs) : null;
+        const viewer = getCalendarVisibilityViewer(profile, authSession?.user.id ?? null);
+        const afterVisibleEvents = reloadResult
+          ? getVisibleProductionEventsForSelection(reloadResult.events, reloadResult.externalCalendars, viewer)
+          : beforeVisibleEvents;
+        logNetworkDebug("apple-sync:batch-complete", {
+          source,
+          attemptedAt,
+          finishedAt: new Date().toISOString(),
+          enabledAppleCalendars: writableAppleCalendars.length,
+          syncedCalendars: syncResults.length,
+          syncWindowStart: syncWindow.start.toISOString(),
+          syncWindowEnd: syncWindow.end.toISOString(),
+          routeDurationMsTotal: syncResults.reduce((total, result) => total + (result.diagnostics?.routeDurationMs ?? 0), 0),
+          calDavDurationMsTotal: syncResults.reduce((total, result) => total + (result.diagnostics?.calDavDurationMs ?? 0), 0),
+          eventsFetched: syncResults.reduce((total, result) => total + (result.diagnostics?.calDavEventsFetched ?? result.synced ?? 0), 0),
+          created: syncResults.reduce((total, result) => total + (result.created ?? 0), 0),
+          updated: syncResults.reduce((total, result) => total + (result.updated ?? 0), 0),
+          deleted: syncResults.reduce((total, result) => total + (result.deleted ?? 0), 0),
+          skipped: syncResults.reduce((total, result) => total + (result.skipped ?? 0), 0),
+          totalDurationMs: Math.round(performance.now() - batchStartMs),
+          reloadDataCalled: syncResults.length > 0,
+          reloadDurationMs,
+          reloadFromCache: reloadResult?.fromCache ?? null,
+          visibleEventsBefore: beforeVisibleEvents.length,
+          visibleEventsAfter: afterVisibleEvents.length,
+          visibleEventsChanged: reloadResult ? beforeVisibleSignature !== getProductionEventSignature(afterVisibleEvents) : null,
+        });
       } catch (syncError) {
+        if (syncResults.length > 0) {
+          await reloadData(selectedIdRef.current, { silent: true, source: `apple-auto-${source}-partial` });
+        }
         console.error("Automatic Apple Calendar sync failed", {
           source,
           message: getUserFacingErrorMessage(syncError, "Erreur de synchronisation Apple."),
@@ -5533,17 +5754,18 @@ export default function Home() {
     }
 
     const intervalId = window.setInterval(() => {
+      logNetworkDebug("auto-sync:interval-fired", { firedAt: new Date().toISOString(), intervalMs: GOOGLE_AUTO_SYNC_INTERVAL_MS });
       void runAutomaticExternalCalendarSync("interval");
     }, GOOGLE_AUTO_SYNC_INTERVAL_MS);
 
     function handleOnline() {
-      console.info("[Apple sync timing] online trigger fired", { triggeredAt: new Date().toISOString() });
+      logNetworkDebug("auto-sync:online-fired", { triggeredAt: new Date().toISOString() });
       void runAutomaticExternalCalendarSync("online");
     }
 
     function handleForeground(source: "visibilitychange" | "focus" | "pageshow") {
       if (document.visibilityState !== "visible") return;
-      console.info("[Apple sync timing] foreground trigger fired", { source, triggeredAt: new Date().toISOString() });
+      logNetworkDebug("auto-sync:foreground-fired", { source, triggeredAt: new Date().toISOString() });
       void runAutomaticAppleSync("foreground");
       void runAutomaticGoogleSync("visible");
     }
@@ -5570,14 +5792,14 @@ export default function Home() {
       ? `${authSession.user.id}:${writableAppleCalendars.map((calendar) => calendar.id).sort().join(",")}`
       : null;
     if (launchKey && appleAutoSyncLaunchKeyRef.current !== launchKey) {
-      console.info("[Apple sync timing] launch trigger scheduled", {
+      logNetworkDebug("apple-sync:launch-scheduled", {
         scheduledAt: new Date().toISOString(),
         delayMs: APPLE_AUTO_SYNC_LAUNCH_DELAY_MS,
         enabledAppleCalendars: writableAppleCalendars.length,
       });
       launchSyncTimer = window.setTimeout(() => {
         appleAutoSyncLaunchKeyRef.current = launchKey;
-        console.info("[Apple sync timing] launch trigger fired", { triggeredAt: new Date().toISOString() });
+        logNetworkDebug("apple-sync:launch-fired", { triggeredAt: new Date().toISOString() });
         void runAutomaticAppleSync("launch");
       }, APPLE_AUTO_SYNC_LAUNCH_DELAY_MS);
     }
@@ -5750,12 +5972,26 @@ export default function Home() {
 
   async function refreshNotifications(options: { silent?: boolean } = {}) {
     if (!profile?.id || !supabase || !online) return;
+    const startMs = performance.now();
+    logNetworkDebug("notifications-refresh:start", {
+      silent: Boolean(options.silent),
+      startedAt: new Date().toISOString(),
+    });
 
     try {
       const nextNotifications = await fetchNotifications(profile.id);
+      logNetworkDebug("notifications-refresh:complete", {
+        durationMs: Math.round(performance.now() - startMs),
+        count: nextNotifications.length,
+        approxJsonBytes: getApproxJsonBytes(nextNotifications),
+      });
       setNotifications(nextNotifications);
       cacheNotifications(profile.id, nextNotifications);
     } catch (notificationsError) {
+      logNetworkDebug("notifications-refresh:error", {
+        durationMs: Math.round(performance.now() - startMs),
+        error: getRawErrorMessage(notificationsError),
+      });
       if (!options.silent) {
         console.warn("Failed to load notifications.", notificationsError);
       }
@@ -6146,7 +6382,7 @@ export default function Home() {
       }
 
       if (syncedSomething) {
-        await reloadData(selectedId, { silent: true });
+        await reloadData(selectedId, { silent: true, source: "pending-sync-replay" });
       }
       if (syncedOperationalAction) {
         await createNotification(
@@ -6679,7 +6915,7 @@ export default function Home() {
       }
     }
 
-    await reloadData(event.id);
+    await reloadData(event.id, { source: "create-event" });
     setSelectedDateKey(event.date);
     setVisibleMonth(new Date(`${event.date}T12:00:00`));
     setScreen("detail");
@@ -6830,7 +7066,7 @@ export default function Home() {
       });
     }
 
-    await reloadData(firstImportedEvent?.id ?? undefined);
+    await reloadData(firstImportedEvent?.id ?? undefined, { source: "native-mstv-import" });
     if (firstImportedEvent) {
       setSelectedDateKey(firstImportedEvent.date);
       setVisibleMonth(new Date(`${firstImportedEvent.date}T12:00:00`));
@@ -7003,7 +7239,7 @@ export default function Home() {
         if (syncPayload?.warning) {
           setError(syncPayload.warning);
         }
-        await reloadData(updatedEvent.id, { silent: true });
+        await reloadData(updatedEvent.id, { silent: true, source: "edit-event-calendar-move" });
       } catch (googleSyncError) {
         console.error("External calendar event update failed", getDebugError(googleSyncError));
         await createNotification(
@@ -7016,7 +7252,7 @@ export default function Home() {
           { persist: false },
         );
         setError(getUserFacingErrorMessage(googleSyncError, "L’événement MSTV a été enregistré, mais la synchronisation du calendrier lié a échoué."));
-        await reloadData(updatedEvent.id, { silent: true });
+        await reloadData(updatedEvent.id, { silent: true, source: "edit-event" });
         throw googleSyncError;
       }
     }
@@ -7171,7 +7407,7 @@ export default function Home() {
       );
     }
 
-    await reloadData(event.id);
+    await reloadData(event.id, { source: "import-quote" });
     setSelectedDateKey(normalizedInput.date);
     setVisibleMonth(new Date(`${normalizedInput.date}T12:00:00`));
     setSelectedId(event.id);
@@ -7328,7 +7564,7 @@ export default function Home() {
       { dedupe: true },
     );
 
-    await reloadData(duplicatedEvent.id);
+    await reloadData(duplicatedEvent.id, { source: "duplicate-event" });
     setSelectedDateKey(normalizedDate);
     setVisibleMonth(new Date(`${normalizedDate}T12:00:00`));
     setScreen("detail");
@@ -7495,7 +7731,7 @@ export default function Home() {
           );
           setError(getUserFacingErrorMessage(googleSyncError, "L’événement MSTV a été enregistré, mais la synchronisation du calendrier lié a échoué."));
         } finally {
-          await reloadData(event.id, { silent: true });
+          await reloadData(event.id, { silent: true, source: "delete-event" });
         }
       }
     }
@@ -7657,7 +7893,7 @@ export default function Home() {
           );
           setError(getUserFacingErrorMessage(googleSyncError, "L’événement MSTV a été enregistré, mais la synchronisation du calendrier lié a échoué."));
         } finally {
-          await reloadData(event.id, { silent: true });
+          await reloadData(event.id, { silent: true, source: "restore-event" });
         }
       }
     }
@@ -9032,13 +9268,29 @@ export default function Home() {
     const storageFileName = sanitizeStorageFileName(file.name);
     const storagePath = `${group.eventId}/${group.id}/${storageFileName}`;
     const filePath = `${eventDocumentsBucket}/${storagePath}`;
+    logNetworkDebug("storage-upload:start", {
+      eventId: group.eventId,
+      groupId: group.id,
+      fileName: file.name,
+      fileSize: file.size,
+      storagePath,
+    });
 
     const { error: uploadError } = await supabase.storage.from(eventDocumentsBucket).upload(storagePath, file, {
       contentType: file.type || undefined,
       upsert: false,
     });
 
-    if (uploadError) throw uploadError;
+    if (uploadError) {
+      logNetworkDebug("storage-upload:error", {
+        eventId: group.eventId,
+        groupId: group.id,
+        fileName: file.name,
+        fileSize: file.size,
+        error: getRawErrorMessage(uploadError),
+      });
+      throw uploadError;
+    }
 
     const { data, error: insertError } = await supabase
       .from("event_documents")
@@ -9060,6 +9312,13 @@ export default function Home() {
     }
 
     const document = mapEventDocument(data);
+    logNetworkDebug("storage-upload:complete", {
+      eventId: group.eventId,
+      groupId: group.id,
+      documentId: document.id,
+      fileName: document.fileName,
+      fileSize: document.fileSize,
+    });
 
     setEvents((current) =>
       current.map((event) =>
@@ -9196,9 +9455,24 @@ export default function Home() {
     }
 
     const objectPath = getDocumentObjectPath(file.filePath);
+    logNetworkDebug("storage-signed-url:start", {
+      action: "open",
+      documentId: file.id,
+      eventId: file.eventId,
+      fileName: file.fileName,
+      fileSize: file.fileSize,
+      objectPath,
+    });
     const { data, error: signedUrlError } = await supabase.storage.from(eventDocumentsBucket).createSignedUrl(objectPath, 10 * 60);
 
     if (signedUrlError) throw signedUrlError;
+    logNetworkDebug("storage-signed-url:complete", {
+      action: "open",
+      documentId: file.id,
+      eventId: file.eventId,
+      fileName: file.fileName,
+      fileSize: file.fileSize,
+    });
 
     const previewKind = getDocumentPreviewKind(file);
     if (previewKind) {
@@ -9219,11 +9493,26 @@ export default function Home() {
     }
 
     const objectPath = getDocumentObjectPath(file.filePath);
+    logNetworkDebug("storage-signed-url:start", {
+      action: "download",
+      documentId: file.id,
+      eventId: file.eventId,
+      fileName: file.fileName,
+      fileSize: file.fileSize,
+      objectPath,
+    });
     const { data, error: signedUrlError } = await supabase.storage
       .from(eventDocumentsBucket)
       .createSignedUrl(objectPath, 60, { download: file.fileName });
 
     if (signedUrlError) throw signedUrlError;
+    logNetworkDebug("storage-signed-url:complete", {
+      action: "download",
+      documentId: file.id,
+      eventId: file.eventId,
+      fileName: file.fileName,
+      fileSize: file.fileSize,
+    });
 
     const downloadLink = document.createElement("a");
     downloadLink.href = data.signedUrl;
@@ -9380,7 +9669,7 @@ export default function Home() {
     }
 
     applyOptimisticSoftDelete(deletedEvent.updated_at);
-    await reloadData(null);
+    await reloadData(null, { source: "permanent-delete-event" });
   }
 
   async function restoreDeletedEvent(eventToRestore: ProductionEvent) {
