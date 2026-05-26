@@ -87,8 +87,12 @@ function TimeTextInput({
       }}
       onFocus={(event) => {
         onEditingChange?.(true);
-        event.currentTarget.select();
-        window.setTimeout(() => event.currentTarget.scrollIntoView({ block: "center", behavior: "smooth" }), 80);
+        const target = event.currentTarget;
+        target.select();
+        window.setTimeout(() => {
+          if (typeof target.scrollIntoView !== "function") return;
+          target.scrollIntoView({ block: "center", behavior: "smooth" });
+        }, 80);
       }}
       onKeyDown={(event) => {
         if (event.key === "Enter") {
