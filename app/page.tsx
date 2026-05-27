@@ -6914,9 +6914,7 @@ export default function Home() {
         onDownloadDocument={downloadEventDocument}
         tasks={tasks.filter((task) => task.eventId === eventToRender.id)}
         profiles={taskProfiles}
-        onCreateTask={createTask}
         onUpdateTask={updateTask}
-        onDeleteTask={deleteTask}
         permissions={permissions}
         profile={profile}
       />
@@ -8553,6 +8551,7 @@ export default function Home() {
       eventId: option.eventId,
       assignedProfileId,
       priority: "normal",
+      dueDate: events.find((event) => event.id === option.eventId)?.date ?? null,
     });
     await updateOptionLink(createdTask);
   }
@@ -13227,9 +13226,7 @@ function ProductionDetail({
   onDownloadDocument,
   tasks,
   profiles,
-  onCreateTask,
   onUpdateTask,
-  onDeleteTask,
   permissions,
   profile,
 }: {
@@ -13260,9 +13257,7 @@ function ProductionDetail({
   onDownloadDocument: (document: EventDocument) => Promise<void>;
   tasks: AppTask[];
   profiles: UserProfile[];
-  onCreateTask: (input: TaskCreateInput) => Promise<AppTask>;
   onUpdateTask: (task: AppTask, patch: TaskUpdatePatch) => Promise<void>;
-  onDeleteTask: (task: AppTask) => Promise<void>;
   permissions: AppPermissions;
   profile: UserProfile | null;
 }) {
@@ -13646,8 +13641,15 @@ function ProductionDetail({
                 const Icon = getOptionIcon(option.label);
                 const optionStatus = getOptionEffectiveStatus(option, tasks);
                 const optionTone = getOptionTone(optionStatus);
+                const linkedTask = getLinkedTaskForOption(option, tasks);
                 const optionCompletedName = optionStatus === "completed" ? getOptionAssigneeLabel(option, tasks, profiles) : null;
-                const showOptionCompletedName = Boolean(optionCompletedName);
+                const optionMetaItems = linkedTask
+                  ? [
+                      taskPriorityLabels[linkedTask.priority],
+                      linkedTask.dueDate ? formatShortDate(linkedTask.dueDate) : null,
+                    ].filter(Boolean)
+                  : [];
+                const showOptionMeta = Boolean(optionCompletedName || optionMetaItems.length > 0);
                 const isSelectedOption = contextSelection?.type === "option" && contextSelection.optionId === option.id;
                 const isConfirmingDelete = confirmDelete?.type === "option" && confirmDelete.optionId === option.id;
                 const canManageOptionStructure = canManageCreatedEntity(permissions, profile, option);
@@ -13676,13 +13678,32 @@ function ProductionDetail({
                           onClick={() => selectOption(option)}
                           className={cn(
                             "flex h-full min-w-0 flex-1 px-2 py-2.5 text-left sm:px-3",
-                        showOptionCompletedName ? "flex-col items-start justify-center gap-1.5" : "items-center gap-1.5 sm:gap-2",
+                        showOptionMeta ? "flex-col items-start justify-center gap-1.5" : "items-center gap-1.5 sm:gap-2",
                       )}
                     >
-                      {showOptionCompletedName ? (
+                      {showOptionMeta ? (
                         <>
-                          <span className="inline-flex h-5 max-w-full shrink-0 items-center rounded-full bg-white/75 px-2 text-[0.7rem] font-bold leading-none text-emerald-800 sm:text-xs">
+                          <span className="flex max-w-full shrink-0 items-center gap-1 overflow-hidden">
+                            {optionCompletedName && (
+                              <span className="inline-flex h-5 min-w-0 items-center rounded-full bg-white/75 px-2 text-[0.7rem] font-bold leading-none text-emerald-800 sm:text-xs">
                                 <span className="truncate">{optionCompletedName}</span>
+                              </span>
+                            )}
+                            {linkedTask && (
+                              <span
+                                className={cn(
+                                  "inline-flex h-5 shrink-0 items-center rounded-full bg-white/70 px-2 text-[0.66rem] font-bold leading-none sm:text-[0.7rem]",
+                                  linkedTask.priority === "urgent" ? "text-[#bb2720]" : linkedTask.priority === "low" ? "text-stone-400" : "text-stone-500",
+                                )}
+                              >
+                                {taskPriorityLabels[linkedTask.priority]}
+                              </span>
+                            )}
+                            {linkedTask?.dueDate && (
+                              <span className="inline-flex h-5 shrink-0 items-center rounded-full bg-white/60 px-2 text-[0.66rem] font-bold leading-none text-stone-500 sm:text-[0.7rem]">
+                                {formatShortDate(linkedTask.dueDate)}
+                              </span>
+                            )}
                           </span>
                               <span className="flex w-full min-w-0 items-center gap-1.5 pr-5 sm:gap-2">
                                 <Icon className={cn("h-4 w-4 shrink-0 sm:h-5 sm:w-5", optionTone.icon)} />
@@ -13862,22 +13883,12 @@ function ProductionDetail({
             onDeleteDocumentFile={onDeleteDocumentFile}
             onOpenDocument={onOpenDocument}
             onDownloadDocument={onDownloadDocument}
+            onUpdateTask={onUpdateTask}
             permissions={permissions}
             profile={profile}
             onNativeFieldFocus={nativeKeyboard.handleFieldFocus}
           />
         </div>
-        <EventTasksSection
-          event={event}
-          tasks={tasks}
-          profiles={profiles}
-          permissions={permissions}
-          profile={profile}
-          onCreateTask={onCreateTask}
-          onUpdateTask={onUpdateTask}
-          onDeleteTask={onDeleteTask}
-          onNativeFieldFocus={nativeKeyboard.handleFieldFocus}
-        />
       </div>
     </section>
     {deleteConfirmationOpen && confirmDelete && (
@@ -14304,6 +14315,7 @@ function ContextDetailBlock({
   onDeleteDocumentFile,
   onOpenDocument,
   onDownloadDocument,
+  onUpdateTask,
   permissions,
   profile,
   onNativeFieldFocus,
@@ -14324,6 +14336,7 @@ function ContextDetailBlock({
   onDeleteDocumentFile: (document: EventDocument) => Promise<void>;
   onOpenDocument: (document: EventDocument) => Promise<void>;
   onDownloadDocument: (document: EventDocument) => Promise<void>;
+  onUpdateTask: (task: AppTask, patch: TaskUpdatePatch) => Promise<void>;
   permissions: AppPermissions;
   profile: UserProfile | null;
   onNativeFieldFocus: (target: HTMLElement) => boolean;
@@ -14838,6 +14851,20 @@ function ContextDetailBlock({
   const optionTaskStatusLabel = linkedOptionTask ? (linkedOptionTask.status === "done" ? "Terminé" : "À faire") : "Non assignée";
   const canAssignOptionTask = permissions.canManageEvents;
 
+  async function updateLinkedOptionTask(patch: TaskUpdatePatch) {
+    if (!linkedOptionTask) return;
+    setSavingCompletedByOverride(true);
+    setCompletedByOverrideError(null);
+
+    try {
+      await onUpdateTask(linkedOptionTask, patch);
+    } catch (updateError) {
+      setCompletedByOverrideError(getUserFacingErrorMessage(updateError, "Impossible de modifier la tâche liée."));
+    } finally {
+      setSavingCompletedByOverride(false);
+    }
+  }
+
   return (
     <>
     <Card className="!border-0 bg-white p-4 sm:p-5">
@@ -14858,9 +14885,9 @@ function ContextDetailBlock({
       </div>
       {titleRenameError && <div className="mt-2 text-base font-medium text-rose-700">{titleRenameError}</div>}
       {canAssignOptionTask && (
-        <div className="mt-3 flex flex-wrap items-center justify-between gap-2 rounded-xl bg-emerald-50/70 px-3 py-2">
-          <span className="text-base font-semibold text-emerald-800">Assigné à</span>
-          <div className="flex min-w-0 items-center gap-2">
+        <div className="mt-3 grid gap-2 rounded-xl bg-emerald-50/70 px-3 py-2 sm:grid-cols-[1fr_auto_auto]">
+          <label className="grid min-w-0 gap-1">
+            <span className="text-xs font-semibold uppercase tracking-[0.08em] text-emerald-700/70">Assigné à</span>
             <select
               {...iosKeyboardGuardProps}
               value={optionAssigneeValue}
@@ -14877,7 +14904,42 @@ function ContextDetailBlock({
                 </option>
               ))}
             </select>
-          </div>
+          </label>
+          {linkedOptionTask && (
+            <>
+              <label className="grid min-w-0 gap-1">
+                <span className="text-xs font-semibold uppercase tracking-[0.08em] text-emerald-700/70">Priorité</span>
+                <select
+                  {...iosKeyboardGuardProps}
+                  value={linkedOptionTask.priority}
+                  disabled={savingCompletedByOverride}
+                  onFocus={(event) => onNativeFieldFocus(event.currentTarget)}
+                  onChange={(event) => void updateLinkedOptionTask({ priority: event.target.value as TaskPriority })}
+                  className="h-8 rounded-full border border-transparent bg-white/80 px-3 text-base font-semibold text-emerald-800 outline-none transition focus:border-emerald-300 focus:bg-white disabled:text-emerald-400"
+                  aria-label="Priorité de la tâche liée"
+                >
+                  {Object.entries(taskPriorityLabels).map(([value, label]) => (
+                    <option key={value} value={value}>
+                      {label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="grid min-w-0 gap-1">
+                <span className="text-xs font-semibold uppercase tracking-[0.08em] text-emerald-700/70">Échéance</span>
+                <input
+                  {...iosKeyboardGuardProps}
+                  type="date"
+                  value={linkedOptionTask.dueDate ?? ""}
+                  disabled={savingCompletedByOverride}
+                  onFocus={(event) => onNativeFieldFocus(event.currentTarget)}
+                  onChange={(event) => void updateLinkedOptionTask({ dueDate: event.target.value || null })}
+                  className="h-8 rounded-full border border-transparent bg-white/80 px-3 text-base font-semibold text-emerald-800 outline-none transition focus:border-emerald-300 focus:bg-white disabled:text-emerald-400"
+                  aria-label="Échéance de la tâche liée"
+                />
+              </label>
+            </>
+          )}
         </div>
       )}
       {completedByOverrideError && <div className="mt-2 text-base font-medium text-rose-700">{completedByOverrideError}</div>}
@@ -16403,174 +16465,6 @@ function TaskCreateDiagnosticBlock({ diagnostic }: { diagnostic: TaskCreateDiagn
         )}
       </dl>
     </div>
-  );
-}
-
-function EventTasksSection({
-  event,
-  tasks,
-  profiles,
-  permissions,
-  profile,
-  onCreateTask,
-  onUpdateTask,
-  onDeleteTask,
-  onNativeFieldFocus,
-}: {
-  event: ProductionEvent;
-  tasks: AppTask[];
-  profiles: UserProfile[];
-  permissions: AppPermissions;
-  profile: UserProfile | null;
-  onCreateTask: (input: TaskCreateInput) => Promise<AppTask>;
-  onUpdateTask: (task: AppTask, patch: TaskUpdatePatch) => Promise<void>;
-  onDeleteTask: (task: AppTask) => Promise<void>;
-  onNativeFieldFocus: (target: HTMLElement) => boolean;
-}) {
-  const [adding, setAdding] = useState(false);
-  const [draftTitle, setDraftTitle] = useState("");
-  const [draftAssigneeId, setDraftAssigneeId] = useState(profile?.id ?? "");
-  const [draftPriority, setDraftPriority] = useState<TaskPriority>("normal");
-  const [draftDueDate, setDraftDueDate] = useState("");
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [diagnostic, setDiagnostic] = useState<TaskCreateDiagnostic | null>(null);
-  const orderedTasks = sortTasksForDisplay(tasks);
-  const canCreate = permissions.canManageEvents;
-
-  async function submitTask(formEvent: React.FormEvent<HTMLFormElement>) {
-    formEvent.preventDefault();
-    setSaving(true);
-    setError(null);
-    setDiagnostic(null);
-
-    try {
-      await onCreateTask({
-        title: draftTitle,
-        eventId: event.id,
-        assignedProfileId: draftAssigneeId || null,
-        priority: draftPriority,
-        dueDate: draftDueDate || null,
-      });
-      setDraftTitle("");
-      setDraftAssigneeId(profile?.id ?? "");
-      setDraftPriority("normal");
-      setDraftDueDate("");
-      setAdding(false);
-    } catch (createError) {
-      setError(getTaskCreateUserMessage(createError));
-      setDiagnostic(getTaskCreateDiagnostic(createError));
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  return (
-    <Card className="premium-surface !border-0 p-4 sm:p-5">
-      <div className="mb-3 flex items-center justify-between gap-3">
-        <div className="min-w-0">
-          <h2 className="text-base font-semibold text-stone-950">Tâches</h2>
-          {orderedTasks.length > 0 && (
-            <p className="mt-0.5 text-sm font-medium text-stone-500">
-              {orderedTasks.filter((task) => task.status === "todo").length} à faire
-            </p>
-          )}
-        </div>
-        {canCreate && !adding && (
-          <button
-            type="button"
-            onClick={() => {
-              setError(null);
-              setAdding(true);
-            }}
-            className="rounded-full bg-stone-50 px-3 py-1.5 text-sm font-semibold text-stone-700 transition hover:bg-stone-100"
-          >
-            + Ajouter une tâche
-          </button>
-        )}
-      </div>
-
-      {adding && (
-        <form onSubmit={submitTask} className="mb-3 grid gap-2 rounded-2xl bg-stone-50 p-3">
-          <input
-            {...iosKeyboardGuardProps}
-            required
-            value={draftTitle}
-            onFocus={(event) => onNativeFieldFocus(event.currentTarget)}
-            onChange={(event) => setDraftTitle(event.target.value)}
-            placeholder="Nouvelle tâche"
-            className="h-10 rounded-xl bg-white px-3 text-base font-semibold text-stone-950 outline-none"
-          />
-          <div className="grid gap-2 sm:grid-cols-[1fr_auto_auto] lg:grid-cols-[1fr_auto_auto_auto]">
-            <select
-              {...iosKeyboardGuardProps}
-              value={draftAssigneeId}
-              onFocus={(event) => onNativeFieldFocus(event.currentTarget)}
-              onChange={(event) => setDraftAssigneeId(event.target.value)}
-              className="h-10 min-w-0 rounded-xl bg-white px-3 text-sm font-semibold text-stone-700 outline-none"
-            >
-              <option value="">Non assignée</option>
-              {profiles.map((userProfile) => (
-                <option key={userProfile.id} value={userProfile.id}>
-                  {getProfileOptionLabel(userProfile)}
-                </option>
-              ))}
-            </select>
-            <select
-              {...iosKeyboardGuardProps}
-              value={draftPriority}
-              onFocus={(event) => onNativeFieldFocus(event.currentTarget)}
-              onChange={(event) => setDraftPriority(event.target.value as TaskPriority)}
-              className="h-10 min-w-0 rounded-xl bg-white px-3 text-sm font-semibold text-stone-700 outline-none"
-            >
-              {Object.entries(taskPriorityLabels).map(([value, label]) => (
-                <option key={value} value={value}>
-                  {label}
-                </option>
-              ))}
-            </select>
-            <input
-              {...iosKeyboardGuardProps}
-              type="date"
-              value={draftDueDate}
-              onFocus={(event) => onNativeFieldFocus(event.currentTarget)}
-              onChange={(event) => setDraftDueDate(event.target.value)}
-              className="h-10 rounded-xl bg-white px-3 text-sm font-semibold text-stone-700 outline-none"
-            />
-            <div className="flex justify-end gap-2">
-              <button type="button" onClick={() => setAdding(false)} className="h-10 rounded-xl bg-white px-3 text-sm font-semibold text-stone-500">
-                Annuler
-              </button>
-              <button type="submit" disabled={saving} className="h-10 rounded-full bg-[#bb2720] px-3 text-sm font-semibold text-white disabled:bg-stone-300">
-                Ajouter
-              </button>
-            </div>
-          </div>
-        </form>
-      )}
-
-      {error && <p className="mb-2 text-sm font-semibold text-rose-700">{error}</p>}
-      {diagnostic && <div className="mb-2"><TaskCreateDiagnosticBlock diagnostic={diagnostic} /></div>}
-
-      {orderedTasks.length === 0 ? (
-        <p className="rounded-2xl bg-stone-50 px-3 py-4 text-center text-sm font-medium text-stone-400">Aucune tâche pour cet événement.</p>
-      ) : (
-        <div className="grid gap-1.5">
-          {orderedTasks.map((task) => (
-            <TaskRow
-              key={task.id}
-              task={task}
-              profiles={profiles}
-              currentProfile={profile}
-              permissions={permissions}
-              onUpdateTask={onUpdateTask}
-              onDeleteTask={onDeleteTask}
-              onNativeFieldFocus={onNativeFieldFocus}
-            />
-          ))}
-        </div>
-      )}
-    </Card>
   );
 }
 
