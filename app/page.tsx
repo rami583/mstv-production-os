@@ -11468,7 +11468,7 @@ function TasksSheet({
                   value={draftPriority}
                   onFocus={(event) => nativeKeyboard.handleFieldFocus(event.currentTarget)}
                   onChange={(event) => setDraftPriority(event.target.value as TaskPriority)}
-                  className="h-10 min-w-0 rounded-xl bg-white px-3 text-sm font-semibold text-stone-700 outline-none"
+                  className={cn("h-10 min-w-0 rounded-xl px-3 text-sm font-semibold outline-none", getTaskPriorityTone(draftPriority).input)}
                 >
                   {Object.entries(taskPriorityLabels).map(([value, label]) => (
                     <option key={value} value={value}>
@@ -11544,23 +11544,13 @@ function AdminTasksSheet({
   onOpenEvent: (eventId: string) => void;
 }) {
   const nativeKeyboard = useNativeKeyboardVisibility<HTMLDivElement>();
-  const [assigneeFilter, setAssigneeFilter] = useState("");
-  const [priorityFilter, setPriorityFilter] = useState<"" | TaskPriority>("");
-  const [statusFilter, setStatusFilter] = useState<"" | TaskStatus>("");
   const eventsById = useMemo(() => new Map(events.map((event) => [event.id, event])), [events]);
-  const filteredTasks = sortTasksForDisplay(
-    tasks.filter((task) => {
-      if (assigneeFilter && task.assignedProfileId !== assigneeFilter) return false;
-      if (priorityFilter && task.priority !== priorityFilter) return false;
-      if (statusFilter && task.status !== statusFilter) return false;
-      return true;
-    }),
-  );
-  const todoTasks = filteredTasks.filter((task) => task.status === "todo");
-  const doneTasks = filteredTasks
+  const orderedTasks = sortTasksForDisplay(tasks);
+  const todoTasks = orderedTasks.filter((task) => task.status === "todo");
+  const doneTasks = orderedTasks
     .filter((task) => task.status === "done")
     .sort((left, right) => (right.completedAt ?? right.updatedAt).localeCompare(left.completedAt ?? left.updatedAt))
-    .slice(0, statusFilter === "done" ? filteredTasks.length : 20);
+    .slice(0, 20);
 
   useEscapeToClose(onClose);
 
@@ -11597,85 +11587,33 @@ function AdminTasksSheet({
         className={cn(modalPanelClassName, "flex max-h-[86vh] w-full flex-col overflow-hidden p-4 sm:max-w-3xl sm:p-5")}
         onPointerDown={(pointerEvent) => pointerEvent.stopPropagation()}
       >
-        <div className="mb-4 flex items-start justify-between gap-3">
-          <div className="min-w-0">
-            <h2 className="text-base font-semibold text-stone-950">Toutes les tâches</h2>
-            <p className="mt-1 text-base font-medium text-stone-500">
-              {todoTasks.length > 0 ? `${todoTasks.length} tâche${todoTasks.length > 1 ? "s" : ""} à faire` : "Aucune tâche à faire"}
-            </p>
-          </div>
+        <div className="mb-3 flex items-start justify-end">
           <button type="button" onClick={onClose} className="rounded-xl bg-stone-50 px-3 py-1.5 text-base font-semibold text-stone-600 transition hover:bg-stone-100">
             Fermer
           </button>
         </div>
 
         <div ref={nativeKeyboard.scrollContainerRef} className="no-scrollbar min-h-0 flex-1 space-y-4 overflow-y-auto overscroll-contain" style={nativeKeyboard.scrollContainerStyle}>
-          <div className="grid gap-2 rounded-2xl bg-stone-50 p-2 sm:grid-cols-3">
-            <select
-              {...iosKeyboardGuardProps}
-              value={assigneeFilter}
-              onFocus={(event) => nativeKeyboard.handleFieldFocus(event.currentTarget)}
-              onChange={(event) => setAssigneeFilter(event.target.value)}
-              className="h-10 min-w-0 rounded-xl bg-white px-3 text-sm font-semibold text-stone-700 outline-none"
-            >
-              <option value="">Toute l'équipe</option>
-              {profiles.map((userProfile) => (
-                <option key={userProfile.id} value={userProfile.id}>
-                  {getProfileOptionLabel(userProfile)}
-                </option>
-              ))}
-            </select>
-            <select
-              {...iosKeyboardGuardProps}
-              value={priorityFilter}
-              onFocus={(event) => nativeKeyboard.handleFieldFocus(event.currentTarget)}
-              onChange={(event) => setPriorityFilter(event.target.value as "" | TaskPriority)}
-              className="h-10 min-w-0 rounded-xl bg-white px-3 text-sm font-semibold text-stone-700 outline-none"
-            >
-              <option value="">Toutes priorités</option>
-              {Object.entries(taskPriorityLabels).map(([value, label]) => (
-                <option key={value} value={value}>
-                  {label}
-                </option>
-              ))}
-            </select>
-            <select
-              {...iosKeyboardGuardProps}
-              value={statusFilter}
-              onFocus={(event) => nativeKeyboard.handleFieldFocus(event.currentTarget)}
-              onChange={(event) => setStatusFilter(event.target.value as "" | TaskStatus)}
-              className="h-10 min-w-0 rounded-xl bg-white px-3 text-sm font-semibold text-stone-700 outline-none"
-            >
-              <option value="">Tous statuts</option>
-              <option value="todo">À faire</option>
-              <option value="done">Terminées</option>
-            </select>
-          </div>
-
           {(error) && <p className="text-sm font-semibold text-rose-700">{error}</p>}
           {loading && <p className="rounded-2xl bg-stone-50 px-3 py-4 text-center text-sm font-semibold text-stone-400">Chargement...</p>}
 
-          {statusFilter !== "done" && (
-            <section className="space-y-2">
-              <h3 className="px-1 text-xs font-semibold uppercase tracking-[0.08em] text-stone-400">À faire</h3>
-              {todoTasks.length === 0 ? (
-                <p className="rounded-2xl bg-stone-50 px-3 py-4 text-center text-sm font-medium text-stone-400">Aucune tâche à faire.</p>
-              ) : (
-                <div className="grid gap-2">{todoTasks.map(renderTask)}</div>
-              )}
-            </section>
-          )}
+          <section className="space-y-2">
+            <h3 className="px-1 text-xs font-semibold uppercase tracking-[0.08em] text-stone-400">À faire</h3>
+            {todoTasks.length === 0 ? (
+              <p className="rounded-2xl bg-stone-50 px-3 py-4 text-center text-sm font-medium text-stone-400">Aucune tâche à faire.</p>
+            ) : (
+              <div className="grid gap-2">{todoTasks.map(renderTask)}</div>
+            )}
+          </section>
 
-          {statusFilter !== "todo" && (
-            <section className="space-y-2">
-              <h3 className="px-1 text-xs font-semibold uppercase tracking-[0.08em] text-stone-400">Terminées récemment</h3>
-              {doneTasks.length === 0 ? (
-                <p className="rounded-2xl bg-stone-50 px-3 py-4 text-center text-sm font-medium text-stone-400">Aucune tâche terminée récemment.</p>
-              ) : (
-                <div className="grid gap-2">{doneTasks.map(renderTask)}</div>
-              )}
-            </section>
-          )}
+          <section className="space-y-2">
+            <h3 className="px-1 text-xs font-semibold uppercase tracking-[0.08em] text-stone-400">Terminées récemment</h3>
+            {doneTasks.length === 0 ? (
+              <p className="rounded-2xl bg-stone-50 px-3 py-4 text-center text-sm font-medium text-stone-400">Aucune tâche terminée récemment.</p>
+            ) : (
+              <div className="grid gap-2">{doneTasks.map(renderTask)}</div>
+            )}
+          </section>
         </div>
       </div>
     </div>
@@ -13692,8 +13630,8 @@ function ProductionDetail({
                             {linkedTask && (
                               <span
                                 className={cn(
-                                  "inline-flex h-5 shrink-0 items-center rounded-full bg-white/70 px-2 text-[0.66rem] font-bold leading-none sm:text-[0.7rem]",
-                                  linkedTask.priority === "urgent" ? "text-[#bb2720]" : linkedTask.priority === "low" ? "text-stone-400" : "text-stone-500",
+                                  "inline-flex h-5 shrink-0 items-center rounded-full px-2 text-[0.66rem] font-bold leading-none sm:text-[0.7rem]",
+                                  getTaskPriorityTone(linkedTask.priority).pill,
                                 )}
                               >
                                 {taskPriorityLabels[linkedTask.priority]}
@@ -14885,7 +14823,7 @@ function ContextDetailBlock({
       </div>
       {titleRenameError && <div className="mt-2 text-base font-medium text-rose-700">{titleRenameError}</div>}
       {canAssignOptionTask && (
-        <div className="mt-3 grid gap-2 rounded-xl bg-emerald-50/70 px-3 py-2 sm:grid-cols-[1fr_auto_auto]">
+        <div className="mt-3 grid gap-2 rounded-xl bg-emerald-50/70 px-3 py-2">
           <label className="grid min-w-0 gap-1">
             <span className="text-xs font-semibold uppercase tracking-[0.08em] text-emerald-700/70">Assigné à</span>
             <select
@@ -14906,7 +14844,7 @@ function ContextDetailBlock({
             </select>
           </label>
           {linkedOptionTask && (
-            <>
+            <div className="grid grid-cols-2 items-end gap-2">
               <label className="grid min-w-0 gap-1">
                 <span className="text-xs font-semibold uppercase tracking-[0.08em] text-emerald-700/70">Priorité</span>
                 <select
@@ -14915,7 +14853,10 @@ function ContextDetailBlock({
                   disabled={savingCompletedByOverride}
                   onFocus={(event) => onNativeFieldFocus(event.currentTarget)}
                   onChange={(event) => void updateLinkedOptionTask({ priority: event.target.value as TaskPriority })}
-                  className="h-8 rounded-full border border-transparent bg-white/80 px-3 text-base font-semibold text-emerald-800 outline-none transition focus:border-emerald-300 focus:bg-white disabled:text-emerald-400"
+                  className={cn(
+                    "h-8 rounded-full border border-transparent px-3 text-base font-semibold outline-none transition focus:border-emerald-300 focus:bg-white disabled:text-emerald-400",
+                    getTaskPriorityTone(linkedOptionTask.priority).input,
+                  )}
                   aria-label="Priorité de la tâche liée"
                 >
                   {Object.entries(taskPriorityLabels).map(([value, label]) => (
@@ -14926,7 +14867,7 @@ function ContextDetailBlock({
                 </select>
               </label>
               <label className="grid min-w-0 gap-1">
-                <span className="text-xs font-semibold uppercase tracking-[0.08em] text-emerald-700/70">Échéance</span>
+                <span className="text-right text-xs font-semibold uppercase tracking-[0.08em] text-emerald-700/70">Échéance</span>
                 <input
                   {...iosKeyboardGuardProps}
                   type="date"
@@ -14934,11 +14875,11 @@ function ContextDetailBlock({
                   disabled={savingCompletedByOverride}
                   onFocus={(event) => onNativeFieldFocus(event.currentTarget)}
                   onChange={(event) => void updateLinkedOptionTask({ dueDate: event.target.value || null })}
-                  className="h-8 rounded-full border border-transparent bg-white/80 px-3 text-base font-semibold text-emerald-800 outline-none transition focus:border-emerald-300 focus:bg-white disabled:text-emerald-400"
+                  className="h-8 rounded-full border border-transparent bg-white/80 px-3 text-right text-base font-semibold text-emerald-800 outline-none transition focus:border-emerald-300 focus:bg-white disabled:text-emerald-400"
                   aria-label="Échéance de la tâche liée"
                 />
               </label>
-            </>
+            </div>
           )}
         </div>
       )}
@@ -16353,6 +16294,25 @@ const taskPriorityRank: Record<TaskPriority, number> = {
   low: 2,
 };
 
+function getTaskPriorityTone(priority: TaskPriority) {
+  if (priority === "urgent") {
+    return {
+      pill: "bg-[#bb2720]/10 text-[#bb2720]",
+      input: "bg-[#bb2720]/[0.07] text-[#bb2720]",
+    };
+  }
+  if (priority === "low") {
+    return {
+      pill: "bg-yellow-100/70 text-yellow-700",
+      input: "bg-yellow-50/80 text-yellow-700",
+    };
+  }
+  return {
+    pill: "bg-orange-100/70 text-orange-700",
+    input: "bg-orange-50/80 text-orange-700",
+  };
+}
+
 function sortTasksForDisplay(tasks: AppTask[]) {
   return [...tasks].sort((left, right) => {
     if (left.status !== right.status) return left.status === "todo" ? -1 : 1;
@@ -16394,15 +16354,8 @@ function getOptionAssigneeLabel(option: EventOption, tasks: AppTask[], profiles:
 }
 
 function TaskPriorityBadge({ priority }: { priority: TaskPriority }) {
-  const className =
-    priority === "urgent"
-      ? "bg-[#bb2720]/10 text-[#bb2720]"
-      : priority === "low"
-        ? "bg-stone-100 text-stone-400"
-        : "bg-white/80 text-stone-500";
-
   return (
-    <span className={cn("inline-flex items-center rounded-full px-2 py-0.5 text-[0.68rem] font-semibold", className)}>
+    <span className={cn("inline-flex items-center rounded-full px-2 py-0.5 text-[0.68rem] font-semibold", getTaskPriorityTone(priority).pill)}>
       {taskPriorityLabels[priority]}
     </span>
   );
@@ -16585,7 +16538,7 @@ function TaskRow({
             disabled={saving}
             onFocus={(event) => onNativeFieldFocus?.(event.currentTarget)}
             onChange={(event) => void updateTaskSafely({ priority: event.target.value as TaskPriority })}
-            className="h-9 min-w-0 rounded-xl bg-white/70 px-2 text-sm font-semibold text-stone-600 outline-none"
+            className={cn("h-9 min-w-0 rounded-xl px-2 text-sm font-semibold outline-none", getTaskPriorityTone(task.priority).input)}
           >
             {Object.entries(taskPriorityLabels).map(([value, label]) => (
               <option key={value} value={value}>
