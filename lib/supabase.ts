@@ -290,6 +290,7 @@ export type Database = {
           event_id: string | null;
           assigned_profile_id: string | null;
           status: "todo" | "done";
+          priority: "urgent" | "normal" | "low";
           due_date: string | null;
           created_by: string | null;
           created_at: string;
@@ -302,6 +303,7 @@ export type Database = {
           event_id?: string | null;
           assigned_profile_id?: string | null;
           status?: "todo" | "done";
+          priority?: "urgent" | "normal" | "low";
           due_date?: string | null;
           created_by?: string | null;
           created_at?: string;

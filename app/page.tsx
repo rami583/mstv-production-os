@@ -22,6 +22,7 @@ import {
   GripVertical,
   Import,
   KeyRound,
+  ListChecks,
   ListTodo,
   Link,
   MonitorPlay,
@@ -370,6 +371,7 @@ type AppNotification = {
 };
 
 type TaskStatus = "todo" | "done";
+type TaskPriority = "urgent" | "normal" | "low";
 
 type AppTask = {
   id: string;
@@ -377,12 +379,23 @@ type AppTask = {
   eventId: string | null;
   assignedProfileId: string | null;
   status: TaskStatus;
+  priority: TaskPriority;
   dueDate: string | null;
   createdBy: string | null;
   createdAt: string;
   updatedAt: string;
   completedAt: string | null;
 };
+
+type TaskCreateInput = {
+  title: string;
+  eventId?: string | null;
+  assignedProfileId?: string | null;
+  dueDate?: string | null;
+  priority?: TaskPriority;
+};
+
+type TaskUpdatePatch = Partial<Pick<AppTask, "title" | "assignedProfileId" | "dueDate" | "status" | "priority">>;
 
 type TaskDiagnosticProfile = {
   id: string;
@@ -2728,6 +2741,7 @@ function mapTask(row: TaskRow): AppTask {
     eventId: row.event_id ?? null,
     assignedProfileId: row.assigned_profile_id ?? null,
     status: row.status,
+    priority: row.priority ?? "normal",
     dueDate: row.due_date ?? null,
     createdBy: row.created_by ?? null,
     createdAt: row.created_at,
@@ -2783,6 +2797,9 @@ function getPreciseTaskCreateMessage(error: unknown) {
   }
   if (code === "23514" && /tasks_status_check|status/.test(combined)) {
     return "statut de tâche invalide.";
+  }
+  if (code === "23514" && /tasks_priority_check|priority/.test(combined)) {
+    return "priorité de tâche invalide.";
   }
   if (code === "23514" || /tasks_title_not_blank|check constraint/.test(combined)) {
     return "données de tâche invalides.";
@@ -3783,6 +3800,7 @@ export default function Home() {
   const [quoteImportFile, setQuoteImportFile] = useState<File | null>(null);
   const [nativeMstvIcsImportOpen, setNativeMstvIcsImportOpen] = useState(false);
   const [tasksOpen, setTasksOpen] = useState(false);
+  const [adminTasksOpen, setAdminTasksOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
   const [yearOverviewOpen, setYearOverviewOpen] = useState(false);
   const [globalQuoteDragActive, setGlobalQuoteDragActive] = useState(false);
@@ -4421,6 +4439,12 @@ export default function Home() {
   }, [authSession?.user.id, profile?.id, online]);
 
   useEffect(() => {
+    if (!permissions.canManageEvents && adminTasksOpen) {
+      setAdminTasksOpen(false);
+    }
+  }, [adminTasksOpen, permissions.canManageEvents]);
+
+  useEffect(() => {
     if (!authSession || !profile) return;
     if (!online) {
       const cachedData = getCachedAppData(authSession.user.id);
@@ -4456,12 +4480,12 @@ export default function Home() {
   }, [trashOpen]);
 
   useEffect(() => {
-    if (!tasksOpen) return;
+    if (!tasksOpen && !adminTasksOpen) return;
     void refreshTasks({ silent: tasks.length > 0 });
     if (taskProfiles.length === 0) {
       void refreshTaskProfiles();
     }
-  }, [tasksOpen]);
+  }, [tasksOpen, adminTasksOpen]);
 
   useEffect(() => {
     if (!userManagementOpen || !permissions.canManageUsers) return;
@@ -6243,7 +6267,7 @@ export default function Home() {
     });
   }
 
-  async function createTask(input: { title: string; eventId?: string | null; assignedProfileId?: string | null; dueDate?: string | null }) {
+  async function createTask(input: TaskCreateInput) {
     assertCanManageEvents();
     if (!supabase) throw new Error("Configuration Supabase manquante.");
     const title = input.title.trim();
@@ -6254,6 +6278,7 @@ export default function Home() {
       event_id: input.eventId ?? null,
       assigned_profile_id: input.assignedProfileId ?? null,
       status: "todo",
+      priority: input.priority ?? "normal",
       due_date: input.dueDate || null,
       created_by: authSession?.user.id ?? profile?.id ?? null,
     };
@@ -6289,7 +6314,7 @@ export default function Home() {
     upsertTaskInState(mapTask(data));
   }
 
-  async function updateTask(task: AppTask, patch: Partial<Pick<AppTask, "title" | "assignedProfileId" | "dueDate" | "status">>) {
+  async function updateTask(task: AppTask, patch: TaskUpdatePatch) {
     if (!supabase) throw new Error("Configuration Supabase manquante.");
     const canUpdateTask = permissions.canManageEvents || (task.assignedProfileId === profile?.id && Object.keys(patch).every((key) => key === "status"));
     if (!canUpdateTask) throw new Error("Modification de tâche non autorisée.");
@@ -6303,6 +6328,7 @@ export default function Home() {
     if (patch.assignedProfileId !== undefined) payload.assigned_profile_id = patch.assignedProfileId || null;
     if (patch.dueDate !== undefined) payload.due_date = patch.dueDate || null;
     if (patch.status !== undefined) payload.status = patch.status;
+    if (patch.priority !== undefined && permissions.canManageEvents) payload.priority = patch.priority;
 
     const { data, error: updateError } = await supabase
       .from("tasks")
@@ -10341,6 +10367,8 @@ export default function Home() {
           onOpenNotification={handleNotificationOpen}
           onDismissNotification={markNotificationRead}
           onOpenTasks={() => setTasksOpen(true)}
+          onOpenAllTasks={() => setAdminTasksOpen(true)}
+          canOpenAllTasks={headerPermissions.canManageEvents}
           onImportQuote={() => {
             if (!headerPermissions.canManageEvents) return;
             openQuoteImport();
@@ -10470,6 +10498,8 @@ export default function Home() {
           onOpenNotification={handleNotificationOpen}
           onDismissNotification={markNotificationRead}
           onOpenTasks={() => setTasksOpen(true)}
+          onOpenAllTasks={() => setAdminTasksOpen(true)}
+          canOpenAllTasks={permissions.canManageEvents}
           onGoToday={() => {
             goToday();
             setYearOverviewOpen(false);
@@ -10604,6 +10634,25 @@ export default function Home() {
           onOpenEvent={(eventId) => {
             openEvent(eventId);
             setTasksOpen(false);
+          }}
+        />
+      )}
+
+      {adminTasksOpen && permissions.canManageEvents && (
+        <AdminTasksSheet
+          tasks={tasks}
+          events={chronologicalEvents}
+          profiles={taskProfiles}
+          currentProfile={profile}
+          permissions={permissions}
+          loading={tasksLoading}
+          error={tasksError}
+          onClose={() => setAdminTasksOpen(false)}
+          onUpdateTask={updateTask}
+          onDeleteTask={deleteTask}
+          onOpenEvent={(eventId) => {
+            openEvent(eventId);
+            setAdminTasksOpen(false);
           }}
         />
       )}
@@ -10764,6 +10813,8 @@ function AppHeader({
   onOpenNotification,
   onDismissNotification,
   onOpenTasks,
+  onOpenAllTasks,
+  canOpenAllTasks,
   onImportQuote,
   onImportNativeMstvCalendar,
   onSearch,
@@ -10806,6 +10857,8 @@ function AppHeader({
   onOpenNotification: (notification: AppNotification) => void;
   onDismissNotification: (notification: AppNotification) => void;
   onOpenTasks: () => void;
+  onOpenAllTasks: () => void;
+  canOpenAllTasks: boolean;
   onImportQuote: () => void;
   onImportNativeMstvCalendar: () => void;
   onSearch: () => void;
@@ -10854,6 +10907,7 @@ function AppHeader({
         </button>
         <div className="flex shrink-0 items-center gap-1.5 sm:gap-2">
           <HeaderIcon label="Mes tâches" icon={ListTodo} onClick={onOpenTasks} />
+          {canOpenAllTasks && <HeaderIcon label="Toutes les tâches" icon={ListChecks} onClick={onOpenAllTasks} />}
           <HeaderIcon label="Rechercher" icon={Search} onClick={onSearch} />
           <NotificationMenu
             notifications={notifications}
@@ -11167,14 +11221,15 @@ function TasksSheet({
   loading: boolean;
   error: string | null;
   onClose: () => void;
-  onCreateTask: (input: { title: string; eventId?: string | null; assignedProfileId?: string | null; dueDate?: string | null }) => Promise<void>;
-  onUpdateTask: (task: AppTask, patch: Partial<Pick<AppTask, "title" | "assignedProfileId" | "dueDate" | "status">>) => Promise<void>;
+  onCreateTask: (input: TaskCreateInput) => Promise<void>;
+  onUpdateTask: (task: AppTask, patch: TaskUpdatePatch) => Promise<void>;
   onDeleteTask: (task: AppTask) => Promise<void>;
   onOpenEvent: (eventId: string) => void;
 }) {
   const nativeKeyboard = useNativeKeyboardVisibility<HTMLDivElement>();
   const [draftTitle, setDraftTitle] = useState("");
   const [draftAssigneeId, setDraftAssigneeId] = useState(currentProfile?.id ?? "");
+  const [draftPriority, setDraftPriority] = useState<TaskPriority>("normal");
   const [draftDueDate, setDraftDueDate] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [localError, setLocalError] = useState<string | null>(null);
@@ -11200,10 +11255,12 @@ function TasksSheet({
         title: draftTitle,
         eventId: null,
         assignedProfileId: draftAssigneeId || null,
+        priority: draftPriority,
         dueDate: draftDueDate || null,
       });
       setDraftTitle("");
       setDraftAssigneeId(currentProfile?.id ?? "");
+      setDraftPriority("normal");
       setDraftDueDate("");
     } catch (createError) {
       setLocalError(getTaskCreateUserMessage(createError));
@@ -11271,7 +11328,7 @@ function TasksSheet({
                 placeholder="Titre de la tâche"
                 className="h-10 rounded-xl bg-white px-3 text-base font-semibold text-stone-950 outline-none"
               />
-              <div className="grid gap-2 sm:grid-cols-[1fr_auto_auto]">
+              <div className="grid gap-2 sm:grid-cols-[1fr_auto_auto_auto]">
                 <select
                   {...iosKeyboardGuardProps}
                   value={draftAssigneeId}
@@ -11283,6 +11340,19 @@ function TasksSheet({
                   {profiles.map((userProfile) => (
                     <option key={userProfile.id} value={userProfile.id}>
                       {getProfileOptionLabel(userProfile)}
+                    </option>
+                  ))}
+                </select>
+                <select
+                  {...iosKeyboardGuardProps}
+                  value={draftPriority}
+                  onFocus={(event) => nativeKeyboard.handleFieldFocus(event.currentTarget)}
+                  onChange={(event) => setDraftPriority(event.target.value as TaskPriority)}
+                  className="h-10 min-w-0 rounded-xl bg-white px-3 text-sm font-semibold text-stone-700 outline-none"
+                >
+                  {Object.entries(taskPriorityLabels).map(([value, label]) => (
+                    <option key={value} value={value}>
+                      {label}
                     </option>
                   ))}
                 </select>
@@ -11328,6 +11398,170 @@ function TasksSheet({
   );
 }
 
+function AdminTasksSheet({
+  tasks,
+  events,
+  profiles,
+  currentProfile,
+  permissions,
+  loading,
+  error,
+  onClose,
+  onUpdateTask,
+  onDeleteTask,
+  onOpenEvent,
+}: {
+  tasks: AppTask[];
+  events: ProductionEvent[];
+  profiles: UserProfile[];
+  currentProfile: UserProfile | null;
+  permissions: AppPermissions;
+  loading: boolean;
+  error: string | null;
+  onClose: () => void;
+  onUpdateTask: (task: AppTask, patch: TaskUpdatePatch) => Promise<void>;
+  onDeleteTask: (task: AppTask) => Promise<void>;
+  onOpenEvent: (eventId: string) => void;
+}) {
+  const nativeKeyboard = useNativeKeyboardVisibility<HTMLDivElement>();
+  const [assigneeFilter, setAssigneeFilter] = useState("");
+  const [priorityFilter, setPriorityFilter] = useState<"" | TaskPriority>("");
+  const [statusFilter, setStatusFilter] = useState<"" | TaskStatus>("");
+  const eventsById = useMemo(() => new Map(events.map((event) => [event.id, event])), [events]);
+  const filteredTasks = sortTasksForDisplay(
+    tasks.filter((task) => {
+      if (assigneeFilter && task.assignedProfileId !== assigneeFilter) return false;
+      if (priorityFilter && task.priority !== priorityFilter) return false;
+      if (statusFilter && task.status !== statusFilter) return false;
+      return true;
+    }),
+  );
+  const todoTasks = filteredTasks.filter((task) => task.status === "todo");
+  const doneTasks = filteredTasks
+    .filter((task) => task.status === "done")
+    .sort((left, right) => (right.completedAt ?? right.updatedAt).localeCompare(left.completedAt ?? left.updatedAt))
+    .slice(0, statusFilter === "done" ? filteredTasks.length : 20);
+
+  useEscapeToClose(onClose);
+
+  function renderTask(task: AppTask) {
+    const linkedEvent = task.eventId ? eventsById.get(task.eventId) ?? null : null;
+    return (
+      <div key={task.id} className="rounded-2xl bg-stone-50 p-2.5">
+        <TaskRow
+          task={task}
+          profiles={profiles}
+          currentProfile={currentProfile}
+          permissions={permissions}
+          onUpdateTask={onUpdateTask}
+          onDeleteTask={onDeleteTask}
+          onNativeFieldFocus={nativeKeyboard.handleFieldFocus}
+          compact
+        />
+        {linkedEvent && (
+          <button
+            type="button"
+            onClick={() => onOpenEvent(linkedEvent.id)}
+            className="mt-1.5 w-full rounded-xl px-2 py-1 text-left text-xs font-semibold text-stone-500 transition hover:bg-white hover:text-stone-800"
+          >
+            {getProductionEventDisplay(linkedEvent).title} · {formatFullDate(linkedEvent.date)}
+          </button>
+        )}
+      </div>
+    );
+  }
+
+  return (
+    <div className={cn(modalBackdropClassName, modalSheetPositionClassName)} onPointerDown={(pointerEvent) => handleModalBackdropPointerDown(pointerEvent, onClose)}>
+      <div
+        className={cn(modalPanelClassName, "flex max-h-[86vh] w-full flex-col overflow-hidden p-4 sm:max-w-3xl sm:p-5")}
+        onPointerDown={(pointerEvent) => pointerEvent.stopPropagation()}
+      >
+        <div className="mb-4 flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <h2 className="text-base font-semibold text-stone-950">Toutes les tâches</h2>
+            <p className="mt-1 text-base font-medium text-stone-500">
+              {todoTasks.length > 0 ? `${todoTasks.length} tâche${todoTasks.length > 1 ? "s" : ""} à faire` : "Aucune tâche à faire"}
+            </p>
+          </div>
+          <button type="button" onClick={onClose} className="rounded-xl bg-stone-50 px-3 py-1.5 text-base font-semibold text-stone-600 transition hover:bg-stone-100">
+            Fermer
+          </button>
+        </div>
+
+        <div ref={nativeKeyboard.scrollContainerRef} className="no-scrollbar min-h-0 flex-1 space-y-4 overflow-y-auto overscroll-contain" style={nativeKeyboard.scrollContainerStyle}>
+          <div className="grid gap-2 rounded-2xl bg-stone-50 p-2 sm:grid-cols-3">
+            <select
+              {...iosKeyboardGuardProps}
+              value={assigneeFilter}
+              onFocus={(event) => nativeKeyboard.handleFieldFocus(event.currentTarget)}
+              onChange={(event) => setAssigneeFilter(event.target.value)}
+              className="h-10 min-w-0 rounded-xl bg-white px-3 text-sm font-semibold text-stone-700 outline-none"
+            >
+              <option value="">Toute l'équipe</option>
+              {profiles.map((userProfile) => (
+                <option key={userProfile.id} value={userProfile.id}>
+                  {getProfileOptionLabel(userProfile)}
+                </option>
+              ))}
+            </select>
+            <select
+              {...iosKeyboardGuardProps}
+              value={priorityFilter}
+              onFocus={(event) => nativeKeyboard.handleFieldFocus(event.currentTarget)}
+              onChange={(event) => setPriorityFilter(event.target.value as "" | TaskPriority)}
+              className="h-10 min-w-0 rounded-xl bg-white px-3 text-sm font-semibold text-stone-700 outline-none"
+            >
+              <option value="">Toutes priorités</option>
+              {Object.entries(taskPriorityLabels).map(([value, label]) => (
+                <option key={value} value={value}>
+                  {label}
+                </option>
+              ))}
+            </select>
+            <select
+              {...iosKeyboardGuardProps}
+              value={statusFilter}
+              onFocus={(event) => nativeKeyboard.handleFieldFocus(event.currentTarget)}
+              onChange={(event) => setStatusFilter(event.target.value as "" | TaskStatus)}
+              className="h-10 min-w-0 rounded-xl bg-white px-3 text-sm font-semibold text-stone-700 outline-none"
+            >
+              <option value="">Tous statuts</option>
+              <option value="todo">À faire</option>
+              <option value="done">Terminées</option>
+            </select>
+          </div>
+
+          {(error) && <p className="text-sm font-semibold text-rose-700">{error}</p>}
+          {loading && <p className="rounded-2xl bg-stone-50 px-3 py-4 text-center text-sm font-semibold text-stone-400">Chargement...</p>}
+
+          {statusFilter !== "done" && (
+            <section className="space-y-2">
+              <h3 className="px-1 text-xs font-semibold uppercase tracking-[0.08em] text-stone-400">À faire</h3>
+              {todoTasks.length === 0 ? (
+                <p className="rounded-2xl bg-stone-50 px-3 py-4 text-center text-sm font-medium text-stone-400">Aucune tâche à faire.</p>
+              ) : (
+                <div className="grid gap-2">{todoTasks.map(renderTask)}</div>
+              )}
+            </section>
+          )}
+
+          {statusFilter !== "todo" && (
+            <section className="space-y-2">
+              <h3 className="px-1 text-xs font-semibold uppercase tracking-[0.08em] text-stone-400">Terminées récemment</h3>
+              {doneTasks.length === 0 ? (
+                <p className="rounded-2xl bg-stone-50 px-3 py-4 text-center text-sm font-medium text-stone-400">Aucune tâche terminée récemment.</p>
+              ) : (
+                <div className="grid gap-2">{doneTasks.map(renderTask)}</div>
+              )}
+            </section>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function YearOverviewOverlay({
   initialYear,
   events,
@@ -11355,6 +11589,8 @@ function YearOverviewOverlay({
   onOpenNotification,
   onDismissNotification,
   onOpenTasks,
+  onOpenAllTasks,
+  canOpenAllTasks,
   onGoToday,
   onImportQuote,
   onImportNativeMstvCalendar,
@@ -11393,6 +11629,8 @@ function YearOverviewOverlay({
   onOpenNotification: (notification: AppNotification) => void;
   onDismissNotification: (notification: AppNotification) => void;
   onOpenTasks: () => void;
+  onOpenAllTasks: () => void;
+  canOpenAllTasks: boolean;
   onGoToday: () => void;
   onImportQuote: () => void;
   onImportNativeMstvCalendar: () => void;
@@ -11641,6 +11879,8 @@ function YearOverviewOverlay({
           onOpenNotification={onOpenNotification}
           onDismissNotification={onDismissNotification}
           onOpenTasks={onOpenTasks}
+          onOpenAllTasks={onOpenAllTasks}
+          canOpenAllTasks={canOpenAllTasks}
           onImportQuote={onImportQuote}
           onImportNativeMstvCalendar={onImportNativeMstvCalendar}
           onSearch={onSearch}
@@ -12901,8 +13141,8 @@ function ProductionDetail({
   onDownloadDocument: (document: EventDocument) => Promise<void>;
   tasks: AppTask[];
   profiles: UserProfile[];
-  onCreateTask: (input: { title: string; eventId?: string | null; assignedProfileId?: string | null; dueDate?: string | null }) => Promise<void>;
-  onUpdateTask: (task: AppTask, patch: Partial<Pick<AppTask, "title" | "assignedProfileId" | "dueDate" | "status">>) => Promise<void>;
+  onCreateTask: (input: TaskCreateInput) => Promise<void>;
+  onUpdateTask: (task: AppTask, patch: TaskUpdatePatch) => Promise<void>;
   onDeleteTask: (task: AppTask) => Promise<void>;
   permissions: AppPermissions;
   profile: UserProfile | null;
@@ -16000,9 +16240,22 @@ function EventCalendarBadge({ event }: { event: ProductionEvent }) {
   );
 }
 
+const taskPriorityLabels: Record<TaskPriority, string> = {
+  urgent: "Urgent",
+  normal: "Normal",
+  low: "Faible",
+};
+
+const taskPriorityRank: Record<TaskPriority, number> = {
+  urgent: 0,
+  normal: 1,
+  low: 2,
+};
+
 function sortTasksForDisplay(tasks: AppTask[]) {
   return [...tasks].sort((left, right) => {
     if (left.status !== right.status) return left.status === "todo" ? -1 : 1;
+    if (left.priority !== right.priority) return taskPriorityRank[left.priority] - taskPriorityRank[right.priority];
     const leftDue = left.dueDate ?? "9999-12-31";
     const rightDue = right.dueDate ?? "9999-12-31";
     if (leftDue !== rightDue) return leftDue.localeCompare(rightDue);
@@ -16020,6 +16273,21 @@ function formatShortDate(dateKey: string | null) {
 function getTaskAssigneeLabel(task: AppTask, profiles: UserProfile[]) {
   const assignee = profiles.find((userProfile) => userProfile.id === task.assignedProfileId) ?? null;
   return assignee ? getProfileOptionLabel(assignee) : "Non assignée";
+}
+
+function TaskPriorityBadge({ priority }: { priority: TaskPriority }) {
+  const className =
+    priority === "urgent"
+      ? "bg-[#bb2720]/10 text-[#bb2720]"
+      : priority === "low"
+        ? "bg-stone-100 text-stone-400"
+        : "bg-white/80 text-stone-500";
+
+  return (
+    <span className={cn("inline-flex items-center rounded-full px-2 py-0.5 text-[0.68rem] font-semibold", className)}>
+      {taskPriorityLabels[priority]}
+    </span>
+  );
 }
 
 function TaskCreateDiagnosticBlock({ diagnostic }: { diagnostic: TaskCreateDiagnostic | null }) {
@@ -16098,14 +16366,15 @@ function EventTasksSection({
   profiles: UserProfile[];
   permissions: AppPermissions;
   profile: UserProfile | null;
-  onCreateTask: (input: { title: string; eventId?: string | null; assignedProfileId?: string | null; dueDate?: string | null }) => Promise<void>;
-  onUpdateTask: (task: AppTask, patch: Partial<Pick<AppTask, "title" | "assignedProfileId" | "dueDate" | "status">>) => Promise<void>;
+  onCreateTask: (input: TaskCreateInput) => Promise<void>;
+  onUpdateTask: (task: AppTask, patch: TaskUpdatePatch) => Promise<void>;
   onDeleteTask: (task: AppTask) => Promise<void>;
   onNativeFieldFocus: (target: HTMLElement) => boolean;
 }) {
   const [adding, setAdding] = useState(false);
   const [draftTitle, setDraftTitle] = useState("");
   const [draftAssigneeId, setDraftAssigneeId] = useState(profile?.id ?? "");
+  const [draftPriority, setDraftPriority] = useState<TaskPriority>("normal");
   const [draftDueDate, setDraftDueDate] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -16124,10 +16393,12 @@ function EventTasksSection({
         title: draftTitle,
         eventId: event.id,
         assignedProfileId: draftAssigneeId || null,
+        priority: draftPriority,
         dueDate: draftDueDate || null,
       });
       setDraftTitle("");
       setDraftAssigneeId(profile?.id ?? "");
+      setDraftPriority("normal");
       setDraftDueDate("");
       setAdding(false);
     } catch (createError) {
@@ -16174,7 +16445,7 @@ function EventTasksSection({
             placeholder="Nouvelle tâche"
             className="h-10 rounded-xl bg-white px-3 text-base font-semibold text-stone-950 outline-none"
           />
-          <div className="grid gap-2 sm:grid-cols-[1fr_auto_auto]">
+          <div className="grid gap-2 sm:grid-cols-[1fr_auto_auto] lg:grid-cols-[1fr_auto_auto_auto]">
             <select
               {...iosKeyboardGuardProps}
               value={draftAssigneeId}
@@ -16186,6 +16457,19 @@ function EventTasksSection({
               {profiles.map((userProfile) => (
                 <option key={userProfile.id} value={userProfile.id}>
                   {getProfileOptionLabel(userProfile)}
+                </option>
+              ))}
+            </select>
+            <select
+              {...iosKeyboardGuardProps}
+              value={draftPriority}
+              onFocus={(event) => onNativeFieldFocus(event.currentTarget)}
+              onChange={(event) => setDraftPriority(event.target.value as TaskPriority)}
+              className="h-10 min-w-0 rounded-xl bg-white px-3 text-sm font-semibold text-stone-700 outline-none"
+            >
+              {Object.entries(taskPriorityLabels).map(([value, label]) => (
+                <option key={value} value={value}>
+                  {label}
                 </option>
               ))}
             </select>
@@ -16248,7 +16532,7 @@ function TaskRow({
   profiles: UserProfile[];
   currentProfile: UserProfile | null;
   permissions: AppPermissions;
-  onUpdateTask: (task: AppTask, patch: Partial<Pick<AppTask, "title" | "assignedProfileId" | "dueDate" | "status">>) => Promise<void>;
+  onUpdateTask: (task: AppTask, patch: TaskUpdatePatch) => Promise<void>;
   onDeleteTask: (task: AppTask) => Promise<void>;
   onNativeFieldFocus?: (target: HTMLElement) => boolean;
   compact?: boolean;
@@ -16264,7 +16548,7 @@ function TaskRow({
     setTitle(task.title);
   }, [task.title]);
 
-  async function updateTaskSafely(patch: Partial<Pick<AppTask, "title" | "assignedProfileId" | "dueDate" | "status">>) {
+  async function updateTaskSafely(patch: TaskUpdatePatch) {
     setSaving(true);
     setLocalError(null);
     try {
@@ -16311,6 +16595,7 @@ function TaskRow({
             <p className={cn("truncate text-base font-semibold", done ? "text-stone-500 line-through" : "text-stone-950")}>{task.title}</p>
           )}
           <div className={cn("mt-1 flex flex-wrap items-center gap-2 text-xs font-semibold text-stone-400", compact && "text-[0.7rem]")}>
+            <TaskPriorityBadge priority={task.priority} />
             <span>{getTaskAssigneeLabel(task, profiles)}</span>
             {task.dueDate && <span>Échéance {formatShortDate(task.dueDate)}</span>}
           </div>
@@ -16328,7 +16613,7 @@ function TaskRow({
         )}
       </div>
       {canManage && (
-        <div className="mt-2 grid gap-2 pl-7 sm:grid-cols-2">
+        <div className="mt-2 grid gap-2 pl-7 sm:grid-cols-3">
           <select
             {...iosKeyboardGuardProps}
             value={task.assignedProfileId ?? ""}
@@ -16341,6 +16626,20 @@ function TaskRow({
             {profiles.map((userProfile) => (
               <option key={userProfile.id} value={userProfile.id}>
                 {getProfileOptionLabel(userProfile)}
+              </option>
+            ))}
+          </select>
+          <select
+            {...iosKeyboardGuardProps}
+            value={task.priority}
+            disabled={saving}
+            onFocus={(event) => onNativeFieldFocus?.(event.currentTarget)}
+            onChange={(event) => void updateTaskSafely({ priority: event.target.value as TaskPriority })}
+            className="h-9 min-w-0 rounded-xl bg-white/70 px-2 text-sm font-semibold text-stone-600 outline-none"
+          >
+            {Object.entries(taskPriorityLabels).map(([value, label]) => (
+              <option key={value} value={value}>
+                {label}
               </option>
             ))}
           </select>
