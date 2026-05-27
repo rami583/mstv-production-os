@@ -2775,6 +2775,9 @@ function getPreciseTaskCreateMessage(error: unknown) {
   if (code === "23503" && combined.includes("created_by")) {
     return "votre profil MSTV n'est pas lié correctement à votre session.";
   }
+  if (code === "23502" && combined.includes("event_id")) {
+    return "la base de données n'autorise pas encore les tâches sans événement lié.";
+  }
   if (code === "42501" || /row-level security|rls|policy|permission denied|not authorized|unauthorized|forbidden/.test(combined)) {
     return "droits Supabase insuffisants pour créer cette tâche.";
   }
