@@ -75,6 +75,7 @@ export type Database = {
           status: CompletionStatus;
           details: string | null;
           assigned_team_member_id: string | null;
+          task_id: string | null;
           completed_by_profile_id: string | null;
           completed_by_label: string | null;
           completed_by_initials: string | null;
@@ -91,6 +92,7 @@ export type Database = {
           status?: CompletionStatus;
           details?: string | null;
           assigned_team_member_id?: string | null;
+          task_id?: string | null;
           completed_by_profile_id?: string | null;
           completed_by_label?: string | null;
           completed_by_initials?: string | null;

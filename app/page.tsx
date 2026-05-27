@@ -275,6 +275,7 @@ type EventOption = {
   label: string;
   status: CompletionStatus;
   details: string | null;
+  taskId: string | null;
   completedByProfileId: string | null;
   completedByLabel: string | null;
   completedByInitials: string | null;
@@ -3203,6 +3204,7 @@ function mapEvent(row: EventQueryRow): ProductionEvent {
       label: option.label,
       status: option.status,
       details: option.details,
+      taskId: option.task_id ?? null,
       completedByProfileId: option.completed_by_profile_id ?? null,
       completedByLabel: option.completed_by_label ?? null,
       completedByInitials: option.completed_by_initials ?? null,
@@ -6311,7 +6313,9 @@ export default function Home() {
       console.error("[MSTV tasks] create failed", diagnostic);
       throw createTaskInsertError(insertError, diagnostic);
     }
-    upsertTaskInState(mapTask(data));
+    const createdTask = mapTask(data);
+    upsertTaskInState(createdTask);
+    return createdTask;
   }
 
   async function updateTask(task: AppTask, patch: TaskUpdatePatch) {
@@ -6890,8 +6894,7 @@ export default function Home() {
           setEditingReturnScreen("detail");
           setCreateModalOpen(true);
         }}
-        onToggleOption={toggleOption}
-        onChangeOptionCompletedBy={updateOptionCompletedBy}
+        onAssignOptionTask={assignOptionTask}
         onCreateOption={createEventOption}
         onDeleteOption={deleteEventOption}
         onRenameOption={renameEventOption}
@@ -7026,6 +7029,7 @@ export default function Home() {
         label: option.label,
         status: "incomplete",
         details: option.details,
+        taskId: null,
         completedByProfileId: null,
         completedByLabel: null,
         completedByInitials: null,
@@ -8452,6 +8456,107 @@ export default function Home() {
     });
   }
 
+  async function assignOptionTask(option: EventOption, assignedProfileId: string | null) {
+    assertCanManageEvents();
+    if (!supabase) throw new Error("Configuration Supabase manquante.");
+    const supabaseClient = supabase;
+
+    const currentLinkedTask = option.taskId ? tasks.find((task) => task.id === option.taskId) ?? null : null;
+    const assignedProfile = assignedProfileId ? taskProfiles.find((userProfile) => userProfile.id === assignedProfileId) ?? null : null;
+    if (assignedProfileId && !assignedProfile) {
+      throw new Error("Profil assigné introuvable.");
+    }
+
+    async function updateOptionLink(task: AppTask | null) {
+      const assigneeLabel = task && assignedProfile ? getProfileOptionLabel(assignedProfile) : null;
+      const assigneeInitials = assignedProfile ? getProfileInitials(assignedProfile, assignedProfile.email ?? undefined) : null;
+      const completed = task?.status === "done";
+      const updatePayload: Database["public"]["Tables"]["event_options"]["Update"] = {
+        task_id: task?.id ?? null,
+        status: completed ? "completed" : "incomplete",
+        completed_by_profile_id: completed ? task.assignedProfileId : null,
+        completed_by_label: completed ? assigneeLabel : null,
+        completed_by_initials: completed ? assigneeInitials : null,
+        completed_at: completed ? (task.completedAt ?? new Date().toISOString()) : null,
+      };
+
+      const { error: updateError } = await supabaseClient
+        .from("event_options")
+        .update(updatePayload)
+        .eq("id", option.id);
+
+      if (updateError) throw updateError;
+
+      setEvents((current) =>
+        current.map((event) =>
+          event.id === option.eventId
+            ? {
+                ...event,
+                options: event.options.map((item) =>
+                  item.id === option.id
+                    ? {
+                        ...item,
+                        taskId: updatePayload.task_id ?? null,
+                        status: updatePayload.status ?? item.status,
+                        completedByProfileId: updatePayload.completed_by_profile_id ?? null,
+                        completedByLabel: updatePayload.completed_by_label ?? null,
+                        completedByInitials: updatePayload.completed_by_initials ?? null,
+                        completedAt: updatePayload.completed_at ?? null,
+                      }
+                    : item,
+                ),
+              }
+            : event,
+        ),
+      );
+
+      await logEventActivity({
+        eventId: option.eventId,
+        actionType: "option_task_assignment_changed",
+        entityType: "option",
+        entityId: option.id,
+        description: task ? `Option ${option.label} assignée à ${assigneeLabel ?? "Non assignée"}` : `Assignation de l'option ${option.label} retirée`,
+        previousValue: {
+          taskId: option.taskId,
+          completedByProfileId: option.completedByProfileId,
+          completedByLabel: option.completedByLabel,
+          status: option.status,
+        },
+        newValue: {
+          taskId: updatePayload.task_id ?? null,
+          assignedProfileId: task?.assignedProfileId ?? null,
+          status: updatePayload.status,
+        },
+      });
+    }
+
+    if (!assignedProfileId) {
+      if (currentLinkedTask) {
+        await deleteTask(currentLinkedTask);
+      }
+      await updateOptionLink(null);
+      return;
+    }
+
+    if (currentLinkedTask) {
+      await updateTask(currentLinkedTask, {
+        title: option.label,
+        assignedProfileId,
+        priority: currentLinkedTask.priority ?? "normal",
+      });
+      await updateOptionLink({ ...currentLinkedTask, title: option.label, assignedProfileId });
+      return;
+    }
+
+    const createdTask = await createTask({
+      title: option.label,
+      eventId: option.eventId,
+      assignedProfileId,
+      priority: "normal",
+    });
+    await updateOptionLink(createdTask);
+  }
+
   async function syncEventLinkEntries(link: EventLink, drafts: LinkEntryDraft[]) {
     assertCanManageOperational();
     if (!supabase) {
@@ -8697,6 +8802,7 @@ export default function Home() {
         label: nextLabel,
         status: "incomplete",
         details: null,
+        taskId: null,
         completedByProfileId: null,
         completedByLabel: null,
         completedByInitials: null,
@@ -8773,6 +8879,7 @@ export default function Home() {
       label: data.label,
       status: data.status,
       details: data.details,
+      taskId: data.task_id ?? null,
       completedByProfileId: data.completed_by_profile_id ?? null,
       completedByLabel: data.completed_by_label ?? null,
       completedByInitials: data.completed_by_initials ?? null,
@@ -8859,6 +8966,13 @@ export default function Home() {
 
     applyOptimisticDelete();
 
+    if (option.taskId && permissions.canManageEvents) {
+      const linkedTask = tasks.find((task) => task.id === option.taskId) ?? null;
+      if (linkedTask) {
+        await deleteTask(linkedTask);
+      }
+    }
+
     await logEventActivity({
       ...activity,
     });
@@ -8932,6 +9046,13 @@ export default function Home() {
     }
 
     applyOptimisticRename();
+
+    if (option.taskId && permissions.canManageEvents) {
+      const linkedTask = tasks.find((task) => task.id === option.taskId) ?? null;
+      if (linkedTask) {
+        await updateTask(linkedTask, { title: nextLabel });
+      }
+    }
 
     await logEventActivity({
       eventId: option.eventId,
@@ -11221,7 +11342,7 @@ function TasksSheet({
   loading: boolean;
   error: string | null;
   onClose: () => void;
-  onCreateTask: (input: TaskCreateInput) => Promise<void>;
+  onCreateTask: (input: TaskCreateInput) => Promise<AppTask>;
   onUpdateTask: (task: AppTask, patch: TaskUpdatePatch) => Promise<void>;
   onDeleteTask: (task: AppTask) => Promise<void>;
   onOpenEvent: (eventId: string) => void;
@@ -13086,8 +13207,7 @@ function ProductionDetail({
   goNext,
   showHeaderControls,
   onEditEvent,
-  onToggleOption,
-  onChangeOptionCompletedBy,
+  onAssignOptionTask,
   onCreateOption,
   onDeleteOption,
   onRenameOption,
@@ -13120,8 +13240,7 @@ function ProductionDetail({
   goNext: () => void;
   showHeaderControls: boolean;
   onEditEvent: () => void;
-  onToggleOption: (option: EventOption) => Promise<void>;
-  onChangeOptionCompletedBy: (option: EventOption, choice: CompletedByOverrideChoice, customLabel?: string) => Promise<void>;
+  onAssignOptionTask: (option: EventOption, assignedProfileId: string | null) => Promise<void>;
   onCreateOption: (eventId: string, label: string) => Promise<EventOption>;
   onDeleteOption: (option: EventOption) => Promise<void>;
   onRenameOption: (option: EventOption, label: string) => Promise<EventOption>;
@@ -13141,7 +13260,7 @@ function ProductionDetail({
   onDownloadDocument: (document: EventDocument) => Promise<void>;
   tasks: AppTask[];
   profiles: UserProfile[];
-  onCreateTask: (input: TaskCreateInput) => Promise<void>;
+  onCreateTask: (input: TaskCreateInput) => Promise<AppTask>;
   onUpdateTask: (task: AppTask, patch: TaskUpdatePatch) => Promise<void>;
   onDeleteTask: (task: AppTask) => Promise<void>;
   permissions: AppPermissions;
@@ -13525,8 +13644,9 @@ function ProductionDetail({
             <div className="grid grid-cols-1 gap-1.5 sm:gap-2">
               {event.options.map((option) => {
                 const Icon = getOptionIcon(option.label);
-                const optionTone = getOptionTone(option.status);
-                const optionCompletedName = option.status === "completed" ? getCompletedByNameForDisplay(option) : null;
+                const optionStatus = getOptionEffectiveStatus(option, tasks);
+                const optionTone = getOptionTone(optionStatus);
+                const optionCompletedName = optionStatus === "completed" ? getOptionAssigneeLabel(option, tasks, profiles) : null;
                 const showOptionCompletedName = Boolean(optionCompletedName);
                 const isSelectedOption = contextSelection?.type === "option" && contextSelection.optionId === option.id;
                 const isConfirmingDelete = confirmDelete?.type === "option" && confirmDelete.optionId === option.id;
@@ -13728,8 +13848,9 @@ function ProductionDetail({
           <ContextDetailBlock
             event={event}
             selection={contextSelection}
-            onToggleOption={onToggleOption}
-            onChangeOptionCompletedBy={onChangeOptionCompletedBy}
+            tasks={tasks}
+            profiles={profiles}
+            onAssignOptionTask={onAssignOptionTask}
             onRenameOption={onRenameOption}
             onCreateOptionItem={onCreateOptionItem}
             onUpdateOptionItem={onUpdateOptionItem}
@@ -14169,8 +14290,9 @@ function openUrl(value: string) {
 function ContextDetailBlock({
   event,
   selection,
-  onToggleOption,
-  onChangeOptionCompletedBy,
+  tasks,
+  profiles,
+  onAssignOptionTask,
   onRenameOption,
   onCreateOptionItem,
   onUpdateOptionItem,
@@ -14188,8 +14310,9 @@ function ContextDetailBlock({
 }: {
   event: ProductionEvent;
   selection: ContextSelection;
-  onToggleOption: (option: EventOption) => Promise<void>;
-  onChangeOptionCompletedBy: (option: EventOption, choice: CompletedByOverrideChoice, customLabel?: string) => Promise<void>;
+  tasks: AppTask[];
+  profiles: UserProfile[];
+  onAssignOptionTask: (option: EventOption, assignedProfileId: string | null) => Promise<void>;
   onRenameOption: (option: EventOption, label: string) => Promise<EventOption>;
   onCreateOptionItem: (option: EventOption, label: string) => Promise<EventOptionItem>;
   onUpdateOptionItem: (option: EventOption, item: EventOptionItem, label: string) => Promise<EventOptionItem>;
@@ -14229,8 +14352,6 @@ function ContextDetailBlock({
   const [savingEditedOptionItemId, setSavingEditedOptionItemId] = useState<string | null>(null);
   const [savingCompletedByOverride, setSavingCompletedByOverride] = useState(false);
   const [completedByOverrideError, setCompletedByOverrideError] = useState<string | null>(null);
-  const [completedByOverrideChoiceValue, setCompletedByOverrideChoiceValue] = useState("");
-  const [completedByExternalName, setCompletedByExternalName] = useState("");
   const [titleRenameError, setTitleRenameError] = useState<string | null>(null);
   const [draggingDocumentFiles, setDraggingDocumentFiles] = useState(false);
   const [uploadingDocumentFiles, setUploadingDocumentFiles] = useState(false);
@@ -14269,26 +14390,11 @@ function ContextDetailBlock({
     setSavingEditedOptionItemId(null);
     setSavingCompletedByOverride(false);
     setCompletedByOverrideError(null);
-    setCompletedByOverrideChoiceValue("");
-    setCompletedByExternalName("");
     setTitleRenameError(null);
     setDraggingDocumentFiles(false);
     setUploadingDocumentFiles(false);
     setDocumentOpenError(null);
   }, [selectedDocumentGroupId, selectedLinkId, selectedOptionId]);
-
-  useEffect(() => {
-    if (!selectedOption || selectedOption.status !== "completed") return;
-    const matchingInternalChoice = completedByOverrideChoices.find((choice) => choice.value !== "externe" && (choice.initials === selectedOption.completedByInitials || choice.label === selectedOption.completedByLabel));
-    setCompletedByOverrideChoiceValue(matchingInternalChoice?.value ?? "externe");
-    if (matchingInternalChoice) {
-      setCompletedByExternalName("");
-      return;
-    }
-    if (!matchingInternalChoice && selectedOption.completedByLabel && selectedOption.completedByLabel !== "Externe") {
-      setCompletedByExternalName(selectedOption.completedByLabel);
-    }
-  }, [selectedOptionId, selectedOption?.completedByInitials, selectedOption?.completedByLabel, selectedOption?.status]);
 
   async function copyLinkValue(value: string | null | undefined, field: string) {
     const valueToCopy = value?.trim();
@@ -14497,35 +14603,18 @@ function ContextDetailBlock({
     }
   }
 
-  async function changeSelectedOptionCompletedBy(value: string, customLabel?: string) {
+  async function changeSelectedOptionAssignee(assignedProfileId: string | null) {
     if (!selectedOption) return;
-    const choice = completedByOverrideChoices.find((item) => item.value === value);
-    if (!choice) return;
-    const nextCustomLabel = customLabel?.trim();
-    if (choice.value === "externe" && !nextCustomLabel) {
-      setCompletedByOverrideChoiceValue("externe");
-      return;
-    }
-
     setSavingCompletedByOverride(true);
     setCompletedByOverrideError(null);
 
     try {
-      await onChangeOptionCompletedBy(selectedOption, choice, nextCustomLabel);
-      setCompletedByOverrideChoiceValue(choice.value);
+      await onAssignOptionTask(selectedOption, assignedProfileId);
     } catch (overrideError) {
-      setCompletedByOverrideError(getUserFacingErrorMessage(overrideError, "Impossible de modifier le champ Fait par."));
+      setCompletedByOverrideError(getUserFacingErrorMessage(overrideError, "Impossible de modifier l'assignation."));
     } finally {
       setSavingCompletedByOverride(false);
     }
-  }
-
-  async function commitCompletedByExternalName() {
-    if (!selectedOption || completedByOverrideChoiceValue !== "externe") return;
-    const nextName = completedByExternalName.trim();
-    if (!nextName) return;
-    if (nextName === selectedOption.completedByLabel && selectedOption.completedByProfileId === null) return;
-    await changeSelectedOptionCompletedBy("externe", nextName);
   }
 
   async function renameSelectedLink(label: string) {
@@ -14742,13 +14831,12 @@ function ContextDetailBlock({
 
   if (!selectedOption) return null;
 
-  const optionTone = getOptionTone(selectedOption.status);
-  const persistedCompletedByChoiceValue =
-    completedByOverrideChoices.find((choice) => choice.value !== "externe" && (choice.initials === selectedOption.completedByInitials || choice.label === selectedOption.completedByLabel))?.value
-    ?? (selectedOption.completedByInitials === "EXT" || (selectedOption.completedByLabel && !completedByOverrideChoices.some((choice) => choice.value !== "externe" && choice.label === selectedOption.completedByLabel)) ? "externe" : "");
-  const completedByChoiceValue = completedByOverrideChoiceValue || persistedCompletedByChoiceValue;
-  const completedByDisplay = getCompletedByNameForDisplay(selectedOption) ?? "Non renseigné";
-  const canOverrideCompletedBy = permissions.canManageEvents && selectedOption.status === "completed";
+  const linkedOptionTask = getLinkedTaskForOption(selectedOption, tasks);
+  const effectiveOptionStatus = getOptionEffectiveStatus(selectedOption, tasks);
+  const optionTone = getOptionTone(effectiveOptionStatus);
+  const optionAssigneeValue = linkedOptionTask?.assignedProfileId ?? "";
+  const optionTaskStatusLabel = linkedOptionTask ? (linkedOptionTask.status === "done" ? "Terminé" : "À faire") : "Non assignée";
+  const canAssignOptionTask = permissions.canManageEvents;
 
   return (
     <>
@@ -14764,81 +14852,32 @@ function ContextDetailBlock({
             onFocusTarget={onNativeFieldFocus}
           />
         </div>
-        {canEdit && (
-          <button
-            onClick={() => void onToggleOption(selectedOption)}
-            className={cn(
-              "shrink-0 rounded-full border border-transparent px-3 py-1.5 text-base font-semibold transition",
-              optionTone.surface,
-              optionTone.text,
-              selectedOption.status === "completed" ? "hover:bg-emerald-100" : "hover:bg-emerald-50",
-            )}
-            aria-label={selectedOption.status === "completed" ? "Marquer incomplet" : "Marquer terminé"}
-          >
-            {selectedOption.status === "completed" ? "Fait" : "À faire"}
-          </button>
-        )}
+        <span className={cn("shrink-0 rounded-full px-3 py-1.5 text-base font-semibold", optionTone.surface, optionTone.text)}>
+          {optionTaskStatusLabel}
+        </span>
       </div>
       {titleRenameError && <div className="mt-2 text-base font-medium text-rose-700">{titleRenameError}</div>}
-      {canOverrideCompletedBy && (
+      {canAssignOptionTask && (
         <div className="mt-3 flex flex-wrap items-center justify-between gap-2 rounded-xl bg-emerald-50/70 px-3 py-2">
-          <span className="text-base font-semibold text-emerald-800">Fait par</span>
+          <span className="text-base font-semibold text-emerald-800">Assigné à</span>
           <div className="flex min-w-0 items-center gap-2">
-            <span className="max-w-28 truncate text-base font-semibold text-emerald-900">{completedByDisplay}</span>
             <select
               {...iosKeyboardGuardProps}
-              value={completedByChoiceValue}
+              value={optionAssigneeValue}
               disabled={savingCompletedByOverride}
               onFocus={(event) => onNativeFieldFocus(event.currentTarget)}
-              onChange={(event) => {
-                const nextValue = event.target.value;
-                setCompletedByOverrideChoiceValue(nextValue);
-                if (nextValue === "externe") {
-                  const nextExternalName = completedByExternalName.trim() || (selectedOption.completedByLabel && selectedOption.completedByLabel !== "Externe" ? selectedOption.completedByLabel : "");
-                  setCompletedByExternalName(nextExternalName);
-                  if (nextExternalName) {
-                    void changeSelectedOptionCompletedBy("externe", nextExternalName);
-                  }
-                  return;
-                }
-                void changeSelectedOptionCompletedBy(nextValue);
-              }}
+              onChange={(event) => void changeSelectedOptionAssignee(event.target.value || null)}
               className="h-8 rounded-full border border-transparent bg-white/80 px-3 text-base font-semibold text-emerald-800 outline-none transition focus:border-emerald-300 focus:bg-white disabled:text-emerald-400"
-              aria-label="Modifier le champ Fait par"
+              aria-label="Assigner l'option"
             >
-              <option value="" disabled>
-                Choisir
-              </option>
-              {completedByOverrideChoices.map((choice) => (
-                <option key={choice.value} value={choice.value}>
-                  {choice.label}
+              <option value="">Non assignée</option>
+              {profiles.map((userProfile) => (
+                <option key={userProfile.id} value={userProfile.id}>
+                  {getProfileOptionLabel(userProfile)}
                 </option>
               ))}
             </select>
           </div>
-          {completedByChoiceValue === "externe" && (
-            <input
-              {...iosKeyboardGuardProps}
-              value={completedByExternalName}
-              onFocus={(event) => onNativeFieldFocus(event.currentTarget)}
-              onChange={(event) => setCompletedByExternalName(event.target.value)}
-              onBlur={() => void commitCompletedByExternalName()}
-              onKeyDown={(event) => {
-                if (event.key === "Enter") {
-                  event.preventDefault();
-                  event.currentTarget.blur();
-                }
-                if (event.key === "Escape") {
-                  event.preventDefault();
-                  setCompletedByExternalName(selectedOption.completedByLabel && selectedOption.completedByLabel !== "Externe" ? selectedOption.completedByLabel : "");
-                  event.currentTarget.blur();
-                }
-              }}
-              placeholder="Prénom"
-              disabled={savingCompletedByOverride}
-              className="h-8 w-full rounded-full border border-transparent bg-white/80 px-3 text-base font-semibold text-emerald-800 outline-none transition placeholder:text-emerald-300 focus:border-emerald-300 focus:bg-white disabled:text-emerald-400 sm:w-40"
-            />
-          )}
         </div>
       )}
       {completedByOverrideError && <div className="mt-2 text-base font-medium text-rose-700">{completedByOverrideError}</div>}
@@ -16275,6 +16314,23 @@ function getTaskAssigneeLabel(task: AppTask, profiles: UserProfile[]) {
   return assignee ? getProfileOptionLabel(assignee) : "Non assignée";
 }
 
+function getLinkedTaskForOption(option: EventOption, tasks: AppTask[]) {
+  if (!option.taskId) return null;
+  return tasks.find((task) => task.id === option.taskId) ?? null;
+}
+
+function getOptionEffectiveStatus(option: EventOption, tasks: AppTask[]): CompletionStatus {
+  const linkedTask = getLinkedTaskForOption(option, tasks);
+  if (linkedTask) return linkedTask.status === "done" ? "completed" : "incomplete";
+  return option.status;
+}
+
+function getOptionAssigneeLabel(option: EventOption, tasks: AppTask[], profiles: UserProfile[]) {
+  const linkedTask = getLinkedTaskForOption(option, tasks);
+  if (linkedTask) return getTaskAssigneeLabel(linkedTask, profiles);
+  return getCompletedByNameForDisplay(option);
+}
+
 function TaskPriorityBadge({ priority }: { priority: TaskPriority }) {
   const className =
     priority === "urgent"
@@ -16366,7 +16422,7 @@ function EventTasksSection({
   profiles: UserProfile[];
   permissions: AppPermissions;
   profile: UserProfile | null;
-  onCreateTask: (input: TaskCreateInput) => Promise<void>;
+  onCreateTask: (input: TaskCreateInput) => Promise<AppTask>;
   onUpdateTask: (task: AppTask, patch: TaskUpdatePatch) => Promise<void>;
   onDeleteTask: (task: AppTask) => Promise<void>;
   onNativeFieldFocus: (target: HTMLElement) => boolean;
