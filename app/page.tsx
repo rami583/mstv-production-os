@@ -49,6 +49,7 @@ import {
   useMemo,
   useRef,
   useState,
+  type CSSProperties,
   type Dispatch,
   type PointerEvent as ReactPointerEvent,
   type ReactNode,
@@ -11468,7 +11469,8 @@ function TasksSheet({
                   value={draftPriority}
                   onFocus={(event) => nativeKeyboard.handleFieldFocus(event.currentTarget)}
                   onChange={(event) => setDraftPriority(event.target.value as TaskPriority)}
-                  className={cn("h-10 min-w-0 rounded-xl px-3 text-sm font-semibold outline-none", getTaskPriorityTone(draftPriority).input)}
+                  className="h-10 min-w-0 rounded-xl px-3 text-sm font-semibold outline-none"
+                  style={getTaskPriorityTone(draftPriority).inputStyle}
                 >
                   {Object.entries(taskPriorityLabels).map(([value, label]) => (
                     <option key={value} value={value}>
@@ -13629,10 +13631,8 @@ function ProductionDetail({
                             )}
                             {linkedTask && (
                               <span
-                                className={cn(
-                                  "inline-flex h-5 shrink-0 items-center rounded-full px-2 text-[0.66rem] font-bold leading-none sm:text-[0.7rem]",
-                                  getTaskPriorityTone(linkedTask.priority).pill,
-                                )}
+                                className="inline-flex h-5 shrink-0 items-center rounded-full px-2 text-[0.66rem] font-bold leading-none sm:text-[0.7rem]"
+                                style={getTaskPriorityTone(linkedTask.priority).pillStyle}
                               >
                                 {taskPriorityLabels[linkedTask.priority]}
                               </span>
@@ -14853,10 +14853,8 @@ function ContextDetailBlock({
                   disabled={savingCompletedByOverride}
                   onFocus={(event) => onNativeFieldFocus(event.currentTarget)}
                   onChange={(event) => void updateLinkedOptionTask({ priority: event.target.value as TaskPriority })}
-                  className={cn(
-                    "h-8 rounded-full border border-transparent px-3 text-base font-semibold outline-none transition focus:border-emerald-300 focus:bg-white disabled:text-emerald-400",
-                    getTaskPriorityTone(linkedOptionTask.priority).input,
-                  )}
+                  className="h-8 rounded-full border border-transparent px-3 text-base font-semibold outline-none transition focus:border-emerald-300 disabled:text-emerald-400"
+                  style={getTaskPriorityTone(linkedOptionTask.priority).inputStyle}
                   aria-label="Priorité de la tâche liée"
                 >
                   {Object.entries(taskPriorityLabels).map(([value, label]) => (
@@ -16294,23 +16292,41 @@ const taskPriorityRank: Record<TaskPriority, number> = {
   low: 2,
 };
 
+const taskPriorityTones: Record<TaskPriority, { pillStyle: CSSProperties; inputStyle: CSSProperties }> = {
+  low: {
+    pillStyle: {
+      backgroundColor: "rgba(250, 204, 21, 0.18)",
+      color: "#a16207",
+    },
+    inputStyle: {
+      backgroundColor: "rgba(254, 249, 195, 0.82)",
+      color: "#a16207",
+    },
+  },
+  normal: {
+    pillStyle: {
+      backgroundColor: "rgba(251, 146, 60, 0.16)",
+      color: "#c2410c",
+    },
+    inputStyle: {
+      backgroundColor: "rgba(255, 237, 213, 0.82)",
+      color: "#c2410c",
+    },
+  },
+  urgent: {
+    pillStyle: {
+      backgroundColor: "rgba(187, 39, 32, 0.1)",
+      color: "#bb2720",
+    },
+    inputStyle: {
+      backgroundColor: "rgba(187, 39, 32, 0.07)",
+      color: "#bb2720",
+    },
+  },
+};
+
 function getTaskPriorityTone(priority: TaskPriority) {
-  if (priority === "urgent") {
-    return {
-      pill: "bg-[#bb2720]/10 text-[#bb2720]",
-      input: "bg-[#bb2720]/[0.07] text-[#bb2720]",
-    };
-  }
-  if (priority === "low") {
-    return {
-      pill: "bg-yellow-100/70 text-yellow-700",
-      input: "bg-yellow-50/80 text-yellow-700",
-    };
-  }
-  return {
-    pill: "bg-orange-100/70 text-orange-700",
-    input: "bg-orange-50/80 text-orange-700",
-  };
+  return taskPriorityTones[priority] ?? taskPriorityTones.normal;
 }
 
 function sortTasksForDisplay(tasks: AppTask[]) {
@@ -16355,7 +16371,7 @@ function getOptionAssigneeLabel(option: EventOption, tasks: AppTask[], profiles:
 
 function TaskPriorityBadge({ priority }: { priority: TaskPriority }) {
   return (
-    <span className={cn("inline-flex items-center rounded-full px-2 py-0.5 text-[0.68rem] font-semibold", getTaskPriorityTone(priority).pill)}>
+    <span className="inline-flex items-center rounded-full px-2 py-0.5 text-[0.68rem] font-semibold" style={getTaskPriorityTone(priority).pillStyle}>
       {taskPriorityLabels[priority]}
     </span>
   );
@@ -16538,7 +16554,8 @@ function TaskRow({
             disabled={saving}
             onFocus={(event) => onNativeFieldFocus?.(event.currentTarget)}
             onChange={(event) => void updateTaskSafely({ priority: event.target.value as TaskPriority })}
-            className={cn("h-9 min-w-0 rounded-xl px-2 text-sm font-semibold outline-none", getTaskPriorityTone(task.priority).input)}
+            className="h-9 min-w-0 rounded-xl px-2 text-sm font-semibold outline-none"
+            style={getTaskPriorityTone(task.priority).inputStyle}
           >
             {Object.entries(taskPriorityLabels).map(([value, label]) => (
               <option key={value} value={value}>
