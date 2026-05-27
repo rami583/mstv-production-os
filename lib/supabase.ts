@@ -283,6 +283,34 @@ export type Database = {
         Update: Partial<Database["public"]["Tables"]["notifications"]["Insert"]>;
         Relationships: [];
       };
+      tasks: {
+        Row: {
+          id: string;
+          title: string;
+          event_id: string | null;
+          assigned_profile_id: string | null;
+          status: "todo" | "done";
+          due_date: string | null;
+          created_by: string | null;
+          created_at: string;
+          updated_at: string;
+          completed_at: string | null;
+        };
+        Insert: {
+          id?: string;
+          title: string;
+          event_id?: string | null;
+          assigned_profile_id?: string | null;
+          status?: "todo" | "done";
+          due_date?: string | null;
+          created_by?: string | null;
+          created_at?: string;
+          updated_at?: string;
+          completed_at?: string | null;
+        };
+        Update: Partial<Database["public"]["Tables"]["tasks"]["Insert"]>;
+        Relationships: [];
+      };
       profiles: {
         Row: {
           id: string;

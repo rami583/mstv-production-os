@@ -22,6 +22,7 @@ import {
   GripVertical,
   Import,
   KeyRound,
+  ListTodo,
   Link,
   MonitorPlay,
   Palette,
@@ -110,6 +111,7 @@ type EventDocumentRow = Database["public"]["Tables"]["event_documents"]["Row"];
 type EventDocumentGroupRow = Database["public"]["Tables"]["event_document_groups"]["Row"];
 type EventActivityLogRow = Database["public"]["Tables"]["event_activity_log"]["Row"];
 type NotificationRow = Database["public"]["Tables"]["notifications"]["Row"];
+type TaskRow = Database["public"]["Tables"]["tasks"]["Row"];
 type ProfileRow = Database["public"]["Tables"]["profiles"]["Row"];
 type ExternalCalendarRow = Database["public"]["Tables"]["external_calendars"]["Row"];
 type ExternalCalendarEventRow = Database["public"]["Tables"]["external_calendar_events"]["Row"];
@@ -365,6 +367,21 @@ type AppNotification = {
   relatedEventId: string | null;
   readAt: string | null;
   createdAt: string;
+};
+
+type TaskStatus = "todo" | "done";
+
+type AppTask = {
+  id: string;
+  title: string;
+  eventId: string | null;
+  assignedProfileId: string | null;
+  status: TaskStatus;
+  dueDate: string | null;
+  createdBy: string | null;
+  createdAt: string;
+  updatedAt: string;
+  completedAt: string | null;
 };
 
 type ExternalCalendar = {
@@ -681,6 +698,7 @@ type CachedAppData = {
   viewerProfileId?: string | null;
   viewerRole?: string | null;
   events: ProductionEvent[];
+  tasks?: AppTask[];
   externalCalendars: ExternalCalendar[];
   externalCalendarEvents: ExternalCalendarEvent[];
   cachedAt: string;
@@ -743,6 +761,7 @@ const realtimeTableNames = [
   "event_document_groups",
   "event_documents",
   "event_activity_log",
+  "tasks",
   "profiles",
   "notifications",
   "team_members",
@@ -1257,6 +1276,7 @@ function prepareCachedAppData(data: Omit<CachedAppData, "cachedAt">, viewer: Cal
     viewerProfileId: viewer.id ?? null,
     viewerRole: viewer.role ?? null,
     events: recentProductionEvents.map(sanitizeEventForCache),
+    tasks: (data.tasks ?? []).slice(0, 400),
     externalCalendars: data.externalCalendars,
     externalCalendarEvents: recentExternalEvents.map(sanitizeExternalCalendarEventForCache),
   };
@@ -2675,10 +2695,29 @@ function mapUserProfile(row: ProfileRow): UserProfile {
   };
 }
 
+function mapTask(row: TaskRow): AppTask {
+  return {
+    id: row.id,
+    title: row.title,
+    eventId: row.event_id ?? null,
+    assignedProfileId: row.assigned_profile_id ?? null,
+    status: row.status,
+    dueDate: row.due_date ?? null,
+    createdBy: row.created_by ?? null,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    completedAt: row.completed_at ?? null,
+  };
+}
+
 function getProfileDisplayName(profile: UserProfile | null) {
   if (!profile) return null;
   const fullName = [profile.firstName, profile.lastName].filter(Boolean).join(" ").trim();
   return fullName || "Utilisateur";
+}
+
+function getProfileOptionLabel(profile: UserProfile) {
+  return getProfileDisplayName(profile) ?? profile.email ?? "Utilisateur";
 }
 
 function getProfileInitials(profile: UserProfile | null, email?: string | null) {
@@ -3509,6 +3548,34 @@ async function fetchProfiles() {
   return (data ?? []).map(mapUserProfile);
 }
 
+async function fetchTasks() {
+  if (!supabase) {
+    throw new Error("Configuration Supabase manquante.");
+  }
+
+  const rows: TaskRow[] = [];
+  let from = 0;
+
+  while (true) {
+    const { data, error } = await supabase
+      .from("tasks")
+      .select("*")
+      .order("status", { ascending: false })
+      .order("due_date", { ascending: true, nullsFirst: false })
+      .order("created_at", { ascending: false })
+      .range(from, from + supabaseFetchPageSize - 1);
+
+    if (error) throw error;
+
+    const pageRows = (data ?? []) as TaskRow[];
+    rows.push(...pageRows);
+    if (pageRows.length < supabaseFetchPageSize) break;
+    from += supabaseFetchPageSize;
+  }
+
+  return rows.map(mapTask);
+}
+
 async function fetchNativeMstvIcsImportIds() {
   if (!supabase) {
     throw new Error("Configuration Supabase manquante.");
@@ -3621,6 +3688,7 @@ export default function Home() {
   const [quoteImportOpen, setQuoteImportOpen] = useState(false);
   const [quoteImportFile, setQuoteImportFile] = useState<File | null>(null);
   const [nativeMstvIcsImportOpen, setNativeMstvIcsImportOpen] = useState(false);
+  const [tasksOpen, setTasksOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
   const [yearOverviewOpen, setYearOverviewOpen] = useState(false);
   const [globalQuoteDragActive, setGlobalQuoteDragActive] = useState(false);
@@ -3637,6 +3705,7 @@ export default function Home() {
   const [externalCalendarSettingsOpen, setExternalCalendarSettingsOpen] = useState(false);
   const [externalCalendarDetail, setExternalCalendarDetail] = useState<ExternalCalendarEvent | null>(null);
   const [managedProfiles, setManagedProfiles] = useState<UserProfile[]>([]);
+  const [taskProfiles, setTaskProfiles] = useState<UserProfile[]>([]);
   const [managedProfilesLoading, setManagedProfilesLoading] = useState(false);
   const [managedProfilesError, setManagedProfilesError] = useState<string | null>(null);
   const [updatingProfileId, setUpdatingProfileId] = useState<string | null>(null);
@@ -3661,6 +3730,9 @@ export default function Home() {
     error: null,
   });
   const [notifications, setNotifications] = useState<AppNotification[]>([]);
+  const [tasks, setTasks] = useState<AppTask[]>([]);
+  const [tasksLoading, setTasksLoading] = useState(false);
+  const [tasksError, setTasksError] = useState<string | null>(null);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [notificationsHydrated, setNotificationsHydrated] = useState(false);
   const [online, setOnline] = useState(() => typeof navigator === "undefined" ? true : navigator.onLine);
@@ -3719,6 +3791,7 @@ export default function Home() {
 
     if (cachedState.appData) {
       setEvents(cachedState.appData.events);
+      setTasks(cachedState.appData.tasks ?? []);
       setExternalCalendars(cachedState.appData.externalCalendars);
       setExternalCalendarEvents(cachedState.appData.externalCalendarEvents);
       setSelectedId((current) => {
@@ -3997,6 +4070,8 @@ export default function Home() {
         console.info("[MSTV offline boot] no session available");
         setProfile(null);
         setEvents([]);
+        setTasks([]);
+        setTaskProfiles([]);
         setExternalCalendars([]);
         setExternalCalendarEvents([]);
         setNotifications([]);
@@ -4257,6 +4332,7 @@ export default function Home() {
       const cachedData = getCachedAppData(authSession.user.id);
       if (cachedData) {
         setEvents(cachedData.events);
+        setTasks(cachedData.tasks ?? []);
         setExternalCalendars(cachedData.externalCalendars);
         setExternalCalendarEvents(cachedData.externalCalendarEvents);
         setSelectedId((current) => {
@@ -4286,9 +4362,22 @@ export default function Home() {
   }, [trashOpen]);
 
   useEffect(() => {
+    if (!tasksOpen) return;
+    void refreshTasks({ silent: tasks.length > 0 });
+    if (taskProfiles.length === 0) {
+      void refreshTaskProfiles();
+    }
+  }, [tasksOpen]);
+
+  useEffect(() => {
     if (!userManagementOpen || !permissions.canManageUsers) return;
     void refreshManagedProfiles();
   }, [userManagementOpen, permissions.canManageUsers]);
+
+  useEffect(() => {
+    if (!authSession?.user.id || !profile || !online) return;
+    void refreshTaskProfiles();
+  }, [authSession?.user.id, profile?.id, online]);
 
   useEffect(() => {
     if (!externalCalendarSettingsOpen) return;
@@ -4411,10 +4500,11 @@ export default function Home() {
     setError(null);
 
     try {
-      const [nextEvents, nextExternalCalendars, nextExternalEvents] = await Promise.all([
+      const [nextEvents, nextExternalCalendars, nextExternalEvents, nextTasks] = await Promise.all([
         fetchEvents(),
         fetchExternalCalendars(),
         fetchExternalCalendarEvents(),
+        fetchTasks(),
       ]);
       const eventCounts = getProductionEventNetworkCounts(nextEvents);
       logNetworkDebug("reloadData:complete", {
@@ -4427,21 +4517,25 @@ export default function Home() {
           ...eventCounts,
           externalCalendars: nextExternalCalendars.length,
           legacyExternalCalendarEvents: nextExternalEvents.length,
+          tasks: nextTasks.length,
         },
         approxJsonBytes: {
           events: getApproxJsonBytes(nextEvents),
           externalCalendars: getApproxJsonBytes(nextExternalCalendars),
           legacyExternalCalendarEvents: getApproxJsonBytes(nextExternalEvents),
+          tasks: getApproxJsonBytes(nextTasks),
         },
       });
       if (authSession?.user.id) {
         cacheAppData(authSession.user.id, {
           events: nextEvents,
+          tasks: nextTasks,
           externalCalendars: nextExternalCalendars,
           externalCalendarEvents: nextExternalEvents,
         }, profile);
       }
       setEvents(nextEvents);
+      setTasks(nextTasks);
       setExternalCalendars((current) => mergeExternalCalendarList(current, nextExternalCalendars));
       setExternalCalendarEvents(nextExternalEvents);
       setSelectedId((current) => {
@@ -4457,6 +4551,7 @@ export default function Home() {
         events: nextEvents,
         externalCalendars: nextExternalCalendars,
         externalCalendarEvents: nextExternalEvents,
+        tasks: nextTasks,
         fromCache: false,
       };
     } catch (supabaseError) {
@@ -4474,6 +4569,7 @@ export default function Home() {
           },
         });
         setEvents(cachedData.events);
+        setTasks(cachedData.tasks ?? []);
         setExternalCalendars(cachedData.externalCalendars);
         setExternalCalendarEvents(cachedData.externalCalendarEvents);
         setSelectedId((current) => {
@@ -4537,6 +4633,15 @@ export default function Home() {
       setManagedProfilesError(getUserFacingErrorMessage(profilesError, "Impossible de charger les utilisateurs."));
     } finally {
       setManagedProfilesLoading(false);
+    }
+  }
+
+  async function refreshTaskProfiles() {
+    try {
+      setTaskProfiles(await fetchProfiles());
+    } catch (profilesError) {
+      console.warn("Failed to load task assignees.", getDebugError(profilesError));
+      setTaskProfiles(profile ? [profile] : []);
     }
   }
 
@@ -6008,6 +6113,103 @@ export default function Home() {
     }
   }
 
+  async function refreshTasks(options: { silent?: boolean } = {}) {
+    if (!supabase || !online) return;
+    if (!options.silent) {
+      setTasksLoading(true);
+    }
+    setTasksError(null);
+
+    try {
+      const nextTasks = await fetchTasks();
+      setTasks(nextTasks);
+      if (authSession?.user.id) {
+        cacheAppData(authSession.user.id, {
+          events,
+          tasks: nextTasks,
+          externalCalendars,
+          externalCalendarEvents,
+        }, profile);
+      }
+    } catch (taskLoadError) {
+      console.error("Failed to load tasks.", getDebugError(taskLoadError));
+      setTasksError(getUserFacingErrorMessage(taskLoadError, "Impossible de charger les tâches."));
+    } finally {
+      if (!options.silent) {
+        setTasksLoading(false);
+      }
+    }
+  }
+
+  function upsertTaskInState(task: AppTask) {
+    setTasks((current) => {
+      const existingIndex = current.findIndex((item) => item.id === task.id);
+      if (existingIndex === -1) return [task, ...current];
+      return current.map((item) => (item.id === task.id ? task : item));
+    });
+  }
+
+  async function createTask(input: { title: string; eventId?: string | null; assignedProfileId?: string | null; dueDate?: string | null }) {
+    assertCanManageEvents();
+    if (!supabase) throw new Error("Configuration Supabase manquante.");
+    const title = input.title.trim();
+    if (!title) throw new Error("Le titre de la tâche est obligatoire.");
+
+    const { data, error: insertError } = await supabase
+      .from("tasks")
+      .insert({
+        title,
+        event_id: input.eventId ?? null,
+        assigned_profile_id: input.assignedProfileId ?? null,
+        due_date: input.dueDate || null,
+        created_by: profile?.id ?? null,
+      })
+      .select()
+      .single();
+
+    if (insertError) throw insertError;
+    upsertTaskInState(mapTask(data));
+  }
+
+  async function updateTask(task: AppTask, patch: Partial<Pick<AppTask, "title" | "assignedProfileId" | "dueDate" | "status">>) {
+    if (!supabase) throw new Error("Configuration Supabase manquante.");
+    const canUpdateTask = permissions.canManageEvents || (task.assignedProfileId === profile?.id && Object.keys(patch).every((key) => key === "status"));
+    if (!canUpdateTask) throw new Error("Modification de tâche non autorisée.");
+
+    const payload: Database["public"]["Tables"]["tasks"]["Update"] = {};
+    if (patch.title !== undefined) {
+      const title = patch.title.trim();
+      if (!title) throw new Error("Le titre de la tâche est obligatoire.");
+      payload.title = title;
+    }
+    if (patch.assignedProfileId !== undefined) payload.assigned_profile_id = patch.assignedProfileId || null;
+    if (patch.dueDate !== undefined) payload.due_date = patch.dueDate || null;
+    if (patch.status !== undefined) payload.status = patch.status;
+
+    const { data, error: updateError } = await supabase
+      .from("tasks")
+      .update(payload)
+      .eq("id", task.id)
+      .select()
+      .single();
+
+    if (updateError) throw updateError;
+    upsertTaskInState(mapTask(data));
+  }
+
+  async function deleteTask(task: AppTask) {
+    assertCanManageEvents();
+    if (!supabase) throw new Error("Configuration Supabase manquante.");
+
+    const { error: deleteError } = await supabase
+      .from("tasks")
+      .delete()
+      .eq("id", task.id);
+
+    if (deleteError) throw deleteError;
+    setTasks((current) => current.filter((item) => item.id !== task.id));
+  }
+
   function setCachedNotifications(updater: (current: AppNotification[]) => AppNotification[]) {
     setNotifications((current) => {
       const next = updater(current).slice(0, 80);
@@ -6563,6 +6765,11 @@ export default function Home() {
         onDeleteDocumentFile={deleteEventDocument}
         onOpenDocument={openEventDocument}
         onDownloadDocument={downloadEventDocument}
+        tasks={tasks.filter((task) => task.eventId === eventToRender.id)}
+        profiles={taskProfiles}
+        onCreateTask={createTask}
+        onUpdateTask={updateTask}
+        onDeleteTask={deleteTask}
         permissions={permissions}
         profile={profile}
       />
@@ -9897,10 +10104,13 @@ export default function Home() {
     setProfile(null);
     setEvents([]);
     setNotifications([]);
+    setTasks([]);
+    setTaskProfiles([]);
     setNotificationsHydrated(false);
     setSelectedId(null);
     setScreen("calendar");
     setCreateMenuOpen(false);
+    setTasksOpen(false);
   }
 
   if (!hasMounted || authLoading) {
@@ -10012,6 +10222,7 @@ export default function Home() {
           setNotificationsOpen={setNotificationsOpen}
           onOpenNotification={handleNotificationOpen}
           onDismissNotification={markNotificationRead}
+          onOpenTasks={() => setTasksOpen(true)}
           onImportQuote={() => {
             if (!headerPermissions.canManageEvents) return;
             openQuoteImport();
@@ -10140,6 +10351,7 @@ export default function Home() {
           setNotificationsOpen={setNotificationsOpen}
           onOpenNotification={handleNotificationOpen}
           onDismissNotification={markNotificationRead}
+          onOpenTasks={() => setTasksOpen(true)}
           onGoToday={() => {
             goToday();
             setYearOverviewOpen(false);
@@ -10255,6 +10467,26 @@ export default function Home() {
           events={chronologicalEvents}
           onClose={() => setSearchOpen(false)}
           onOpenEvent={openEvent}
+        />
+      )}
+
+      {tasksOpen && (
+        <TasksSheet
+          tasks={tasks}
+          events={chronologicalEvents}
+          profiles={taskProfiles}
+          currentProfile={profile}
+          permissions={permissions}
+          loading={tasksLoading}
+          error={tasksError}
+          onClose={() => setTasksOpen(false)}
+          onCreateTask={createTask}
+          onUpdateTask={updateTask}
+          onDeleteTask={deleteTask}
+          onOpenEvent={(eventId) => {
+            openEvent(eventId);
+            setTasksOpen(false);
+          }}
         />
       )}
 
@@ -10413,6 +10645,7 @@ function AppHeader({
   setNotificationsOpen,
   onOpenNotification,
   onDismissNotification,
+  onOpenTasks,
   onImportQuote,
   onImportNativeMstvCalendar,
   onSearch,
@@ -10454,6 +10687,7 @@ function AppHeader({
   setNotificationsOpen: (open: boolean | ((current: boolean) => boolean)) => void;
   onOpenNotification: (notification: AppNotification) => void;
   onDismissNotification: (notification: AppNotification) => void;
+  onOpenTasks: () => void;
   onImportQuote: () => void;
   onImportNativeMstvCalendar: () => void;
   onSearch: () => void;
@@ -10501,6 +10735,7 @@ function AppHeader({
           <img src="/brand/mon-studio-tv-icon.png" alt="Mon Studio TV" className="h-11 w-auto shrink-0" />
         </button>
         <div className="flex shrink-0 items-center gap-1.5 sm:gap-2">
+          <HeaderIcon label="Mes tâches" icon={ListTodo} onClick={onOpenTasks} />
           <HeaderIcon label="Rechercher" icon={Search} onClick={onSearch} />
           <NotificationMenu
             notifications={notifications}
@@ -10792,6 +11027,185 @@ function EventSearchOverlay({
   );
 }
 
+function TasksSheet({
+  tasks,
+  events,
+  profiles,
+  currentProfile,
+  permissions,
+  loading,
+  error,
+  onClose,
+  onCreateTask,
+  onUpdateTask,
+  onDeleteTask,
+  onOpenEvent,
+}: {
+  tasks: AppTask[];
+  events: ProductionEvent[];
+  profiles: UserProfile[];
+  currentProfile: UserProfile | null;
+  permissions: AppPermissions;
+  loading: boolean;
+  error: string | null;
+  onClose: () => void;
+  onCreateTask: (input: { title: string; eventId?: string | null; assignedProfileId?: string | null; dueDate?: string | null }) => Promise<void>;
+  onUpdateTask: (task: AppTask, patch: Partial<Pick<AppTask, "title" | "assignedProfileId" | "dueDate" | "status">>) => Promise<void>;
+  onDeleteTask: (task: AppTask) => Promise<void>;
+  onOpenEvent: (eventId: string) => void;
+}) {
+  const nativeKeyboard = useNativeKeyboardVisibility<HTMLDivElement>();
+  const [draftTitle, setDraftTitle] = useState("");
+  const [draftAssigneeId, setDraftAssigneeId] = useState(currentProfile?.id ?? "");
+  const [draftDueDate, setDraftDueDate] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [localError, setLocalError] = useState<string | null>(null);
+  const eventsById = useMemo(() => new Map(events.map((event) => [event.id, event])), [events]);
+  const myTasks = sortTasksForDisplay(tasks.filter((task) => task.assignedProfileId === currentProfile?.id));
+  const todoTasks = myTasks.filter((task) => task.status === "todo");
+  const recentlyDoneTasks = [...myTasks]
+    .filter((task) => task.status === "done")
+    .sort((left, right) => (right.completedAt ?? right.updatedAt).localeCompare(left.completedAt ?? left.updatedAt))
+    .slice(0, 12);
+
+  useEscapeToClose(onClose);
+
+  async function submitFreeTask(formEvent: React.FormEvent<HTMLFormElement>) {
+    formEvent.preventDefault();
+    setSubmitting(true);
+    setLocalError(null);
+
+    try {
+      await onCreateTask({
+        title: draftTitle,
+        eventId: null,
+        assignedProfileId: draftAssigneeId || null,
+        dueDate: draftDueDate || null,
+      });
+      setDraftTitle("");
+      setDraftAssigneeId(currentProfile?.id ?? "");
+      setDraftDueDate("");
+    } catch (createError) {
+      setLocalError(getUserFacingErrorMessage(createError, "Impossible d'ajouter la tâche."));
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  function renderTask(task: AppTask) {
+    const linkedEvent = task.eventId ? eventsById.get(task.eventId) ?? null : null;
+    return (
+      <div key={task.id} className="rounded-2xl bg-stone-50 p-2.5">
+        <TaskRow
+          task={task}
+          profiles={profiles}
+          currentProfile={currentProfile}
+          permissions={permissions}
+          onUpdateTask={onUpdateTask}
+          onDeleteTask={onDeleteTask}
+          onNativeFieldFocus={nativeKeyboard.handleFieldFocus}
+          compact
+        />
+        {linkedEvent && (
+          <button
+            type="button"
+            onClick={() => onOpenEvent(linkedEvent.id)}
+            className="mt-1.5 w-full rounded-xl px-2 py-1 text-left text-xs font-semibold text-stone-500 transition hover:bg-white hover:text-stone-800"
+          >
+            {getProductionEventDisplay(linkedEvent).title} · {formatFullDate(linkedEvent.date)}
+          </button>
+        )}
+      </div>
+    );
+  }
+
+  return (
+    <div className={cn(modalBackdropClassName, modalSheetPositionClassName)} onPointerDown={(pointerEvent) => handleModalBackdropPointerDown(pointerEvent, onClose)}>
+      <div
+        className={cn(modalPanelClassName, "flex max-h-[86vh] w-full flex-col overflow-hidden p-4 sm:max-w-2xl sm:p-5")}
+        onPointerDown={(pointerEvent) => pointerEvent.stopPropagation()}
+      >
+        <div className="mb-4 flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <h2 className="text-base font-semibold text-stone-950">Mes tâches</h2>
+            <p className="mt-1 text-base font-medium text-stone-500">
+              {todoTasks.length > 0 ? `${todoTasks.length} tâche${todoTasks.length > 1 ? "s" : ""} à faire` : "Tout est à jour"}
+            </p>
+          </div>
+          <button type="button" onClick={onClose} className="rounded-xl bg-stone-50 px-3 py-1.5 text-base font-semibold text-stone-600 transition hover:bg-stone-100">
+            Fermer
+          </button>
+        </div>
+
+        <div ref={nativeKeyboard.scrollContainerRef} className="no-scrollbar min-h-0 flex-1 space-y-4 overflow-y-auto overscroll-contain" style={nativeKeyboard.scrollContainerStyle}>
+          {permissions.canManageEvents && (
+            <form onSubmit={submitFreeTask} className="grid gap-2 rounded-2xl bg-stone-50 p-3">
+              <p className="text-sm font-semibold text-stone-500">Nouvelle tâche libre</p>
+              <input
+                {...iosKeyboardGuardProps}
+                required
+                value={draftTitle}
+                onFocus={(event) => nativeKeyboard.handleFieldFocus(event.currentTarget)}
+                onChange={(event) => setDraftTitle(event.target.value)}
+                placeholder="Titre de la tâche"
+                className="h-10 rounded-xl bg-white px-3 text-base font-semibold text-stone-950 outline-none"
+              />
+              <div className="grid gap-2 sm:grid-cols-[1fr_auto_auto]">
+                <select
+                  {...iosKeyboardGuardProps}
+                  value={draftAssigneeId}
+                  onFocus={(event) => nativeKeyboard.handleFieldFocus(event.currentTarget)}
+                  onChange={(event) => setDraftAssigneeId(event.target.value)}
+                  className="h-10 min-w-0 rounded-xl bg-white px-3 text-sm font-semibold text-stone-700 outline-none"
+                >
+                  <option value="">Non assignée</option>
+                  {profiles.map((userProfile) => (
+                    <option key={userProfile.id} value={userProfile.id}>
+                      {getProfileOptionLabel(userProfile)}
+                    </option>
+                  ))}
+                </select>
+                <input
+                  {...iosKeyboardGuardProps}
+                  type="date"
+                  value={draftDueDate}
+                  onFocus={(event) => nativeKeyboard.handleFieldFocus(event.currentTarget)}
+                  onChange={(event) => setDraftDueDate(event.target.value)}
+                  className="h-10 rounded-xl bg-white px-3 text-sm font-semibold text-stone-700 outline-none"
+                />
+                <button type="submit" disabled={submitting} className="h-10 rounded-full bg-[#bb2720] px-3 text-sm font-semibold text-white disabled:bg-stone-300">
+                  Ajouter
+                </button>
+              </div>
+            </form>
+          )}
+
+          {(error || localError) && <p className="text-sm font-semibold text-rose-700">{localError || error}</p>}
+          {loading && <p className="rounded-2xl bg-stone-50 px-3 py-4 text-center text-sm font-semibold text-stone-400">Chargement...</p>}
+
+          <section className="space-y-2">
+            <h3 className="px-1 text-xs font-semibold uppercase tracking-[0.08em] text-stone-400">À faire</h3>
+            {todoTasks.length === 0 ? (
+              <p className="rounded-2xl bg-stone-50 px-3 py-4 text-center text-sm font-medium text-stone-400">Aucune tâche à faire.</p>
+            ) : (
+              <div className="grid gap-2">{todoTasks.map(renderTask)}</div>
+            )}
+          </section>
+
+          <section className="space-y-2">
+            <h3 className="px-1 text-xs font-semibold uppercase tracking-[0.08em] text-stone-400">Terminées récemment</h3>
+            {recentlyDoneTasks.length === 0 ? (
+              <p className="rounded-2xl bg-stone-50 px-3 py-4 text-center text-sm font-medium text-stone-400">Aucune tâche terminée récemment.</p>
+            ) : (
+              <div className="grid gap-2">{recentlyDoneTasks.map(renderTask)}</div>
+            )}
+          </section>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function YearOverviewOverlay({
   initialYear,
   events,
@@ -10818,6 +11232,7 @@ function YearOverviewOverlay({
   setNotificationsOpen,
   onOpenNotification,
   onDismissNotification,
+  onOpenTasks,
   onGoToday,
   onImportQuote,
   onImportNativeMstvCalendar,
@@ -10855,6 +11270,7 @@ function YearOverviewOverlay({
   setNotificationsOpen: (open: boolean | ((current: boolean) => boolean)) => void;
   onOpenNotification: (notification: AppNotification) => void;
   onDismissNotification: (notification: AppNotification) => void;
+  onOpenTasks: () => void;
   onGoToday: () => void;
   onImportQuote: () => void;
   onImportNativeMstvCalendar: () => void;
@@ -11102,6 +11518,7 @@ function YearOverviewOverlay({
           setNotificationsOpen={setNotificationsOpen}
           onOpenNotification={onOpenNotification}
           onDismissNotification={onDismissNotification}
+          onOpenTasks={onOpenTasks}
           onImportQuote={onImportQuote}
           onImportNativeMstvCalendar={onImportNativeMstvCalendar}
           onSearch={onSearch}
@@ -12326,6 +12743,11 @@ function ProductionDetail({
   onDeleteDocumentFile,
   onOpenDocument,
   onDownloadDocument,
+  tasks,
+  profiles,
+  onCreateTask,
+  onUpdateTask,
+  onDeleteTask,
   permissions,
   profile,
 }: {
@@ -12355,6 +12777,11 @@ function ProductionDetail({
   onDeleteDocumentFile: (document: EventDocument) => Promise<void>;
   onOpenDocument: (document: EventDocument) => Promise<void>;
   onDownloadDocument: (document: EventDocument) => Promise<void>;
+  tasks: AppTask[];
+  profiles: UserProfile[];
+  onCreateTask: (input: { title: string; eventId?: string | null; assignedProfileId?: string | null; dueDate?: string | null }) => Promise<void>;
+  onUpdateTask: (task: AppTask, patch: Partial<Pick<AppTask, "title" | "assignedProfileId" | "dueDate" | "status">>) => Promise<void>;
+  onDeleteTask: (task: AppTask) => Promise<void>;
   permissions: AppPermissions;
   profile: UserProfile | null;
 }) {
@@ -12957,6 +13384,17 @@ function ProductionDetail({
             onNativeFieldFocus={nativeKeyboard.handleFieldFocus}
           />
         </div>
+        <EventTasksSection
+          event={event}
+          tasks={tasks}
+          profiles={profiles}
+          permissions={permissions}
+          profile={profile}
+          onCreateTask={onCreateTask}
+          onUpdateTask={onUpdateTask}
+          onDeleteTask={onDeleteTask}
+          onNativeFieldFocus={nativeKeyboard.handleFieldFocus}
+        />
       </div>
     </section>
     {deleteConfirmationOpen && confirmDelete && (
@@ -15437,6 +15875,301 @@ function EventCalendarBadge({ event }: { event: ProductionEvent }) {
       <ExternalCalendarColorDot color={badge.color} className="h-2.5 w-2.5" />
       <span className="truncate">{badge.name}</span>
     </span>
+  );
+}
+
+function sortTasksForDisplay(tasks: AppTask[]) {
+  return [...tasks].sort((left, right) => {
+    if (left.status !== right.status) return left.status === "todo" ? -1 : 1;
+    const leftDue = left.dueDate ?? "9999-12-31";
+    const rightDue = right.dueDate ?? "9999-12-31";
+    if (leftDue !== rightDue) return leftDue.localeCompare(rightDue);
+    return right.createdAt.localeCompare(left.createdAt);
+  });
+}
+
+function formatShortDate(dateKey: string | null) {
+  if (!dateKey) return "";
+  const date = new Date(`${dateKey}T12:00:00`);
+  if (Number.isNaN(date.getTime())) return "";
+  return new Intl.DateTimeFormat("fr-FR", { day: "numeric", month: "short" }).format(date);
+}
+
+function getTaskAssigneeLabel(task: AppTask, profiles: UserProfile[]) {
+  const assignee = profiles.find((userProfile) => userProfile.id === task.assignedProfileId) ?? null;
+  return assignee ? getProfileOptionLabel(assignee) : "Non assignée";
+}
+
+function EventTasksSection({
+  event,
+  tasks,
+  profiles,
+  permissions,
+  profile,
+  onCreateTask,
+  onUpdateTask,
+  onDeleteTask,
+  onNativeFieldFocus,
+}: {
+  event: ProductionEvent;
+  tasks: AppTask[];
+  profiles: UserProfile[];
+  permissions: AppPermissions;
+  profile: UserProfile | null;
+  onCreateTask: (input: { title: string; eventId?: string | null; assignedProfileId?: string | null; dueDate?: string | null }) => Promise<void>;
+  onUpdateTask: (task: AppTask, patch: Partial<Pick<AppTask, "title" | "assignedProfileId" | "dueDate" | "status">>) => Promise<void>;
+  onDeleteTask: (task: AppTask) => Promise<void>;
+  onNativeFieldFocus: (target: HTMLElement) => boolean;
+}) {
+  const [adding, setAdding] = useState(false);
+  const [draftTitle, setDraftTitle] = useState("");
+  const [draftAssigneeId, setDraftAssigneeId] = useState(profile?.id ?? "");
+  const [draftDueDate, setDraftDueDate] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const orderedTasks = sortTasksForDisplay(tasks);
+  const canCreate = permissions.canManageEvents;
+
+  async function submitTask(formEvent: React.FormEvent<HTMLFormElement>) {
+    formEvent.preventDefault();
+    setSaving(true);
+    setError(null);
+
+    try {
+      await onCreateTask({
+        title: draftTitle,
+        eventId: event.id,
+        assignedProfileId: draftAssigneeId || null,
+        dueDate: draftDueDate || null,
+      });
+      setDraftTitle("");
+      setDraftAssigneeId(profile?.id ?? "");
+      setDraftDueDate("");
+      setAdding(false);
+    } catch (createError) {
+      setError(getUserFacingErrorMessage(createError, "Impossible d'ajouter la tâche."));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <Card className="premium-surface !border-0 p-4 sm:p-5">
+      <div className="mb-3 flex items-center justify-between gap-3">
+        <div className="min-w-0">
+          <h2 className="text-base font-semibold text-stone-950">Tâches</h2>
+          {orderedTasks.length > 0 && (
+            <p className="mt-0.5 text-sm font-medium text-stone-500">
+              {orderedTasks.filter((task) => task.status === "todo").length} à faire
+            </p>
+          )}
+        </div>
+        {canCreate && !adding && (
+          <button
+            type="button"
+            onClick={() => {
+              setError(null);
+              setAdding(true);
+            }}
+            className="rounded-full bg-stone-50 px-3 py-1.5 text-sm font-semibold text-stone-700 transition hover:bg-stone-100"
+          >
+            + Ajouter une tâche
+          </button>
+        )}
+      </div>
+
+      {adding && (
+        <form onSubmit={submitTask} className="mb-3 grid gap-2 rounded-2xl bg-stone-50 p-3">
+          <input
+            {...iosKeyboardGuardProps}
+            required
+            value={draftTitle}
+            onFocus={(event) => onNativeFieldFocus(event.currentTarget)}
+            onChange={(event) => setDraftTitle(event.target.value)}
+            placeholder="Nouvelle tâche"
+            className="h-10 rounded-xl bg-white px-3 text-base font-semibold text-stone-950 outline-none"
+          />
+          <div className="grid gap-2 sm:grid-cols-[1fr_auto_auto]">
+            <select
+              {...iosKeyboardGuardProps}
+              value={draftAssigneeId}
+              onFocus={(event) => onNativeFieldFocus(event.currentTarget)}
+              onChange={(event) => setDraftAssigneeId(event.target.value)}
+              className="h-10 min-w-0 rounded-xl bg-white px-3 text-sm font-semibold text-stone-700 outline-none"
+            >
+              <option value="">Non assignée</option>
+              {profiles.map((userProfile) => (
+                <option key={userProfile.id} value={userProfile.id}>
+                  {getProfileOptionLabel(userProfile)}
+                </option>
+              ))}
+            </select>
+            <input
+              {...iosKeyboardGuardProps}
+              type="date"
+              value={draftDueDate}
+              onFocus={(event) => onNativeFieldFocus(event.currentTarget)}
+              onChange={(event) => setDraftDueDate(event.target.value)}
+              className="h-10 rounded-xl bg-white px-3 text-sm font-semibold text-stone-700 outline-none"
+            />
+            <div className="flex justify-end gap-2">
+              <button type="button" onClick={() => setAdding(false)} className="h-10 rounded-xl bg-white px-3 text-sm font-semibold text-stone-500">
+                Annuler
+              </button>
+              <button type="submit" disabled={saving} className="h-10 rounded-full bg-[#bb2720] px-3 text-sm font-semibold text-white disabled:bg-stone-300">
+                Ajouter
+              </button>
+            </div>
+          </div>
+        </form>
+      )}
+
+      {error && <p className="mb-2 text-sm font-semibold text-rose-700">{error}</p>}
+
+      {orderedTasks.length === 0 ? (
+        <p className="rounded-2xl bg-stone-50 px-3 py-4 text-center text-sm font-medium text-stone-400">Aucune tâche pour cet événement.</p>
+      ) : (
+        <div className="grid gap-1.5">
+          {orderedTasks.map((task) => (
+            <TaskRow
+              key={task.id}
+              task={task}
+              profiles={profiles}
+              currentProfile={profile}
+              permissions={permissions}
+              onUpdateTask={onUpdateTask}
+              onDeleteTask={onDeleteTask}
+              onNativeFieldFocus={onNativeFieldFocus}
+            />
+          ))}
+        </div>
+      )}
+    </Card>
+  );
+}
+
+function TaskRow({
+  task,
+  profiles,
+  currentProfile,
+  permissions,
+  onUpdateTask,
+  onDeleteTask,
+  onNativeFieldFocus,
+  compact = false,
+}: {
+  task: AppTask;
+  profiles: UserProfile[];
+  currentProfile: UserProfile | null;
+  permissions: AppPermissions;
+  onUpdateTask: (task: AppTask, patch: Partial<Pick<AppTask, "title" | "assignedProfileId" | "dueDate" | "status">>) => Promise<void>;
+  onDeleteTask: (task: AppTask) => Promise<void>;
+  onNativeFieldFocus?: (target: HTMLElement) => boolean;
+  compact?: boolean;
+}) {
+  const [title, setTitle] = useState(task.title);
+  const [localError, setLocalError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  const canManage = permissions.canManageEvents;
+  const canToggle = canManage || task.assignedProfileId === currentProfile?.id;
+  const done = task.status === "done";
+
+  useEffect(() => {
+    setTitle(task.title);
+  }, [task.title]);
+
+  async function updateTaskSafely(patch: Partial<Pick<AppTask, "title" | "assignedProfileId" | "dueDate" | "status">>) {
+    setSaving(true);
+    setLocalError(null);
+    try {
+      await onUpdateTask(task, patch);
+    } catch (updateError) {
+      setLocalError(getUserFacingErrorMessage(updateError, "Impossible de modifier la tâche."));
+      setTitle(task.title);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className={cn("rounded-2xl bg-stone-50 px-3 py-2.5", done && "opacity-70")}>
+      <div className="grid grid-cols-[auto_minmax(0,1fr)_auto] items-start gap-2">
+        <button
+          type="button"
+          disabled={!canToggle || saving}
+          onClick={() => void updateTaskSafely({ status: done ? "todo" : "done" })}
+          className={cn(
+            "mt-1 flex h-5 w-5 shrink-0 items-center justify-center rounded-full transition",
+            done ? "bg-emerald-600 text-white" : "bg-white text-transparent ring-1 ring-stone-200",
+            canToggle && !done && "hover:text-stone-300",
+            !canToggle && "opacity-50",
+          )}
+          aria-label={done ? "Marquer à faire" : "Marquer comme terminée"}
+        >
+          <Check className="h-3.5 w-3.5" />
+        </button>
+        <div className="min-w-0">
+          {canManage ? (
+            <input
+              {...iosKeyboardGuardProps}
+              value={title}
+              disabled={saving}
+              onFocus={(event) => onNativeFieldFocus?.(event.currentTarget)}
+              onChange={(event) => setTitle(event.target.value)}
+              onBlur={() => {
+                if (title.trim() !== task.title) void updateTaskSafely({ title });
+              }}
+              className={cn("h-8 w-full rounded-xl bg-white/70 px-2 text-base font-semibold outline-none", done ? "text-stone-500 line-through" : "text-stone-950")}
+            />
+          ) : (
+            <p className={cn("truncate text-base font-semibold", done ? "text-stone-500 line-through" : "text-stone-950")}>{task.title}</p>
+          )}
+          <div className={cn("mt-1 flex flex-wrap items-center gap-2 text-xs font-semibold text-stone-400", compact && "text-[0.7rem]")}>
+            <span>{getTaskAssigneeLabel(task, profiles)}</span>
+            {task.dueDate && <span>Échéance {formatShortDate(task.dueDate)}</span>}
+          </div>
+          {localError && <p className="mt-1 text-xs font-semibold text-rose-700">{localError}</p>}
+        </div>
+        {canManage && (
+          <button
+            type="button"
+            onClick={() => void onDeleteTask(task).catch((deleteError) => setLocalError(getUserFacingErrorMessage(deleteError, "Impossible de supprimer la tâche.")))}
+            className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-stone-400 transition hover:bg-white hover:text-rose-700"
+            aria-label="Supprimer la tâche"
+          >
+            <Trash2 className="h-3.5 w-3.5" />
+          </button>
+        )}
+      </div>
+      {canManage && (
+        <div className="mt-2 grid gap-2 pl-7 sm:grid-cols-2">
+          <select
+            {...iosKeyboardGuardProps}
+            value={task.assignedProfileId ?? ""}
+            disabled={saving}
+            onFocus={(event) => onNativeFieldFocus?.(event.currentTarget)}
+            onChange={(event) => void updateTaskSafely({ assignedProfileId: event.target.value || null })}
+            className="h-9 min-w-0 rounded-xl bg-white/70 px-2 text-sm font-semibold text-stone-600 outline-none"
+          >
+            <option value="">Non assignée</option>
+            {profiles.map((userProfile) => (
+              <option key={userProfile.id} value={userProfile.id}>
+                {getProfileOptionLabel(userProfile)}
+              </option>
+            ))}
+          </select>
+          <input
+            {...iosKeyboardGuardProps}
+            type="date"
+            value={task.dueDate ?? ""}
+            disabled={saving}
+            onFocus={(event) => onNativeFieldFocus?.(event.currentTarget)}
+            onChange={(event) => void updateTaskSafely({ dueDate: event.target.value || null })}
+            className="h-9 rounded-xl bg-white/70 px-2 text-sm font-semibold text-stone-600 outline-none"
+          />
+        </div>
+      )}
+    </div>
   );
 }
 
