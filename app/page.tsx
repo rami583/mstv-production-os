@@ -2781,7 +2781,10 @@ function getPreciseTaskCreateMessage(error: unknown) {
   if (code === "42501" || /row-level security|rls|policy|permission denied|not authorized|unauthorized|forbidden/.test(combined)) {
     return "droits Supabase insuffisants pour créer cette tâche.";
   }
-  if (code === "23514" || /tasks_status_check|tasks_title_not_blank|check constraint/.test(combined)) {
+  if (code === "23514" && /tasks_status_check|status/.test(combined)) {
+    return "statut de tâche invalide.";
+  }
+  if (code === "23514" || /tasks_title_not_blank|check constraint/.test(combined)) {
     return "données de tâche invalides.";
   }
   if (code === "42703" || /column .* does not exist|schema cache|pgrst204/.test(combined)) {
@@ -6246,10 +6249,11 @@ export default function Home() {
     const title = input.title.trim();
     if (!title) throw new Error("Le titre de la tâche est obligatoire.");
     const assignedProfile = taskProfiles.find((userProfile) => userProfile.id === input.assignedProfileId) ?? null;
-    const payload = {
+    const payload: Database["public"]["Tables"]["tasks"]["Insert"] = {
       title,
       event_id: input.eventId ?? null,
       assigned_profile_id: input.assignedProfileId ?? null,
+      status: "todo",
       due_date: input.dueDate || null,
       created_by: authSession?.user.id ?? profile?.id ?? null,
     };
