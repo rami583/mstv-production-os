@@ -384,6 +384,32 @@ type AppTask = {
   completedAt: string | null;
 };
 
+type TaskDiagnosticProfile = {
+  id: string;
+  email: string | null;
+  name: string | null;
+  role: UserRole;
+};
+
+type TaskCreateDiagnostic = {
+  currentUserId: string | null;
+  currentUserRole: UserRole | null;
+  assignedProfileId: string | null;
+  assignedProfile: TaskDiagnosticProfile | null;
+  eventId: string | null;
+  taskTitle: string;
+  dueDate: string | null;
+  supabaseErrorCode: string | null;
+  supabaseErrorMessage: string | null;
+  supabaseErrorDetails: string | null;
+  supabaseErrorHint: string | null;
+};
+
+type TaskCreateError = Error & {
+  taskCreateDiagnostic?: TaskCreateDiagnostic;
+  userMessage?: string;
+};
+
 type ExternalCalendar = {
   id: string;
   name: string;
@@ -2718,6 +2744,68 @@ function getProfileDisplayName(profile: UserProfile | null) {
 
 function getProfileOptionLabel(profile: UserProfile) {
   return getProfileDisplayName(profile) ?? profile.email ?? "Utilisateur";
+}
+
+function getTaskDiagnosticProfile(profile: UserProfile | null): TaskDiagnosticProfile | null {
+  if (!profile) return null;
+  return {
+    id: profile.id,
+    email: profile.email,
+    name: getProfileDisplayName(profile),
+    role: profile.role,
+  };
+}
+
+function getSupabaseErrorField(error: unknown, field: "code" | "message" | "details" | "hint") {
+  if (!error || typeof error !== "object") return null;
+  const value = (error as Record<string, unknown>)[field];
+  return typeof value === "string" && value.trim() ? value : null;
+}
+
+function getPreciseTaskCreateMessage(error: unknown) {
+  const code = getSupabaseErrorField(error, "code");
+  const message = getSupabaseErrorField(error, "message") ?? getRawErrorMessage(error);
+  const details = getSupabaseErrorField(error, "details");
+  const hint = getSupabaseErrorField(error, "hint");
+  const combined = [message, details, hint].filter(Boolean).join(" ").toLocaleLowerCase("fr-FR");
+
+  if (code === "23503" && combined.includes("assigned_profile_id")) {
+    return "le profil assigné n'existe pas dans MSTV.";
+  }
+  if (code === "23503" && combined.includes("created_by")) {
+    return "votre profil MSTV n'est pas lié correctement à votre session.";
+  }
+  if (code === "42501" || /row-level security|rls|policy|permission denied|not authorized|unauthorized|forbidden/.test(combined)) {
+    return "droits Supabase insuffisants pour créer cette tâche.";
+  }
+  if (code === "23514" || /tasks_status_check|tasks_title_not_blank|check constraint/.test(combined)) {
+    return "données de tâche invalides.";
+  }
+  if (code === "42703" || /column .* does not exist|schema cache|pgrst204/.test(combined)) {
+    return "la structure Supabase des tâches n'est pas à jour.";
+  }
+  return getUserFacingErrorMessage(error, "erreur Supabase inconnue.");
+}
+
+function createTaskInsertError(error: unknown, diagnostic: TaskCreateDiagnostic): TaskCreateError {
+  const preciseMessage = getPreciseTaskCreateMessage(error);
+  const wrappedError = new Error(`Impossible d'ajouter la tâche : ${preciseMessage}`) as TaskCreateError;
+  wrappedError.userMessage = wrappedError.message;
+  wrappedError.taskCreateDiagnostic = diagnostic;
+  return wrappedError;
+}
+
+function getTaskCreateUserMessage(error: unknown) {
+  if (error && typeof error === "object" && "userMessage" in error) {
+    const message = (error as TaskCreateError).userMessage;
+    if (typeof message === "string" && message.trim()) return message;
+  }
+  return `Impossible d'ajouter la tâche : ${getPreciseTaskCreateMessage(error)}`;
+}
+
+function getTaskCreateDiagnostic(error: unknown) {
+  if (!error || typeof error !== "object") return null;
+  return (error as TaskCreateError).taskCreateDiagnostic ?? null;
 }
 
 function getProfileInitials(profile: UserProfile | null, email?: string | null) {
@@ -6154,20 +6242,43 @@ export default function Home() {
     if (!supabase) throw new Error("Configuration Supabase manquante.");
     const title = input.title.trim();
     if (!title) throw new Error("Le titre de la tâche est obligatoire.");
+    const assignedProfile = taskProfiles.find((userProfile) => userProfile.id === input.assignedProfileId) ?? null;
+    const payload = {
+      title,
+      event_id: input.eventId ?? null,
+      assigned_profile_id: input.assignedProfileId ?? null,
+      due_date: input.dueDate || null,
+      created_by: authSession?.user.id ?? profile?.id ?? null,
+    };
+    const diagnosticBase: Omit<TaskCreateDiagnostic, "supabaseErrorCode" | "supabaseErrorMessage" | "supabaseErrorDetails" | "supabaseErrorHint"> = {
+      currentUserId: authSession?.user.id ?? profile?.id ?? null,
+      currentUserRole: profile?.role ?? null,
+      assignedProfileId: input.assignedProfileId ?? null,
+      assignedProfile: getTaskDiagnosticProfile(assignedProfile),
+      eventId: input.eventId ?? null,
+      taskTitle: title,
+      dueDate: input.dueDate || null,
+    };
+
+    console.info("[MSTV tasks] create payload", diagnosticBase);
 
     const { data, error: insertError } = await supabase
       .from("tasks")
-      .insert({
-        title,
-        event_id: input.eventId ?? null,
-        assigned_profile_id: input.assignedProfileId ?? null,
-        due_date: input.dueDate || null,
-        created_by: profile?.id ?? null,
-      })
+      .insert(payload)
       .select()
       .single();
 
-    if (insertError) throw insertError;
+    if (insertError) {
+      const diagnostic: TaskCreateDiagnostic = {
+        ...diagnosticBase,
+        supabaseErrorCode: getSupabaseErrorField(insertError, "code"),
+        supabaseErrorMessage: getSupabaseErrorField(insertError, "message"),
+        supabaseErrorDetails: getSupabaseErrorField(insertError, "details"),
+        supabaseErrorHint: getSupabaseErrorField(insertError, "hint"),
+      };
+      console.error("[MSTV tasks] create failed", diagnostic);
+      throw createTaskInsertError(insertError, diagnostic);
+    }
     upsertTaskInState(mapTask(data));
   }
 
@@ -11060,6 +11171,7 @@ function TasksSheet({
   const [draftDueDate, setDraftDueDate] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [localError, setLocalError] = useState<string | null>(null);
+  const [diagnostic, setDiagnostic] = useState<TaskCreateDiagnostic | null>(null);
   const eventsById = useMemo(() => new Map(events.map((event) => [event.id, event])), [events]);
   const myTasks = sortTasksForDisplay(tasks.filter((task) => task.assignedProfileId === currentProfile?.id));
   const todoTasks = myTasks.filter((task) => task.status === "todo");
@@ -11074,6 +11186,7 @@ function TasksSheet({
     formEvent.preventDefault();
     setSubmitting(true);
     setLocalError(null);
+    setDiagnostic(null);
 
     try {
       await onCreateTask({
@@ -11086,7 +11199,8 @@ function TasksSheet({
       setDraftAssigneeId(currentProfile?.id ?? "");
       setDraftDueDate("");
     } catch (createError) {
-      setLocalError(getUserFacingErrorMessage(createError, "Impossible d'ajouter la tâche."));
+      setLocalError(getTaskCreateUserMessage(createError));
+      setDiagnostic(getTaskCreateDiagnostic(createError));
     } finally {
       setSubmitting(false);
     }
@@ -11181,6 +11295,7 @@ function TasksSheet({
           )}
 
           {(error || localError) && <p className="text-sm font-semibold text-rose-700">{localError || error}</p>}
+          {diagnostic && <TaskCreateDiagnosticBlock diagnostic={diagnostic} />}
           {loading && <p className="rounded-2xl bg-stone-50 px-3 py-4 text-center text-sm font-semibold text-stone-400">Chargement...</p>}
 
           <section className="space-y-2">
@@ -15900,6 +16015,66 @@ function getTaskAssigneeLabel(task: AppTask, profiles: UserProfile[]) {
   return assignee ? getProfileOptionLabel(assignee) : "Non assignée";
 }
 
+function TaskCreateDiagnosticBlock({ diagnostic }: { diagnostic: TaskCreateDiagnostic | null }) {
+  if (!diagnostic) return null;
+
+  return (
+    <div className="rounded-2xl bg-stone-50 px-3 py-2 text-xs font-semibold text-stone-500">
+      <p className="text-stone-700">Diagnostic temporaire tâche</p>
+      <dl className="mt-1 grid gap-1">
+        <div className="flex justify-between gap-3">
+          <dt>Utilisateur</dt>
+          <dd className="truncate text-right">{diagnostic.currentUserId ?? "absent"}</dd>
+        </div>
+        <div className="flex justify-between gap-3">
+          <dt>Rôle</dt>
+          <dd>{diagnostic.currentUserRole ?? "absent"}</dd>
+        </div>
+        <div className="flex justify-between gap-3">
+          <dt>Assigné</dt>
+          <dd className="truncate text-right">{diagnostic.assignedProfile?.name ?? diagnostic.assignedProfileId ?? "non assignée"}</dd>
+        </div>
+        <div className="flex justify-between gap-3">
+          <dt>Email assigné</dt>
+          <dd className="truncate text-right">{diagnostic.assignedProfile?.email ?? "absent"}</dd>
+        </div>
+        <div className="flex justify-between gap-3">
+          <dt>Rôle assigné</dt>
+          <dd>{diagnostic.assignedProfile?.role ?? "absent"}</dd>
+        </div>
+        <div className="flex justify-between gap-3">
+          <dt>Événement</dt>
+          <dd className="truncate text-right">{diagnostic.eventId ?? "aucun"}</dd>
+        </div>
+        <div className="flex justify-between gap-3">
+          <dt>Échéance</dt>
+          <dd>{diagnostic.dueDate ?? "aucune"}</dd>
+        </div>
+        <div className="flex justify-between gap-3">
+          <dt>Code</dt>
+          <dd>{diagnostic.supabaseErrorCode ?? "aucun"}</dd>
+        </div>
+        <div className="grid gap-0.5">
+          <dt>Erreur Supabase</dt>
+          <dd className="break-words text-stone-600">{diagnostic.supabaseErrorMessage ?? "aucune"}</dd>
+        </div>
+        {diagnostic.supabaseErrorDetails && (
+          <div className="grid gap-0.5">
+            <dt>Détails</dt>
+            <dd className="break-words text-stone-600">{diagnostic.supabaseErrorDetails}</dd>
+          </div>
+        )}
+        {diagnostic.supabaseErrorHint && (
+          <div className="grid gap-0.5">
+            <dt>Indice</dt>
+            <dd className="break-words text-stone-600">{diagnostic.supabaseErrorHint}</dd>
+          </div>
+        )}
+      </dl>
+    </div>
+  );
+}
+
 function EventTasksSection({
   event,
   tasks,
@@ -15927,6 +16102,7 @@ function EventTasksSection({
   const [draftDueDate, setDraftDueDate] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [diagnostic, setDiagnostic] = useState<TaskCreateDiagnostic | null>(null);
   const orderedTasks = sortTasksForDisplay(tasks);
   const canCreate = permissions.canManageEvents;
 
@@ -15934,6 +16110,7 @@ function EventTasksSection({
     formEvent.preventDefault();
     setSaving(true);
     setError(null);
+    setDiagnostic(null);
 
     try {
       await onCreateTask({
@@ -15947,7 +16124,8 @@ function EventTasksSection({
       setDraftDueDate("");
       setAdding(false);
     } catch (createError) {
-      setError(getUserFacingErrorMessage(createError, "Impossible d'ajouter la tâche."));
+      setError(getTaskCreateUserMessage(createError));
+      setDiagnostic(getTaskCreateDiagnostic(createError));
     } finally {
       setSaving(false);
     }
@@ -16025,6 +16203,7 @@ function EventTasksSection({
       )}
 
       {error && <p className="mb-2 text-sm font-semibold text-rose-700">{error}</p>}
+      {diagnostic && <div className="mb-2"><TaskCreateDiagnosticBlock diagnostic={diagnostic} /></div>}
 
       {orderedTasks.length === 0 ? (
         <p className="rounded-2xl bg-stone-50 px-3 py-4 text-center text-sm font-medium text-stone-400">Aucune tâche pour cet événement.</p>
