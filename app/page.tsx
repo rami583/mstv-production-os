@@ -13581,15 +13581,8 @@ function ProductionDetail({
                 const Icon = getOptionIcon(option.label);
                 const optionStatus = getOptionEffectiveStatus(option, tasks);
                 const optionTone = getOptionTone(optionStatus);
-                const linkedTask = getLinkedTaskForOption(option, tasks);
                 const optionCompletedName = optionStatus === "completed" ? getOptionAssigneeLabel(option, tasks, profiles) : null;
-                const optionMetaItems = linkedTask
-                  ? [
-                      taskPriorityLabels[linkedTask.priority],
-                      linkedTask.dueDate ? formatShortDate(linkedTask.dueDate) : null,
-                    ].filter(Boolean)
-                  : [];
-                const showOptionMeta = Boolean(optionCompletedName || optionMetaItems.length > 0);
+                const showOptionMeta = Boolean(optionCompletedName);
                 const isSelectedOption = contextSelection?.type === "option" && contextSelection.optionId === option.id;
                 const isConfirmingDelete = confirmDelete?.type === "option" && confirmDelete.optionId === option.id;
                 const canManageOptionStructure = canManageCreatedEntity(permissions, profile, option);
@@ -13627,19 +13620,6 @@ function ProductionDetail({
                             {optionCompletedName && (
                               <span className="inline-flex h-5 min-w-0 items-center rounded-full bg-white/75 px-2 text-[0.7rem] font-bold leading-none text-emerald-800 sm:text-xs">
                                 <span className="truncate">{optionCompletedName}</span>
-                              </span>
-                            )}
-                            {linkedTask && (
-                              <span
-                                className="inline-flex h-5 shrink-0 items-center rounded-full px-2 text-[0.66rem] font-bold leading-none sm:text-[0.7rem]"
-                                style={getTaskPriorityTone(linkedTask.priority).pillStyle}
-                              >
-                                {taskPriorityLabels[linkedTask.priority]}
-                              </span>
-                            )}
-                            {linkedTask?.dueDate && (
-                              <span className="inline-flex h-5 shrink-0 items-center rounded-full bg-white/60 px-2 text-[0.66rem] font-bold leading-none text-stone-500 sm:text-[0.7rem]">
-                                {formatShortDate(linkedTask.dueDate)}
                               </span>
                             )}
                           </span>
@@ -14303,6 +14283,7 @@ function ContextDetailBlock({
   const [savingEditedOptionItemId, setSavingEditedOptionItemId] = useState<string | null>(null);
   const [savingCompletedByOverride, setSavingCompletedByOverride] = useState(false);
   const [completedByOverrideError, setCompletedByOverrideError] = useState<string | null>(null);
+  const [optionDueDatePickerOpen, setOptionDueDatePickerOpen] = useState(false);
   const [titleRenameError, setTitleRenameError] = useState<string | null>(null);
   const [draggingDocumentFiles, setDraggingDocumentFiles] = useState(false);
   const [uploadingDocumentFiles, setUploadingDocumentFiles] = useState(false);
@@ -14341,6 +14322,7 @@ function ContextDetailBlock({
     setSavingEditedOptionItemId(null);
     setSavingCompletedByOverride(false);
     setCompletedByOverrideError(null);
+    setOptionDueDatePickerOpen(false);
     setTitleRenameError(null);
     setDraggingDocumentFiles(false);
     setUploadingDocumentFiles(false);
@@ -14844,7 +14826,7 @@ function ContextDetailBlock({
             </select>
           </label>
           {linkedOptionTask && (
-            <div className="grid grid-cols-2 items-end gap-2">
+            <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,2fr)] items-end gap-2">
               <label className="grid min-w-0 gap-1">
                 <span className="text-xs font-semibold uppercase tracking-[0.08em] text-emerald-700/70">Priorité</span>
                 <select
@@ -14866,16 +14848,15 @@ function ContextDetailBlock({
               </label>
               <label className="grid min-w-0 gap-1">
                 <span className="text-right text-xs font-semibold uppercase tracking-[0.08em] text-emerald-700/70">Échéance</span>
-                <input
-                  {...iosKeyboardGuardProps}
-                  type="date"
-                  value={linkedOptionTask.dueDate ?? ""}
+                <button
+                  type="button"
                   disabled={savingCompletedByOverride}
-                  onFocus={(event) => onNativeFieldFocus(event.currentTarget)}
-                  onChange={(event) => void updateLinkedOptionTask({ dueDate: event.target.value || null })}
-                  className="h-8 rounded-full border border-transparent bg-white/80 px-3 text-right text-base font-semibold text-emerald-800 outline-none transition focus:border-emerald-300 focus:bg-white disabled:text-emerald-400"
+                  onClick={() => setOptionDueDatePickerOpen(true)}
+                  className="h-8 truncate rounded-full border border-transparent bg-white/80 px-3 text-right text-base font-semibold text-emerald-800 outline-none transition hover:bg-white focus:border-emerald-300 disabled:text-emerald-400"
                   aria-label="Échéance de la tâche liée"
-                />
+                >
+                  {linkedOptionTask.dueDate ? formatFullDate(linkedOptionTask.dueDate) : "Choisir une date"}
+                </button>
               </label>
             </div>
           )}
@@ -14979,6 +14960,17 @@ function ContextDetailBlock({
         {optionItemError && <div className="text-base font-medium text-rose-700">{optionItemError}</div>}
       </div>
     </Card>
+    {linkedOptionTask && optionDueDatePickerOpen && (
+      <SharedDatePicker
+        selectedDate={linkedOptionTask.dueDate ?? event.date}
+        allowSelectingCurrentDate={!linkedOptionTask.dueDate}
+        onClose={() => setOptionDueDatePickerOpen(false)}
+        onSelectDate={async (dateKey) => {
+          await updateLinkedOptionTask({ dueDate: dateKey });
+          setOptionDueDatePickerOpen(false);
+        }}
+      />
+    )}
     </>
   );
 }
@@ -17946,11 +17938,13 @@ function SharedDatePicker({
   onClose,
   onSelectDate,
   confirmationTitle,
+  allowSelectingCurrentDate = false,
 }: {
   selectedDate: string;
   onClose: () => void;
   onSelectDate: (date: string) => Promise<void> | void;
   confirmationTitle?: string;
+  allowSelectingCurrentDate?: boolean;
 }) {
   const [pickerMonth, setPickerMonth] = useState(() => new Date(`${selectedDate}T12:00:00`));
   const [pendingDate, setPendingDate] = useState<string | null>(null);
@@ -17979,7 +17973,7 @@ function SharedDatePicker({
   useEscapeToClose(onClose);
 
   function selectDate(dateKey: string) {
-    if (dateKey === selectedDate) {
+    if (dateKey === selectedDate && !allowSelectingCurrentDate) {
       onClose();
       return;
     }
