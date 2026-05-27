@@ -27,6 +27,16 @@ const fixtures = [
       "detectedOptions: [ 'Maquillage', 'Prompteur' ]",
     ],
   },
+  {
+    file: "Samples/DE260527-948.pdf",
+    expected: [
+      "detectedClient: 'La Banque Postale'",
+      "detectedDate: '2026-06-01'",
+      "detectedStartTime: '14:00'",
+      "detectedEndTime: '18:00'",
+      "detectedOptions: [ 'Maquillage', 'Prompteur' ]",
+    ],
+  },
 ];
 
 for (const fixture of fixtures) {

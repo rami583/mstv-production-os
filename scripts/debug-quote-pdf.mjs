@@ -62,7 +62,7 @@ function parseFrenchDateToKey(value) {
     decembre: "12",
   };
   const normalized = normalizeLabel(value);
-  const textMatch = normalized.match(/\b(\d{1,2})\s+(janvier|fevrier|mars|avril|mai|juin|juillet|aout|septembre|octobre|novembre|decembre)\s+(\d{4})\b/);
+  const textMatch = normalized.match(/\b(\d{1,2})(?:\s*(?:er|e|eme))?\s+(janvier|fevrier|mars|avril|mai|juin|juillet|aout|septembre|octobre|novembre|decembre)\s+(\d{4})\b/);
   if (!textMatch) return "";
 
   const [, day, monthName, year] = textMatch;
@@ -89,7 +89,7 @@ function parseFrenchDateToKeyWithDefaultYear(value, defaultYear) {
     decembre: "12",
   };
   const normalized = normalizeLabel(value);
-  const textMatch = normalized.match(/\b(\d{1,2})\s+(janvier|fevrier|mars|avril|mai|juin|juillet|aout|septembre|octobre|novembre|decembre)\b/);
+  const textMatch = normalized.match(/\b(\d{1,2})(?:\s*(?:er|e|eme))?\s+(janvier|fevrier|mars|avril|mai|juin|juillet|aout|septembre|octobre|novembre|decembre)\b/);
   if (!textMatch) return "";
 
   const [, day, monthName] = textMatch;
@@ -307,7 +307,7 @@ function extractQuoteFields(text, fallbackDate, fileName) {
     parseFrenchDateToKeyWithDefaultYear(
       findLineValue(parsingLines, [
         /\b(?:date\s+(?:de\s+)?(?:l['’])?(?:événement|evenement)|jour\s+(?:de\s+)?(?:l['’])?(?:événement|evenement))\s*[:#-]\s*(.+)$/i,
-        /\b(?:le)\s+(\d{1,2}\s+[A-Za-zéûîôàèùç]+(?:\s+\d{4})?)\b/i,
+        /\b(?:le)\s+(\d{1,2}(?:\s*(?:er|e|ème|eme))?\s+[A-Za-zéûîôàèùç]+(?:\s+\d{4})?)\b/i,
       ]) || "",
       documentYear,
     ) ||
