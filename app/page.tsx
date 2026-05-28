@@ -402,6 +402,7 @@ type AppTask = {
   priority: TaskPriority;
   sortOrder: number | null;
   dueDate: string | null;
+  notes: string | null;
   createdBy: string | null;
   createdAt: string;
   updatedAt: string;
@@ -413,11 +414,12 @@ type TaskCreateInput = {
   eventId?: string | null;
   assignedProfileId?: string | null;
   dueDate?: string | null;
+  notes?: string | null;
   priority?: TaskPriority;
   sortOrder?: number | null;
 };
 
-type TaskUpdatePatch = Partial<Pick<AppTask, "title" | "assignedProfileId" | "dueDate" | "status" | "priority" | "sortOrder">>;
+type TaskUpdatePatch = Partial<Pick<AppTask, "title" | "assignedProfileId" | "dueDate" | "notes" | "status" | "priority" | "sortOrder">>;
 
 type TaskDiagnosticProfile = {
   id: string;
@@ -2766,6 +2768,7 @@ function mapTask(row: TaskRow): AppTask {
     priority: row.priority ?? "normal",
     sortOrder: row.sort_order ?? null,
     dueDate: row.due_date ?? null,
+    notes: row.notes ?? null,
     createdBy: row.created_by ?? null,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -6301,6 +6304,7 @@ export default function Home() {
       priority: input.priority ?? "normal",
       sort_order: nextSortOrder,
       due_date: input.dueDate || null,
+      notes: input.notes?.trim() || null,
       created_by: authSession?.user.id ?? profile?.id ?? null,
     };
     const diagnosticBase: Omit<TaskCreateDiagnostic, "supabaseErrorCode" | "supabaseErrorMessage" | "supabaseErrorDetails" | "supabaseErrorHint"> = {
@@ -6339,7 +6343,7 @@ export default function Home() {
 
   async function updateTask(task: AppTask, patch: TaskUpdatePatch) {
     if (!supabase) throw new Error("Configuration Supabase manquante.");
-    const ownAllowedFields = new Set(["title", "dueDate", "status", "sortOrder"]);
+    const ownAllowedFields = new Set(["title", "dueDate", "notes", "status", "sortOrder"]);
     const canUpdateTask = permissions.canManageEvents || (task.assignedProfileId === profile?.id && Object.keys(patch).every((key) => ownAllowedFields.has(key)));
     if (!canUpdateTask) throw new Error("Modification de tâche non autorisée.");
 
@@ -6351,6 +6355,7 @@ export default function Home() {
     }
     if (patch.assignedProfileId !== undefined) payload.assigned_profile_id = patch.assignedProfileId || null;
     if (patch.dueDate !== undefined) payload.due_date = patch.dueDate || null;
+    if (patch.notes !== undefined) payload.notes = patch.notes?.trim() || null;
     if (patch.status !== undefined) payload.status = patch.status;
     if (patch.priority !== undefined && permissions.canManageEvents) payload.priority = patch.priority;
     if (patch.sortOrder !== undefined && permissions.canManageEvents) payload.sort_order = patch.sortOrder;
@@ -11381,7 +11386,6 @@ function TeamTasksSheet({
   onOpenEvent: (eventId: string) => void;
 }) {
   const nativeKeyboard = useNativeKeyboardVisibility<HTMLDivElement>();
-  const swipeStartRef = useRef<{ pointerId: number; x: number; y: number } | null>(null);
   const suppressTaskOpenRef = useRef(false);
   const [activeProfileIndex, setActiveProfileIndex] = useState(0);
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
@@ -11439,11 +11443,11 @@ function TeamTasksSheet({
     setOrderIds((currentIds) => (currentIds.join("|") === nextIds.join("|") ? currentIds : nextIds));
   }, [draggingId, todoTasks]);
 
-  function changePerson(delta: -1 | 1) {
-    if (taskPeople.length < 2) return;
+  function selectPerson(index: number) {
     setSelectedTaskId(null);
     setLocalError(null);
-    setActiveProfileIndex((current) => (current + delta + taskPeople.length) % taskPeople.length);
+    setDragError(null);
+    setActiveProfileIndex(index);
   }
 
   async function persistDragOrder(nextIds: string[], previousIds: string[]) {
@@ -11491,28 +11495,6 @@ function TeamTasksSheet({
     }, 250);
   }
 
-  function handleSwipePointerDown(pointerEvent: ReactPointerEvent<HTMLDivElement>) {
-    if (pointerEvent.pointerType === "mouse" || taskPeople.length < 2) return;
-    const target = pointerEvent.target as HTMLElement;
-    if (target.closest("button,input,textarea,select,[data-task-drag-handle]")) return;
-    swipeStartRef.current = {
-      pointerId: pointerEvent.pointerId,
-      x: pointerEvent.clientX,
-      y: pointerEvent.clientY,
-    };
-    pointerEvent.currentTarget.setPointerCapture(pointerEvent.pointerId);
-  }
-
-  function handleSwipePointerUp(pointerEvent: ReactPointerEvent<HTMLDivElement>) {
-    const swipeStart = swipeStartRef.current;
-    swipeStartRef.current = null;
-    if (!swipeStart || swipeStart.pointerId !== pointerEvent.pointerId) return;
-    const deltaX = pointerEvent.clientX - swipeStart.x;
-    const deltaY = pointerEvent.clientY - swipeStart.y;
-    if (Math.abs(deltaX) < 48 || Math.abs(deltaX) < Math.abs(deltaY) * 1.25) return;
-    changePerson(deltaX < 0 ? 1 : -1);
-  }
-
   async function createTaskForActiveProfile() {
     if (!activeProfileId || !canCreateForActiveProfile) return;
     setCreating(true);
@@ -11540,6 +11522,23 @@ function TeamTasksSheet({
     setSelectedTaskId(taskId);
   }
 
+  function canDeleteTask(task: AppTask) {
+    return permissions.canManageEvents;
+  }
+
+  async function requestDeleteTask(task: AppTask) {
+    if (!canDeleteTask(task)) return;
+    const confirmed = window.confirm(`Supprimer la tâche « ${task.title} » ?`);
+    if (!confirmed) return;
+    setLocalError(null);
+    try {
+      await onDeleteTask(task);
+      if (selectedTaskId === task.id) setSelectedTaskId(null);
+    } catch (deleteError) {
+      setLocalError(getUserFacingErrorMessage(deleteError, "Impossible de supprimer la tâche."));
+    }
+  }
+
   function renderQueueTask(task: AppTask, completed = false) {
     if (completed) {
       return (
@@ -11548,6 +11547,8 @@ function TeamTasksSheet({
           task={task}
           selected={selectedTaskId === task.id}
           completed
+          canDelete={canDeleteTask(task)}
+          onDelete={() => void requestDeleteTask(task)}
           onOpen={() => openTaskDetail(task.id)}
         />
       );
@@ -11560,6 +11561,8 @@ function TeamTasksSheet({
         selected={selectedTaskId === task.id}
         dragging={draggingId === task.id}
         canDrag={!completed && canManageActiveProfileTasks && orderedTodoTasks.length > 1}
+        canDelete={canDeleteTask(task)}
+        onDelete={() => void requestDeleteTask(task)}
         onOpen={() => openTaskDetail(task.id)}
       />
     );
@@ -11573,17 +11576,7 @@ function TeamTasksSheet({
       >
         <div className="mb-3 flex items-center justify-between gap-3">
           <div className="flex min-w-0 items-center gap-2">
-            {taskPeople.length > 1 && (
-              <button type="button" onClick={() => changePerson(-1)} className="hidden h-8 w-8 items-center justify-center rounded-full bg-stone-50 text-stone-500 transition hover:bg-stone-100 sm:flex" aria-label="Personne précédente">
-                <ChevronLeft className="h-4 w-4" />
-              </button>
-            )}
-            <h2 className="truncate text-lg font-semibold text-stone-950">{activeFirstName}</h2>
-            {taskPeople.length > 1 && (
-              <button type="button" onClick={() => changePerson(1)} className="hidden h-8 w-8 items-center justify-center rounded-full bg-stone-50 text-stone-500 transition hover:bg-stone-100 sm:flex" aria-label="Personne suivante">
-                <ChevronRight className="h-4 w-4" />
-              </button>
-            )}
+            <h2 className="truncate text-lg font-semibold text-stone-950">Tâches</h2>
           </div>
           <button type="button" onClick={onClose} className="rounded-xl bg-stone-50 px-3 py-1.5 text-base font-semibold text-stone-600 transition hover:bg-stone-100">
             Fermer
@@ -11594,17 +11587,36 @@ function TeamTasksSheet({
           ref={nativeKeyboard.scrollContainerRef}
           className="no-scrollbar min-h-0 flex-1 space-y-3 overflow-y-auto overscroll-contain"
           style={nativeKeyboard.scrollContainerStyle}
-          onPointerDown={handleSwipePointerDown}
-          onPointerUp={handleSwipePointerUp}
-          onPointerCancel={() => {
-            swipeStartRef.current = null;
-          }}
         >
           {(error) && <p className="text-sm font-semibold text-rose-700">{error}</p>}
           {localError && <p className="text-sm font-semibold text-rose-700">{localError}</p>}
           {loading && <p className="rounded-2xl bg-stone-50 px-3 py-4 text-center text-sm font-semibold text-stone-400">Chargement...</p>}
 
-          <div className="flex justify-end">
+          {taskPeople.length > 0 && (
+            <div className="no-scrollbar flex gap-1.5 overflow-x-auto pb-1">
+              {taskPeople.map((person, index) => {
+                const firstName = person.firstName?.trim() || getProfileDisplayName(person)?.split(/\s+/)[0] || "Équipe";
+                const active = index === activeProfileIndex;
+                return (
+                  <button
+                    key={person.id}
+                    type="button"
+                    onClick={() => selectPerson(index)}
+                    className={cn(
+                      "shrink-0 rounded-full px-3 py-1.5 text-sm font-semibold transition",
+                      active ? "bg-stone-900 text-white" : "bg-stone-50 text-stone-500 hover:bg-stone-100 hover:text-stone-900",
+                    )}
+                  >
+                    {firstName}
+                  </button>
+                );
+              })}
+            </div>
+          )}
+
+          {!selectedTask && (
+            <div className="flex items-center justify-between gap-3">
+              <h3 className="truncate px-1 text-base font-semibold text-stone-900">{activeFirstName}</h3>
             <button
               type="button"
               onClick={() => void createTaskForActiveProfile()}
@@ -11614,11 +11626,25 @@ function TeamTasksSheet({
             >
               +
             </button>
-          </div>
+            </div>
+          )}
 
-          {taskPeople.length === 0 ? (
+          {selectedTask ? (
+            <AdminTaskDetailPanel
+              task={selectedTask}
+              linkedEvent={selectedTask.eventId ? eventsById.get(selectedTask.eventId) ?? null : null}
+              currentProfile={currentProfile}
+              permissions={permissions}
+              onUpdateTask={onUpdateTask}
+              onDeleteTask={onDeleteTask}
+              onOpenEvent={onOpenEvent}
+              onNativeFieldFocus={nativeKeyboard.handleFieldFocus}
+              onClose={() => setSelectedTaskId(null)}
+            />
+          ) : taskPeople.length === 0 ? (
             <p className="rounded-2xl bg-stone-50 px-3 py-4 text-center text-sm font-medium text-stone-400">Aucun membre disponible.</p>
           ) : (
+            <>
             <div className="grid gap-1.5">
               {orderedTodoTasks.length === 0 ? (
                 <p className="rounded-2xl bg-stone-50 px-3 py-4 text-center text-sm font-medium text-stone-400">Aucune tâche.</p>
@@ -11638,22 +11664,7 @@ function TeamTasksSheet({
                 </DndContext>
               )}
             </div>
-          )}
-          {dragError && <p className="px-1 text-xs font-semibold text-rose-600">{dragError}</p>}
-
-          {selectedTask && (
-            <AdminTaskDetailPanel
-              task={selectedTask}
-              linkedEvent={selectedTask.eventId ? eventsById.get(selectedTask.eventId) ?? null : null}
-              currentProfile={currentProfile}
-              permissions={permissions}
-              onUpdateTask={onUpdateTask}
-              onDeleteTask={onDeleteTask}
-              onOpenEvent={onOpenEvent}
-              onNativeFieldFocus={nativeKeyboard.handleFieldFocus}
-              onClose={() => setSelectedTaskId(null)}
-            />
-          )}
+            {dragError && <p className="px-1 text-xs font-semibold text-rose-600">{dragError}</p>}
 
           <section className="space-y-1 pt-2">
             <details>
@@ -11665,22 +11676,7 @@ function TeamTasksSheet({
               )}
             </details>
           </section>
-
-          {taskPeople.length > 1 && (
-            <div className="flex justify-center gap-1 pt-1">
-              {taskPeople.map((person, index) => (
-                <button
-                  key={person.id}
-                  type="button"
-                  onClick={() => {
-                    setSelectedTaskId(null);
-                    setActiveProfileIndex(index);
-                  }}
-                  className={cn("h-1.5 rounded-full transition", index === activeProfileIndex ? "w-5 bg-stone-500" : "w-1.5 bg-stone-200")}
-                  aria-label={`Voir les tâches de ${getProfileDisplayName(person)}`}
-                />
-              ))}
-            </div>
+            </>
           )}
         </div>
       </div>
@@ -11693,12 +11689,16 @@ function SortableTaskRow({
   selected,
   dragging = false,
   canDrag,
+  canDelete,
+  onDelete,
   onOpen,
 }: {
   task: AppTask;
   selected: boolean;
   dragging?: boolean;
   canDrag: boolean;
+  canDelete: boolean;
+  onDelete: () => void;
   onOpen: () => void;
 }) {
   const {
@@ -11734,6 +11734,8 @@ function SortableTaskRow({
         dragging={rowIsDragging}
         draggable={canDrag}
         draggableProps={canDrag ? ({ ...attributes, ...listeners } as HTMLAttributes<HTMLDivElement>) : undefined}
+        canDelete={canDelete}
+        onDelete={onDelete}
         onOpen={onOpen}
       />
     </div>
@@ -11747,6 +11749,8 @@ const TaskQueueRow = forwardRef<HTMLDivElement, {
   dragging?: boolean;
   draggable?: boolean;
   draggableProps?: HTMLAttributes<HTMLDivElement>;
+  canDelete?: boolean;
+  onDelete?: () => void;
   onOpen: () => void;
 }>(function TaskQueueRow({
   task,
@@ -11755,6 +11759,8 @@ const TaskQueueRow = forwardRef<HTMLDivElement, {
   dragging = false,
   draggable = false,
   draggableProps,
+  canDelete = false,
+  onDelete,
   onOpen,
 }, ref) {
   return (
@@ -11784,6 +11790,21 @@ const TaskQueueRow = forwardRef<HTMLDivElement, {
       >
         {task.title}
       </span>
+      {canDelete && (
+        <button
+          type="button"
+          onPointerDown={(event) => event.stopPropagation()}
+          onClick={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            onDelete?.();
+          }}
+          className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-lg font-semibold leading-none text-stone-300 transition hover:bg-stone-100 hover:text-rose-600"
+          aria-label={`Supprimer ${task.title}`}
+        >
+          ×
+        </button>
+      )}
     </div>
   );
 });
@@ -11810,16 +11831,19 @@ function AdminTaskDetailPanel({
   onClose: () => void;
 }) {
   const [title, setTitle] = useState(task.title);
+  const [notes, setNotes] = useState(task.notes ?? "");
   const [localError, setLocalError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const done = task.status === "done";
+  const urgent = task.priority === "urgent";
   const canEdit = permissions.canManageEvents || task.assignedProfileId === currentProfile?.id;
   const canDelete = permissions.canManageEvents;
 
   useEffect(() => {
     setTitle(task.title);
+    setNotes(task.notes ?? "");
     setLocalError(null);
-  }, [task.id, task.title]);
+  }, [task.id, task.title, task.notes]);
 
   async function updateTaskSafely(patch: TaskUpdatePatch) {
     if (!canEdit) return;
@@ -11830,14 +11854,43 @@ function AdminTaskDetailPanel({
     } catch (updateError) {
       setLocalError(getUserFacingErrorMessage(updateError, "Impossible de modifier la tâche."));
       setTitle(task.title);
+      setNotes(task.notes ?? "");
     } finally {
       setSaving(false);
     }
   }
 
+  async function requestDeleteTask() {
+    if (!canDelete) return;
+    const confirmed = window.confirm(`Supprimer la tâche « ${task.title} » ?`);
+    if (!confirmed) return;
+    try {
+      await onDeleteTask(task);
+      onClose();
+    } catch (deleteError) {
+      setLocalError(getUserFacingErrorMessage(deleteError, "Impossible de supprimer la tâche."));
+    }
+  }
+
   return (
     <div className="rounded-2xl bg-stone-50 p-3">
-      <div className="flex items-start justify-between gap-2">
+      <div className="mb-3 flex items-center justify-between gap-2">
+        <button type="button" onClick={onClose} className="rounded-xl bg-white px-3 py-1.5 text-sm font-semibold text-stone-500 transition hover:text-stone-900">
+          Retour
+        </button>
+        {canDelete && (
+          <button
+            type="button"
+            onClick={() => void requestDeleteTask()}
+            disabled={saving}
+            className="h-9 rounded-xl bg-rose-50 px-3 text-sm font-semibold text-rose-700 transition hover:bg-rose-100 disabled:text-stone-300"
+          >
+            Supprimer
+          </button>
+        )}
+      </div>
+
+      <div className="space-y-2">
         <input
           {...iosKeyboardGuardProps}
           value={title}
@@ -11849,45 +11902,65 @@ function AdminTaskDetailPanel({
           }}
           className={cn("h-10 min-w-0 flex-1 rounded-xl bg-white px-3 text-base font-semibold outline-none", done ? "text-stone-500 line-through" : "text-stone-950")}
         />
-        <button type="button" onClick={onClose} className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-stone-400 transition hover:bg-white hover:text-stone-700" aria-label="Fermer le détail">
-          <X className="h-4 w-4" />
-        </button>
+
+        <div className="grid gap-2 sm:grid-cols-2">
+          <label className="flex h-10 items-center gap-2 rounded-xl bg-white px-3 text-sm font-semibold text-stone-600">
+            <input
+              type="checkbox"
+              checked={urgent}
+              disabled={saving || !permissions.canManageEvents}
+              onChange={(event) => void updateTaskSafely({ priority: event.target.checked ? "urgent" : "normal" })}
+              className="h-4 w-4 rounded border-stone-300 accent-[#bb2720]"
+            />
+            Urgent
+          </label>
+          <label className="flex h-10 items-center gap-2 rounded-xl bg-white px-3 text-sm font-semibold text-stone-600">
+            <input
+              type="checkbox"
+              checked={done}
+              disabled={saving || !canEdit}
+              onChange={(event) => void updateTaskSafely({ status: event.target.checked ? "done" : "todo" })}
+              className="h-4 w-4 rounded border-stone-300 accent-emerald-600"
+            />
+            Terminée
+          </label>
+        </div>
+
+        <label className="block">
+          <span className="mb-1 block px-1 text-xs font-semibold uppercase tracking-[0.08em] text-stone-400">Échéance</span>
+          <input
+            {...iosKeyboardGuardProps}
+            type="date"
+            value={task.dueDate ?? ""}
+            disabled={saving || !canEdit}
+            onFocus={(event) => onNativeFieldFocus?.(event.currentTarget)}
+            onChange={(event) => void updateTaskSafely({ dueDate: event.target.value || null })}
+            className="h-10 w-full rounded-xl bg-white px-3 text-sm font-semibold text-stone-600 outline-none"
+          />
+        </label>
+
+        <label className="block">
+          <span className="mb-1 block px-1 text-xs font-semibold uppercase tracking-[0.08em] text-stone-400">Notes</span>
+          <textarea
+            {...iosKeyboardGuardProps}
+            value={notes}
+            disabled={saving || !canEdit}
+            rows={4}
+            onFocus={(event) => onNativeFieldFocus?.(event.currentTarget)}
+            onChange={(event) => setNotes(event.target.value)}
+            onBlur={() => {
+              if (notes.trim() !== (task.notes ?? "")) void updateTaskSafely({ notes });
+            }}
+            className="min-h-24 w-full resize-none rounded-xl bg-white px-3 py-2 text-sm font-medium leading-relaxed text-stone-700 outline-none placeholder:text-stone-300"
+            placeholder="Notes"
+          />
+        </label>
       </div>
-      <div className="mt-2 grid gap-2 sm:grid-cols-2">
-        <input
-          {...iosKeyboardGuardProps}
-          type="date"
-          value={task.dueDate ?? ""}
-          disabled={saving || !canEdit}
-          onFocus={(event) => onNativeFieldFocus?.(event.currentTarget)}
-          onChange={(event) => void updateTaskSafely({ dueDate: event.target.value || null })}
-          className="h-10 rounded-xl bg-white px-3 text-sm font-semibold text-stone-600 outline-none"
-        />
-        <button
-          type="button"
-          disabled={saving || !canEdit}
-          onClick={() => void updateTaskSafely({ status: done ? "todo" : "done" })}
-          className={cn("h-10 rounded-xl px-3 text-sm font-semibold transition disabled:bg-stone-200 disabled:text-stone-400", done ? "bg-stone-200 text-stone-600 hover:bg-stone-300" : "bg-emerald-600 text-white hover:bg-emerald-700")}
-        >
-          {done ? "Remettre à faire" : "Marquer terminée"}
-        </button>
-      </div>
+
       {linkedEvent && (
         <button type="button" onClick={() => onOpenEvent(linkedEvent.id)} className="mt-2 w-full rounded-xl bg-white px-3 py-2 text-left text-sm font-semibold text-stone-500 transition hover:text-stone-900">
           {getProductionEventDisplay(linkedEvent).title} · {formatFullDate(linkedEvent.date)}
         </button>
-      )}
-      {canDelete && (
-        <div className="mt-2 flex justify-end">
-          <button
-            type="button"
-            onClick={() => void onDeleteTask(task).then(onClose).catch((deleteError) => setLocalError(getUserFacingErrorMessage(deleteError, "Impossible de supprimer la tâche.")))}
-            disabled={saving}
-            className="h-9 rounded-xl bg-rose-50 px-3 text-sm font-semibold text-rose-700 transition hover:bg-rose-100 disabled:text-stone-300"
-          >
-            Supprimer
-          </button>
-        </div>
       )}
       {localError && <p className="mt-2 text-xs font-semibold text-rose-700">{localError}</p>}
     </div>

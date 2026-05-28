@@ -295,6 +295,7 @@ export type Database = {
           priority: "urgent" | "normal" | "low";
           sort_order: number | null;
           due_date: string | null;
+          notes: string | null;
           created_by: string | null;
           created_at: string;
           updated_at: string;
@@ -309,6 +310,7 @@ export type Database = {
           priority?: "urgent" | "normal" | "low";
           sort_order?: number | null;
           due_date?: string | null;
+          notes?: string | null;
           created_by?: string | null;
           created_at?: string;
           updated_at?: string;
