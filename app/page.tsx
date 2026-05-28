@@ -75,6 +75,7 @@ import {
   type TransitionEvent as ReactTransitionEvent,
   type WheelEvent as ReactWheelEvent,
 } from "react";
+import { createPortal } from "react-dom";
 import { Card } from "@/components/ui/card";
 import { EventEditorModal } from "@/components/events/EventEditorModal";
 import type { Session } from "@supabase/supabase-js";
@@ -2683,8 +2684,11 @@ function normalizeLinkEntryDrafts(drafts: LinkEntryDraft[], isPlatform: boolean)
     ];
   }
 
+  if (nonEmptyDrafts.length > 0) {
+    return nonEmptyDrafts;
+  }
+
   return [
-    ...nonEmptyDrafts,
     {
       ...emptyDraft,
       url: "",
@@ -11710,7 +11714,7 @@ function TeamTasksSheet({
               <div className="no-scrollbar flex min-w-0 flex-1 items-end gap-0.5 overflow-x-auto">
                 {taskPeople.map((person, index) => {
                   const firstName = person.firstName?.trim() || getProfileDisplayName(person)?.split(/\s+/)[0] || "Équipe";
-                  const active = index === activeProfileIndex;
+                  const active = person.id === activeProfileId;
                   return (
                     <button
                       key={person.id}
@@ -11720,7 +11724,7 @@ function TeamTasksSheet({
                         "shrink-0 rounded-t-xl border px-3 py-2 text-sm font-semibold transition",
                         active
                           ? "border-stone-200/80 border-b-white bg-white text-stone-950 shadow-sm shadow-black/5"
-                          : "border-white/70 bg-white/45 text-stone-300 hover:border-stone-200/50 hover:bg-white/70 hover:text-stone-600",
+                          : "border-stone-200/30 bg-white/35 text-stone-300 hover:border-stone-200/45 hover:text-stone-500 active:bg-white/35",
                       )}
                     >
                       {firstName}
@@ -12077,7 +12081,7 @@ function AdminTaskDetailPanel({
             type="button"
             disabled={saving || !canEditContent}
             onClick={() => setDueDatePickerOpen(true)}
-            className={cn("h-10 w-full rounded-xl bg-white/85 px-3 text-left text-sm font-semibold outline-none transition hover:bg-white disabled:text-stone-300", taskTone.actionText)}
+            className={cn("h-10 w-full rounded-xl bg-white/85 px-3 text-left text-base font-semibold outline-none transition hover:bg-white disabled:text-stone-300", taskTone.actionText)}
           >
             {task.dueDate ? formatFullDate(task.dueDate) : "Choisir une date"}
           </button>
@@ -12095,7 +12099,7 @@ function AdminTaskDetailPanel({
             onBlur={() => {
               if (notes.trim() !== (task.notes ?? "")) void updateTaskSafely({ notes });
             }}
-            className={cn("min-h-24 w-full resize-none rounded-xl bg-white/85 px-3 py-2 text-sm font-medium leading-relaxed outline-none transition placeholder:text-stone-300 focus:bg-white", taskTone.body)}
+            className={cn("min-h-24 w-full resize-none rounded-xl bg-white/85 px-3 py-2 text-base font-medium leading-relaxed outline-none transition placeholder:text-stone-300 focus:bg-white", taskTone.body)}
             placeholder="Notes"
           />
         </label>
@@ -12119,7 +12123,7 @@ function AdminTaskDetailPanel({
           <button
             type="button"
             onClick={() => onOpenEvent(linkedEvent.id)}
-            className="block w-full truncate rounded-lg py-1 text-left text-sm font-semibold text-stone-600 transition hover:text-stone-950"
+            className="block w-full truncate rounded-lg py-1 text-left text-base font-semibold text-stone-600 transition hover:text-stone-950"
           >
             {getProductionEventDisplay(linkedEvent).title} · {formatShortDate(linkedEvent.date)}
           </button>
@@ -12134,7 +12138,7 @@ function AdminTaskDetailPanel({
               disabled={saving}
               onFocus={(event) => onNativeFieldFocus?.(event.currentTarget)}
               onChange={(event) => setEventQuery(event.target.value)}
-              className="h-9 w-full rounded-xl bg-white/85 px-3 text-sm font-semibold text-stone-700 outline-none transition placeholder:text-stone-300 focus:bg-white"
+              className="h-9 w-full rounded-xl bg-white/85 px-3 text-base font-semibold text-stone-700 outline-none transition placeholder:text-stone-300 focus:bg-white"
               placeholder="Rechercher un événement"
             />
             {eventCandidates.length > 0 && (
@@ -19182,9 +19186,10 @@ function CompactGridDeleteDialog({
   onConfirm: () => void;
 }) {
   useEscapeToClose(onCancel);
+  if (typeof document === "undefined") return null;
 
-  return (
-    <div className={cn(modalBackdropClassName, "items-end justify-center p-3 sm:items-center sm:p-6")} onPointerDown={(pointerEvent) => handleModalBackdropPointerDown(pointerEvent, onCancel)}>
+  return createPortal(
+    <div className="fixed inset-0 z-[120] flex items-end justify-center bg-black/35 p-3 sm:items-center sm:p-6" onPointerDown={(pointerEvent) => handleModalBackdropPointerDown(pointerEvent, onCancel)}>
       <div data-grid-delete-dialog className={cn(modalPanelClassName, "w-full max-w-xs p-4")} onPointerDown={(pointerEvent) => pointerEvent.stopPropagation()}>
         <p className="text-center text-base font-semibold text-stone-950">Supprimer cet élément ?</p>
         <div className="mt-4 grid grid-cols-2 gap-2">
@@ -19206,7 +19211,8 @@ function CompactGridDeleteDialog({
           </button>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
 
