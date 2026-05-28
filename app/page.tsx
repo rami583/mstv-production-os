@@ -12311,7 +12311,7 @@ function YearOverviewMiniMonth({
         className={cn(
           "flex w-full min-w-0 flex-1 flex-col overflow-visible rounded-[1.15rem] transition-colors hover:bg-white/[0.28] sm:rounded-[1.2rem]",
           isVisibleMonth
-            ? "bg-white/[0.58] px-2 pb-2 pt-2 ring-1 ring-[#bb2720]/20 ring-inset sm:px-3 sm:pb-3 sm:pt-3 lg:px-3.5 lg:pb-3.5 lg:pt-3.5"
+            ? "bg-white/[0.58] px-2.5 pb-2.5 pt-2.5 sm:px-3 sm:pb-3 sm:pt-3 lg:px-3.5 lg:pb-3.5 lg:pt-3.5"
             : "px-1 pb-1.5 pt-1.5 sm:px-2 sm:pb-2 sm:pt-2 lg:px-2.5 lg:pb-2.5 lg:pt-2.5",
         )}
       >
