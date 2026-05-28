@@ -11165,6 +11165,7 @@ function TeamTasksSheet({
   }, [orderIds, todoTasks, todoTasksById]);
   const selectedTask = selectedTaskId ? tasks.find((task) => task.id === selectedTaskId) ?? null : null;
   const visualIndexByTaskId = useMemo(() => new Map(orderedTodoTasks.map((task, index) => [task.id, index])), [orderedTodoTasks]);
+  const selectedTaskPriorityIndex = selectedTask?.status === "todo" ? visualIndexByTaskId.get(selectedTask.id) ?? null : null;
 
   useEscapeToClose(onClose);
 
@@ -11394,6 +11395,7 @@ function TeamTasksSheet({
             >
               <AdminTaskDetailPanel
                 task={selectedTask}
+                priorityIndex={selectedTaskPriorityIndex}
                 events={events}
                 linkedEvent={selectedTask.eventId ? eventsById.get(selectedTask.eventId) ?? null : null}
                 currentProfile={currentProfile}
@@ -11531,16 +11533,7 @@ const TaskQueueRow = forwardRef<HTMLDivElement, {
   onDelete,
   onOpen,
 }, ref) {
-  const priorityFill =
-    completed
-      ? "bg-white/80 opacity-65 hover:bg-stone-50/80"
-      : priorityIndex === 0
-        ? "bg-rose-100/90 hover:bg-rose-100"
-        : priorityIndex === 1
-          ? "bg-[#FEE2C5] hover:bg-[#FEDFC0]"
-          : priorityIndex === 2
-            ? "bg-[#FEF4BD] hover:bg-[#FEF3B2]"
-            : "bg-emerald-100/95 hover:bg-emerald-100";
+  const taskSurface = getTaskSurfaceTone(task, priorityIndex);
 
   return (
     <div
@@ -11556,7 +11549,7 @@ const TaskQueueRow = forwardRef<HTMLDivElement, {
       className={cn(
         "group mx-0.5 flex min-h-11 select-none items-center gap-2 rounded-xl px-3 py-2 transition",
         draggable ? "cursor-grab active:cursor-grabbing" : "cursor-pointer",
-        priorityFill,
+        taskSurface.row,
         dragging && "bg-white opacity-90 shadow-sm shadow-black/5",
       )}
       {...draggableProps}
@@ -11593,6 +11586,7 @@ const TaskQueueRow = forwardRef<HTMLDivElement, {
 
 function AdminTaskDetailPanel({
   task,
+  priorityIndex,
   events,
   linkedEvent,
   currentProfile,
@@ -11604,6 +11598,7 @@ function AdminTaskDetailPanel({
   onClose,
 }: {
   task: AppTask;
+  priorityIndex: number | null;
   events: ProductionEvent[];
   linkedEvent: ProductionEvent | null;
   currentProfile: UserProfile | null;
@@ -11621,7 +11616,7 @@ function AdminTaskDetailPanel({
   const [localError, setLocalError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const done = task.status === "done";
-  const taskTone = getTaskTone(task);
+  const taskTone = getTaskTone(task, priorityIndex);
   const assignedToCurrentProfile = Boolean(currentProfile?.id && task.assignedProfileId === currentProfile.id);
   const createdByCurrentProfile = Boolean(currentProfile?.id && task.createdBy === currentProfile.id);
   const canEditContent = permissions.canManageEvents || (assignedToCurrentProfile && createdByCurrentProfile);
@@ -14122,9 +14117,45 @@ function getOptionTone(state: CompletionStatus) {
       };
 }
 
-function getTaskTone(task: AppTask) {
+function getTaskSurfaceTone(task: AppTask, priorityIndex: number | null) {
+  if (task.status === "done") {
+    return {
+      row: "bg-white/80 opacity-65 hover:bg-stone-50/80",
+      panel: "bg-white/85",
+    };
+  }
+
+  if (priorityIndex === 0) {
+    return {
+      row: "bg-rose-100/90 hover:bg-rose-100",
+      panel: "bg-rose-100/90",
+    };
+  }
+
+  if (priorityIndex === 1) {
+    return {
+      row: "bg-[#FEE2C5] hover:bg-[#FEDFC0]",
+      panel: "bg-[#FEE2C5]",
+    };
+  }
+
+  if (priorityIndex === 2) {
+    return {
+      row: "bg-[#FEF4BD] hover:bg-[#FEF3B2]",
+      panel: "bg-[#FEF4BD]",
+    };
+  }
+
   return {
-    panel: task.status === "done" ? "bg-white/85" : "bg-emerald-50/80",
+    row: "bg-emerald-100/95 hover:bg-emerald-100",
+    panel: "bg-emerald-100/95",
+  };
+}
+
+function getTaskTone(task: AppTask, priorityIndex: number | null) {
+  const surface = getTaskSurfaceTone(task, priorityIndex);
+  return {
+    panel: surface.panel,
     title: task.status === "done" ? "text-stone-500 line-through" : "text-emerald-950",
     body: "text-stone-700",
     meta: task.status === "done" ? "text-stone-400" : "text-emerald-700/70",
