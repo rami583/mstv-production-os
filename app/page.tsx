@@ -11245,8 +11245,15 @@ function TeamTasksSheet({
   const nativeKeyboard = useNativeKeyboardVisibility<HTMLDivElement>();
   const suppressTaskOpenRef = useRef(false);
   const taskDetailSwipeStartRef = useRef<{ pointerId: number; x: number; y: number; axis: "horizontal" | "vertical" | null } | null>(null);
+  const taskDetailSlideFrameRef = useRef<number | null>(null);
   const [selectedProfileId, setSelectedProfileId] = useState<string | null>(() => currentProfile?.id ?? null);
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
+  const [taskDetailSlide, setTaskDetailSlide] = useState<{
+    fromTaskId: string;
+    toTaskId: string;
+    direction: -1 | 1;
+    settling: boolean;
+  } | null>(null);
   const [orderIds, setOrderIds] = useState<string[]>([]);
   const [draggingId, setDraggingId] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
@@ -11294,6 +11301,8 @@ function TeamTasksSheet({
     if (!selectedTask) return [];
     return selectedTask.status === "done" ? doneTasks : orderedTodoTasks;
   }, [doneTasks, orderedTodoTasks, selectedTask]);
+  const taskDetailSlideFromTask = taskDetailSlide ? tasks.find((task) => task.id === taskDetailSlide.fromTaskId) ?? null : null;
+  const taskDetailSlideToTask = taskDetailSlide ? tasks.find((task) => task.id === taskDetailSlide.toTaskId) ?? null : null;
 
   useEscapeToClose(onClose);
 
@@ -11310,6 +11319,14 @@ function TeamTasksSheet({
     const nextIds = todoTasks.map((task) => task.id);
     setOrderIds((currentIds) => (currentIds.join("|") === nextIds.join("|") ? currentIds : nextIds));
   }, [draggingId, todoTasks]);
+
+  useEffect(() => {
+    return () => {
+      if (taskDetailSlideFrameRef.current !== null) {
+        window.cancelAnimationFrame(taskDetailSlideFrameRef.current);
+      }
+    };
+  }, []);
 
   function canMoveTask(task: AppTask) {
     if (task.status !== "todo") return false;
@@ -11397,10 +11414,12 @@ function TeamTasksSheet({
       suppressTaskOpenRef.current = false;
       return;
     }
+    setTaskDetailSlide(null);
     setSelectedTaskId(taskId);
   }
 
   function closeSelectedTaskEditor() {
+    setTaskDetailSlide(null);
     if (selectedTask?.assignedProfileId) {
       setSelectedProfileId(selectedTask.assignedProfileId);
     }
@@ -11431,11 +11450,26 @@ function TeamTasksSheet({
   }
 
   function navigateSelectedTaskByDirection(direction: -1 | 1) {
+    if (taskDetailSlide) return;
     if (!selectedTask || selectedTaskNavigationTasks.length <= 1) return;
     const currentIndex = selectedTaskNavigationTasks.findIndex((task) => task.id === selectedTask.id);
     if (currentIndex === -1) return;
     const nextTask = selectedTaskNavigationTasks[currentIndex + direction];
-    if (nextTask) setSelectedTaskId(nextTask.id);
+    if (!nextTask) return;
+
+    if (taskDetailSlideFrameRef.current !== null) {
+      window.cancelAnimationFrame(taskDetailSlideFrameRef.current);
+    }
+    setTaskDetailSlide({
+      fromTaskId: selectedTask.id,
+      toTaskId: nextTask.id,
+      direction,
+      settling: false,
+    });
+    taskDetailSlideFrameRef.current = window.requestAnimationFrame(() => {
+      taskDetailSlideFrameRef.current = null;
+      setTaskDetailSlide((current) => current ? { ...current, settling: true } : current);
+    });
   }
 
   function handleTaskDetailSwipePointerDown(pointerEvent: ReactPointerEvent<HTMLDivElement>) {
@@ -11543,6 +11577,23 @@ function TeamTasksSheet({
     );
   }
 
+  function renderTaskDetailPanel(task: AppTask) {
+    return (
+      <AdminTaskDetailPanel
+        task={task}
+        events={events}
+        linkedEvent={task.eventId ? eventsById.get(task.eventId) ?? null : null}
+        currentProfile={currentProfile}
+        permissions={permissions}
+        onUpdateTask={onUpdateTask}
+        onDeleteTask={onDeleteTask}
+        onOpenEvent={onOpenEvent}
+        onNativeFieldFocus={nativeKeyboard.handleFieldFocus}
+        onClose={closeSelectedTaskEditor}
+      />
+    );
+  }
+
   return (
     <section className="mx-auto flex min-h-0 w-full max-w-3xl flex-1 flex-col">
         <div
@@ -11599,7 +11650,7 @@ function TeamTasksSheet({
 
           {selectedTask ? (
             <div
-              className="min-h-full touch-pan-y"
+              className="min-h-full touch-pan-y overflow-hidden"
               onPointerDown={handleTaskDetailSwipePointerDown}
               onPointerMove={handleTaskDetailSwipePointerMove}
               onPointerUp={handleTaskDetailSwipePointerUp}
@@ -11608,18 +11659,31 @@ function TeamTasksSheet({
                 if (event.target === event.currentTarget) closeSelectedTaskEditor();
               }}
             >
-              <AdminTaskDetailPanel
-                task={selectedTask}
-                events={events}
-                linkedEvent={selectedTask.eventId ? eventsById.get(selectedTask.eventId) ?? null : null}
-                currentProfile={currentProfile}
-                permissions={permissions}
-                onUpdateTask={onUpdateTask}
-                onDeleteTask={onDeleteTask}
-                onOpenEvent={onOpenEvent}
-                onNativeFieldFocus={nativeKeyboard.handleFieldFocus}
-                onClose={closeSelectedTaskEditor}
-              />
+              {taskDetailSlide && taskDetailSlideFromTask && taskDetailSlideToTask ? (
+                <div
+                  className="flex w-[200%]"
+                  style={{
+                    transform:
+                      taskDetailSlide.direction === 1
+                        ? taskDetailSlide.settling ? "translate3d(-50%, 0, 0)" : "translate3d(0, 0, 0)"
+                        : taskDetailSlide.settling ? "translate3d(0, 0, 0)" : "translate3d(-50%, 0, 0)",
+                    transition: taskDetailSlide.settling ? `transform ${EVENT_DETAIL_CAROUSEL_TRANSITION_MS}ms ${EVENT_DETAIL_CAROUSEL_EASING}` : undefined,
+                  }}
+                  onTransitionEnd={(transitionEvent) => {
+                    if (transitionEvent.target !== transitionEvent.currentTarget || transitionEvent.propertyName !== "transform") return;
+                    setSelectedTaskId(taskDetailSlide.toTaskId);
+                    setTaskDetailSlide(null);
+                  }}
+                >
+                  {(taskDetailSlide.direction === 1 ? [taskDetailSlideFromTask, taskDetailSlideToTask] : [taskDetailSlideToTask, taskDetailSlideFromTask]).map((task) => (
+                    <div key={task.id} className="w-1/2 shrink-0">
+                      {renderTaskDetailPanel(task)}
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                renderTaskDetailPanel(selectedTask)
+              )}
             </div>
           ) : taskPeople.length === 0 ? (
             <p className="rounded-2xl bg-neutral-50 px-3 py-4 text-center text-sm font-medium text-neutral-400">Aucun membre disponible.</p>
