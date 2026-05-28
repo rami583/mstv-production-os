@@ -11531,6 +11531,17 @@ const TaskQueueRow = forwardRef<HTMLDivElement, {
   onDelete,
   onOpen,
 }, ref) {
+  const priorityFill =
+    completed
+      ? "bg-white/80 opacity-65 hover:bg-stone-50/80"
+      : priorityIndex === 0
+        ? "bg-rose-100/90 hover:bg-rose-100"
+        : priorityIndex === 1
+          ? "bg-orange-100/85 hover:bg-orange-100"
+          : priorityIndex === 2
+            ? "bg-amber-100/80 hover:bg-amber-100"
+            : "bg-emerald-100/95 hover:bg-emerald-100";
+
   return (
     <div
       ref={ref}
@@ -11545,25 +11556,14 @@ const TaskQueueRow = forwardRef<HTMLDivElement, {
       className={cn(
         "group mx-0.5 flex min-h-11 select-none items-center gap-2 rounded-xl px-3 py-2 transition",
         draggable ? "cursor-grab active:cursor-grabbing" : "cursor-pointer",
-        completed
-          ? "bg-white/80 opacity-65 hover:bg-stone-50/80"
-          : selected || priorityIndex === 0
-            ? "bg-emerald-100/95 hover:bg-emerald-100"
-            : priorityIndex === 1
-              ? "bg-emerald-100/65 hover:bg-emerald-100/75"
-              : priorityIndex === 2
-                ? "bg-emerald-50/90 hover:bg-emerald-100/55"
-                : "bg-emerald-50/55 hover:bg-emerald-100/45",
-        !completed && isTaskUrgent(task) && priorityIndex === 0 && "ring-1 ring-rose-400/70",
-        !completed && isTaskUrgent(task) && priorityIndex === 1 && "ring-1 ring-rose-400/50",
-        !completed && isTaskUrgent(task) && priorityIndex === 2 && "ring-1 ring-rose-400/35",
-        !completed && !isTaskUrgent(task) && priorityIndex === 0 && "ring-1 ring-emerald-300/45",
-        !completed && !isTaskUrgent(task) && priorityIndex === 1 && "ring-1 ring-emerald-300/30",
-        !completed && !isTaskUrgent(task) && priorityIndex === 2 && "ring-1 ring-emerald-300/20",
+        priorityFill,
         dragging && "bg-white opacity-90 shadow-sm shadow-black/5",
       )}
       {...draggableProps}
     >
+      {!completed && isTaskUrgent(task) && (
+        <AlertCircle className="h-3.5 w-3.5 shrink-0 text-rose-600/80" aria-label="Urgent" />
+      )}
       <span
         className={cn(
           "min-w-0 flex-1 truncate text-left text-base font-semibold leading-snug transition",
