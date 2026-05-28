@@ -11552,7 +11552,7 @@ function TeamTasksSheet({
     }
   }
 
-  function renderQueueTask(task: AppTask, completed = false) {
+  function renderQueueTask(task: AppTask, completed = false, priorityIndex: number | null = null) {
     if (completed) {
       return (
         <TaskQueueRow
@@ -11573,6 +11573,7 @@ function TeamTasksSheet({
         task={task}
         selected={selectedTaskId === task.id}
         dragging={draggingId === task.id}
+        priorityIndex={priorityIndex}
         canDrag={!completed && canManageActiveProfileTasks && orderedTodoTasks.length > 1}
         canDelete={canDeleteTask(task)}
         onDelete={() => void requestDeleteTask(task)}
@@ -11607,7 +11608,7 @@ function TeamTasksSheet({
                         "shrink-0 rounded-t-xl border px-3 py-2 text-sm font-semibold transition",
                         active
                           ? "border-stone-200/80 border-b-white bg-white text-stone-950 shadow-sm shadow-black/5"
-                          : "border-white/70 bg-white/45 text-stone-500 hover:border-stone-200/50 hover:bg-white/70 hover:text-stone-900",
+                          : "border-white/70 bg-white/45 text-stone-300 hover:border-stone-200/50 hover:bg-white/70 hover:text-stone-600",
                       )}
                     >
                       {firstName}
@@ -11653,7 +11654,7 @@ function TeamTasksSheet({
             <>
             <div className="grid gap-1.5">
               {orderedTodoTasks.length === 0 ? (
-                <p className="rounded-2xl bg-stone-50 px-3 py-4 text-center text-sm font-medium text-stone-400">Aucune tâche.</p>
+                <p className="rounded-2xl bg-white/55 px-3 py-4 text-center text-sm font-medium text-stone-300">Aucune tâche.</p>
               ) : (
                 <DndContext
                   sensors={sensors}
@@ -11664,7 +11665,7 @@ function TeamTasksSheet({
                 >
                   <SortableContext items={orderedTodoTasks.map((task) => task.id)} strategy={verticalListSortingStrategy}>
                     <div className="grid gap-1.5">
-                      {orderedTodoTasks.map((task) => renderQueueTask(task))}
+                      {orderedTodoTasks.map((task, index) => renderQueueTask(task, false, index))}
                     </div>
                   </SortableContext>
                 </DndContext>
@@ -11689,6 +11690,7 @@ function SortableTaskRow({
   task,
   selected,
   dragging = false,
+  priorityIndex,
   canDrag,
   canDelete,
   onDelete,
@@ -11697,6 +11699,7 @@ function SortableTaskRow({
   task: AppTask;
   selected: boolean;
   dragging?: boolean;
+  priorityIndex: number | null;
   canDrag: boolean;
   canDelete: boolean;
   onDelete: () => void;
@@ -11733,6 +11736,7 @@ function SortableTaskRow({
         task={task}
         selected={selected}
         dragging={rowIsDragging}
+        priorityIndex={priorityIndex}
         draggable={canDrag}
         draggableProps={canDrag ? ({ ...attributes, ...listeners } as HTMLAttributes<HTMLDivElement>) : undefined}
         canDelete={canDelete}
@@ -11748,6 +11752,7 @@ const TaskQueueRow = forwardRef<HTMLDivElement, {
   selected: boolean;
   completed?: boolean;
   dragging?: boolean;
+  priorityIndex?: number | null;
   draggable?: boolean;
   draggableProps?: HTMLAttributes<HTMLDivElement>;
   canDelete?: boolean;
@@ -11758,6 +11763,7 @@ const TaskQueueRow = forwardRef<HTMLDivElement, {
   selected,
   completed = false,
   dragging = false,
+  priorityIndex = null,
   draggable = false,
   draggableProps,
   canDelete = false,
@@ -11781,8 +11787,11 @@ const TaskQueueRow = forwardRef<HTMLDivElement, {
         completed
           ? "bg-white/80 opacity-65 hover:bg-stone-50/80"
           : selected
-            ? "bg-emerald-100/80"
-            : "bg-emerald-50/80 hover:bg-emerald-100/55",
+            ? "bg-sky-100/80"
+            : "bg-sky-50/80 hover:bg-sky-100/55",
+        !completed && priorityIndex === 0 && "ring-1 ring-stone-300/55",
+        !completed && priorityIndex === 1 && "ring-1 ring-stone-300/35",
+        !completed && priorityIndex === 2 && "ring-1 ring-stone-300/20",
         dragging && "bg-white opacity-90 shadow-sm shadow-black/5",
       )}
       {...draggableProps}
@@ -11790,7 +11799,7 @@ const TaskQueueRow = forwardRef<HTMLDivElement, {
       <span
         className={cn(
           "min-w-0 flex-1 truncate text-left text-base font-semibold leading-snug transition",
-          completed ? "text-stone-400 line-through" : "text-stone-700 group-hover:text-emerald-950",
+          completed ? "text-stone-400 line-through" : "text-stone-700 group-hover:text-sky-950",
         )}
       >
         {task.title}
@@ -11933,7 +11942,7 @@ function AdminTaskDetailPanel({
               checked={done}
               disabled={saving || !canEdit}
               onChange={(event) => void updateTaskSafely({ status: event.target.checked ? "done" : "todo" })}
-              className="h-3.5 w-3.5 rounded border-stone-300 accent-emerald-600"
+              className="h-3.5 w-3.5 rounded border-stone-300 accent-sky-600"
             />
             Terminé
           </label>
@@ -14014,7 +14023,7 @@ function ProductionDetail({
                       "group relative flex h-[4.75rem] items-center gap-1.5 overflow-hidden rounded-xl border border-transparent transition sm:h-20 sm:gap-2",
                       optionTone.surface,
                       optionTone.hover,
-                      isSelectedOption && "border-emerald-700",
+                      isSelectedOption && "border-sky-700",
                     )}
                   >
                     {isConfirmingDelete ? (
@@ -14060,7 +14069,7 @@ function ProductionDetail({
                               event.stopPropagation();
                               setConfirmDelete({ type: "option", optionId: option.id });
                             }}
-                            className="absolute right-1.5 top-1.5 flex h-6 w-6 items-center justify-center rounded-full text-emerald-500 opacity-100 transition hover:bg-white/70 hover:text-emerald-800 focus:opacity-100 [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover:opacity-100"
+                            className="absolute right-1.5 top-1.5 flex h-6 w-6 items-center justify-center rounded-full text-sky-500 opacity-100 transition hover:bg-white/70 hover:text-sky-800 focus:opacity-100 [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover:opacity-100"
                             aria-label="Supprimer cette option"
                           >
                             <X className="h-3.5 w-3.5" />
@@ -14098,7 +14107,7 @@ function ProductionDetail({
                       "group relative flex h-[4.75rem] items-center gap-1.5 overflow-hidden rounded-xl border border-transparent transition sm:h-20 sm:gap-2",
                       linkTone.surface,
                       linkTone.hover,
-                      isSelectedLink && "border-sky-700",
+                      isSelectedLink && "border-emerald-700",
                     )}
                   >
                     {isConfirmingDelete ? (
@@ -14114,14 +14123,14 @@ function ProductionDetail({
                           <Icon className={cn("h-4 w-4 shrink-0 sm:h-5 sm:w-5", linkTone.icon)} />
                           <span className={cn("min-w-0 flex-1 truncate pr-5 text-base font-semibold", linkTone.text)}>{link.label}</span>
                         </button>
-                        <ExternalLink className="mr-8 hidden h-4 w-4 shrink-0 text-sky-400 sm:block" />
+                        <ExternalLink className="mr-8 hidden h-4 w-4 shrink-0 text-emerald-400 sm:block" />
                         {canDeleteLink && (
                           <button
                             onClick={(event) => {
                               event.stopPropagation();
                               setConfirmDelete({ type: "link", linkId: link.id });
                             }}
-                            className="absolute right-1.5 top-1.5 flex h-6 w-6 items-center justify-center rounded-full text-sky-500 opacity-100 transition hover:bg-white/70 hover:text-sky-800 focus:opacity-100 [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover:opacity-100"
+                            className="absolute right-1.5 top-1.5 flex h-6 w-6 items-center justify-center rounded-full text-emerald-500 opacity-100 transition hover:bg-white/70 hover:text-emerald-800 focus:opacity-100 [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover:opacity-100"
                             aria-label="Supprimer ce lien"
                           >
                             <X className="h-3.5 w-3.5" />
@@ -14315,21 +14324,21 @@ function getOptionTone(state: CompletionStatus) {
         text: "text-stone-500",
       }
     : {
-        surface: "bg-emerald-50/80",
-        border: "border-emerald-100",
-        hover: "hover:bg-emerald-100/55",
-        icon: "text-emerald-600",
+        surface: "bg-sky-50/80",
+        border: "border-sky-100",
+        hover: "hover:bg-sky-100/55",
+        icon: "text-sky-600",
         text: "text-stone-700",
       };
 }
 
 function getTaskTone(task: AppTask) {
   return {
-    panel: task.status === "done" ? "bg-white/85" : "bg-emerald-50/80",
-    title: task.status === "done" ? "text-stone-500 line-through" : "text-emerald-950",
+    panel: task.status === "done" ? "bg-white/85" : "bg-sky-50/80",
+    title: task.status === "done" ? "text-stone-500 line-through" : "text-sky-950",
     body: "text-stone-700",
-    meta: task.status === "done" ? "text-stone-400" : "text-emerald-700/70",
-    actionText: task.status === "done" ? "text-stone-600" : "text-emerald-800",
+    meta: task.status === "done" ? "text-stone-400" : "text-sky-700/70",
+    actionText: task.status === "done" ? "text-stone-600" : "text-sky-800",
   };
 }
 
@@ -14343,10 +14352,10 @@ function getLinkTone(state: LinkStatus) {
         text: "text-stone-500",
       }
     : {
-        surface: "bg-sky-50/80",
-        border: "border-sky-100",
-        hover: "hover:bg-sky-100/55",
-        icon: "text-sky-600",
+        surface: "bg-emerald-50/80",
+        border: "border-emerald-100",
+        hover: "hover:bg-emerald-100/55",
+        icon: "text-emerald-600",
         text: "text-stone-700",
       };
 }
@@ -14557,7 +14566,7 @@ function LinkValueRow({
 
   return (
     <div className="flex w-full min-w-0 items-center gap-2">
-      <div className={cn("inline-flex min-h-9 min-w-0 flex-1 items-center gap-2 rounded-full border border-transparent px-3 py-1.5 transition focus-within:border-sky-300", rowTone.surface)}>
+      <div className={cn("inline-flex min-h-9 min-w-0 flex-1 items-center gap-2 rounded-full border border-transparent px-3 py-1.5 transition focus-within:border-emerald-300", rowTone.surface)}>
         <Icon className={cn("h-4 w-4 shrink-0", rowTone.icon)} />
         {editable ? (
           <input
@@ -14590,7 +14599,7 @@ function LinkValueRow({
               }
             }}
             placeholder={placeholder}
-            className={cn("min-w-0 flex-1 bg-transparent text-base font-semibold outline-none placeholder:text-sky-300 disabled:opacity-70", rowTone.text)}
+            className={cn("min-w-0 flex-1 bg-transparent text-base font-semibold outline-none placeholder:text-emerald-300 disabled:opacity-70", rowTone.text)}
           />
         ) : canOpen ? (
           <button
@@ -14615,7 +14624,7 @@ function LinkValueRow({
           rowTone.surface,
           rowTone.icon,
           rowTone.hover,
-          copied && "bg-sky-200 text-sky-900",
+          copied && "bg-emerald-200 text-emerald-900",
         )}
         aria-label={copyLabel}
       >
@@ -15022,7 +15031,7 @@ function ContextDetailBlock({
             value={selectedLink.label}
             onSave={renameSelectedLink}
             className="truncate"
-            inputClassName="text-sky-950 focus:border-sky-300"
+            inputClassName="text-emerald-950 focus:border-emerald-300"
             editable={canRenameSelectedLink}
             onFocusTarget={onNativeFieldFocus}
           />
@@ -15226,7 +15235,7 @@ function ContextDetailBlock({
             value={selectedOption.label}
             onSave={renameSelectedOption}
             className="truncate"
-            inputClassName="text-emerald-950 focus:border-emerald-300"
+            inputClassName="text-sky-950 focus:border-sky-300"
             editable={canRenameSelectedOption}
             onFocusTarget={onNativeFieldFocus}
           />
@@ -15238,7 +15247,7 @@ function ContextDetailBlock({
               checked={linkedOptionTask.status === "done"}
               disabled={savingCompletedByOverride || !canEditLinkedTaskNotes}
               onChange={(event) => void updateLinkedOptionTask({ status: event.target.checked ? "done" : "todo" })}
-              className="h-3.5 w-3.5 rounded border-stone-300 accent-emerald-600"
+              className="h-3.5 w-3.5 rounded border-stone-300 accent-sky-600"
               aria-label={linkedOptionTask.status === "done" ? "Marquer à faire" : "Marquer terminé"}
             />
             {linkedOptionTask.status === "done" ? "Terminé" : "À faire"}
@@ -15247,16 +15256,16 @@ function ContextDetailBlock({
       </div>
       {titleRenameError && <div className="mt-2 text-base font-medium text-rose-700">{titleRenameError}</div>}
       {canAssignOptionTask && (
-        <div className={cn("mt-3 grid items-end gap-2 rounded-xl bg-emerald-50/70 px-3 py-2", linkedOptionTask ? "grid-cols-[minmax(0,1fr)_minmax(0,2fr)]" : "grid-cols-1")}>
+        <div className={cn("mt-3 grid items-end gap-2 rounded-xl bg-sky-50/70 px-3 py-2", linkedOptionTask ? "grid-cols-[minmax(0,1fr)_minmax(0,2fr)]" : "grid-cols-1")}>
           <label className="grid min-w-0 gap-1">
-            <span className="text-xs font-semibold uppercase tracking-[0.08em] text-emerald-700/70">Assigné à</span>
+            <span className="text-xs font-semibold uppercase tracking-[0.08em] text-sky-700/70">Assigné à</span>
             <select
               {...iosKeyboardGuardProps}
               value={optionAssigneeValue}
               disabled={savingCompletedByOverride}
               onFocus={(event) => onNativeFieldFocus(event.currentTarget)}
               onChange={(event) => void changeSelectedOptionAssignee(event.target.value || null)}
-              className="h-8 w-full min-w-0 rounded-full border border-transparent bg-white/80 px-2 text-sm font-semibold text-emerald-800 outline-none transition focus:border-emerald-300 focus:bg-white disabled:text-emerald-400 sm:px-3 sm:text-base"
+              className="h-8 w-full min-w-0 rounded-full border border-transparent bg-white/80 px-2 text-sm font-semibold text-sky-800 outline-none transition focus:border-sky-300 focus:bg-white disabled:text-sky-400 sm:px-3 sm:text-base"
               aria-label="Assigner l'option"
             >
               <option value="">Non assignée</option>
@@ -15269,22 +15278,22 @@ function ContextDetailBlock({
           </label>
           {linkedOptionTask && (
             <label className="grid min-w-0 gap-1">
-              <span className="text-right text-xs font-semibold uppercase tracking-[0.08em] text-emerald-700/70">Échéance</span>
+              <span className="text-right text-xs font-semibold uppercase tracking-[0.08em] text-sky-700/70">Échéance</span>
                 <button
                   type="button"
                   disabled={savingCompletedByOverride}
                   onClick={() => setOptionDueDatePickerOpen(true)}
-                  className="h-8 w-full min-w-0 truncate rounded-full border border-transparent bg-white/80 px-2 text-right text-sm font-semibold text-emerald-800 outline-none transition hover:bg-white focus:border-emerald-300 disabled:text-emerald-400 sm:px-3 sm:text-base"
+                  className="h-8 w-full min-w-0 truncate rounded-full border border-transparent bg-white/80 px-2 text-right text-sm font-semibold text-sky-800 outline-none transition hover:bg-white focus:border-sky-300 disabled:text-sky-400 sm:px-3 sm:text-base"
                   aria-label="Échéance de la tâche liée"
                 >
-                  {linkedOptionTask.dueDate ? formatShortDate(linkedOptionTask.dueDate) : "Choisir une date"}
+                  {linkedOptionTask.dueDate ? formatShortDateWithYear(linkedOptionTask.dueDate) : "Choisir une date"}
                 </button>
             </label>
           )}
         </div>
       )}
-      <label className="mt-3 block rounded-xl bg-emerald-50/70 px-3 py-2">
-        <span className="mb-1 block text-xs font-semibold uppercase tracking-[0.08em] text-emerald-700/70">Notes</span>
+      <label className="mt-3 block rounded-xl bg-sky-50/70 px-3 py-2">
+        <span className="mb-1 block text-xs font-semibold uppercase tracking-[0.08em] text-sky-700/70">Notes</span>
         <textarea
           {...iosKeyboardGuardProps}
           value={optionTaskNotesInput}
@@ -15298,7 +15307,7 @@ function ContextDetailBlock({
               void updateLinkedOptionTask({ notes: optionTaskNotesInput });
             }
           }}
-          className="min-h-24 w-full resize-none rounded-xl border border-transparent bg-white/80 px-3 py-2 text-base font-medium leading-relaxed text-stone-700 outline-none transition placeholder:text-emerald-700/35 focus:border-emerald-300 focus:bg-white disabled:text-emerald-400"
+          className="min-h-24 w-full resize-none rounded-xl border border-transparent bg-white/80 px-3 py-2 text-base font-medium leading-relaxed text-stone-700 outline-none transition placeholder:text-sky-700/35 focus:border-sky-300 focus:bg-white disabled:text-sky-400"
           placeholder={linkedOptionTask ? "Notes" : "Assignez cette option pour ajouter des notes"}
         />
       </label>
@@ -15310,7 +15319,7 @@ function ContextDetailBlock({
               onClick={() => {
                 setAddingOptionItem(true);
               }}
-              className="flex h-8 w-fit shrink-0 items-center gap-2 rounded-full bg-emerald-50 px-3 text-base font-semibold leading-none text-emerald-700 transition hover:bg-emerald-100"
+              className="flex h-8 w-fit shrink-0 items-center gap-2 rounded-full bg-sky-50 px-3 text-base font-semibold leading-none text-sky-700 transition hover:bg-sky-100"
               aria-label="Ajouter une note"
               title="Ajouter une note"
             >
@@ -15327,9 +15336,9 @@ function ContextDetailBlock({
                 onFocus={(event) => onNativeFieldFocus(event.currentTarget)}
                 onChange={(event) => setOptionItemInput(event.target.value)}
                 placeholder="Nouvelle note"
-                className="min-h-20 w-full resize-none rounded-xl border border-transparent bg-emerald-50/40 px-3 py-2 text-base font-medium text-stone-950 outline-none transition placeholder:text-stone-300 focus:border-emerald-300 focus:bg-white"
+                className="min-h-20 w-full resize-none rounded-xl border border-transparent bg-sky-50/40 px-3 py-2 text-base font-medium text-stone-950 outline-none transition placeholder:text-stone-300 focus:border-sky-300 focus:bg-white"
               />
-              <button disabled={savingOptionItem} className="h-9 w-fit shrink-0 rounded-xl bg-emerald-600 px-3 text-base font-semibold text-white transition hover:bg-emerald-700 disabled:bg-stone-300">
+              <button disabled={savingOptionItem} className="h-9 w-fit shrink-0 rounded-xl bg-sky-600 px-3 text-base font-semibold text-white transition hover:bg-sky-700 disabled:bg-stone-300">
                 Ajouter
               </button>
             </form>
@@ -15348,7 +15357,7 @@ function ContextDetailBlock({
                     value={editingOptionItemInput}
                     onFocus={(event) => onNativeFieldFocus(event.currentTarget)}
                     onChange={(event) => setEditingOptionItemInput(event.target.value)}
-                    className="min-h-20 w-full resize-none rounded-xl border border-transparent bg-emerald-50/40 px-3 py-2 text-base font-medium text-stone-950 outline-none transition placeholder:text-stone-300 focus:border-emerald-300 focus:bg-white"
+                    className="min-h-20 w-full resize-none rounded-xl border border-transparent bg-sky-50/40 px-3 py-2 text-base font-medium text-stone-950 outline-none transition placeholder:text-stone-300 focus:border-sky-300 focus:bg-white"
                     autoFocus
                   />
                   <div className="flex flex-wrap gap-2">
@@ -15356,7 +15365,7 @@ function ContextDetailBlock({
                       type="button"
                       onClick={() => void saveEditedOptionItem(item)}
                       disabled={isSavingEditedNote}
-                      className="h-8 rounded-full bg-emerald-600 px-3 text-base font-semibold text-white transition hover:bg-emerald-700 disabled:bg-stone-300"
+                      className="h-8 rounded-full bg-sky-600 px-3 text-base font-semibold text-white transition hover:bg-sky-700 disabled:bg-stone-300"
                     >
                       Valider
                     </button>
@@ -15364,7 +15373,7 @@ function ContextDetailBlock({
                       type="button"
                       onClick={cancelEditingOptionItem}
                       disabled={isSavingEditedNote}
-                      className="h-8 rounded-full bg-emerald-50 px-3 text-base font-semibold text-emerald-700 transition hover:bg-emerald-100 disabled:text-stone-300"
+                      className="h-8 rounded-full bg-sky-50 px-3 text-base font-semibold text-sky-700 transition hover:bg-sky-100 disabled:text-stone-300"
                     >
                       Annuler
                     </button>
@@ -15377,14 +15386,14 @@ function ContextDetailBlock({
                     <div className="flex shrink-0 items-center gap-1 opacity-100 transition [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover:opacity-100">
                       <button
                         onClick={() => startEditingOptionItem(item)}
-                        className="flex h-6 w-6 items-center justify-center rounded-full text-emerald-500 transition hover:bg-white/70 hover:text-emerald-800 focus:opacity-100"
+                        className="flex h-6 w-6 items-center justify-center rounded-full text-sky-500 transition hover:bg-white/70 hover:text-sky-800 focus:opacity-100"
                         aria-label="Modifier cette note"
                       >
                         <Pencil className="h-3.5 w-3.5" />
                       </button>
                       <button
                         onClick={() => void removeOptionItem(item)}
-                        className="flex h-6 w-6 items-center justify-center rounded-full text-emerald-500 transition hover:bg-white/70 hover:text-emerald-800 focus:opacity-100"
+                        className="flex h-6 w-6 items-center justify-center rounded-full text-sky-500 transition hover:bg-white/70 hover:text-sky-800 focus:opacity-100"
                         aria-label="Supprimer cette note"
                       >
                         <X className="h-3.5 w-3.5" />
@@ -16748,6 +16757,13 @@ function formatShortDate(dateKey: string | null) {
   const date = new Date(`${dateKey}T12:00:00`);
   if (Number.isNaN(date.getTime())) return "";
   return new Intl.DateTimeFormat("fr-FR", { day: "numeric", month: "short" }).format(date);
+}
+
+function formatShortDateWithYear(dateKey: string | null) {
+  if (!dateKey) return "";
+  const date = new Date(`${dateKey}T12:00:00`);
+  if (Number.isNaN(date.getTime())) return "";
+  return new Intl.DateTimeFormat("fr-FR", { day: "numeric", month: "short", year: "numeric" }).format(date);
 }
 
 function getTaskAssigneeLabel(task: AppTask, profiles: UserProfile[]) {
@@ -18966,8 +18982,8 @@ function SectionHeader({
   onAdd?: () => void;
   addDisabled?: boolean;
 }) {
-  const activeTone = tone === "option" ? getOptionTone("completed") : tone === "link" ? getLinkTone("available") : getDocumentTone(true);
-  const addTone = cn(activeTone.surface, activeTone.hover, activeTone.text);
+  const activeTone = tone === "option" ? getOptionTone("incomplete") : tone === "link" ? getLinkTone("missing") : getDocumentTone(false);
+  const addTone = cn(activeTone.surface, activeTone.hover, activeTone.icon);
 
   return (
     <div className={cn("mb-2 flex min-w-0 items-center gap-1.5 sm:mb-3 sm:gap-2", align === "right" ? "justify-end" : "justify-start")}>
