@@ -13972,10 +13972,12 @@ function ProductionDetail({
             <div className="grid grid-cols-1 gap-1.5 sm:gap-2">
               {event.options.map((option) => {
                 const Icon = getOptionIcon(option.label);
-                const optionStatus = getOptionEffectiveStatus(option, tasks);
-                const optionTone = getOptionTone(optionStatus);
+                const linkedOptionTask = getLinkedTaskForOption(option, tasks);
+                const optionTaskCompleted = linkedOptionTask?.status === "done";
+                const optionTone = getOptionTone("incomplete");
                 const optionAssigneeName = getOptionAssigneeLabel(option, tasks, profiles);
-                const showOptionMeta = Boolean(optionAssigneeName);
+                const optionMetaLabel = optionTaskCompleted ? "👍" : optionAssigneeName;
+                const showOptionMeta = Boolean(optionMetaLabel);
                 const isSelectedOption = contextSelection?.type === "option" && contextSelection.optionId === option.id;
                 const isConfirmingDelete = confirmDelete?.type === "option" && confirmDelete.optionId === option.id;
                 const canManageOptionStructure = canManageCreatedEntity(permissions, profile, option);
@@ -14010,9 +14012,9 @@ function ProductionDetail({
                       {showOptionMeta ? (
                         <>
                           <span className="flex max-w-full shrink-0 items-center gap-1 overflow-hidden">
-                            {optionAssigneeName && (
+                            {optionMetaLabel && (
                               <span className="inline-flex h-5 min-w-0 items-center rounded-full bg-neutral-50 px-2 text-[0.7rem] font-bold leading-none text-neutral-500 sm:text-xs">
-                                <span className="truncate">{optionAssigneeName}</span>
+                                <span className="truncate">{optionMetaLabel}</span>
                               </span>
                             )}
                           </span>
