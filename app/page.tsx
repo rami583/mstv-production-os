@@ -1450,6 +1450,11 @@ const elevatedModalBackdropClassName = "fixed inset-0 z-[60] flex bg-black/35";
 const notificationLayerClassName = "fixed inset-0 z-[80] flex bg-black/35";
 const modalSheetPositionClassName = "items-end p-3 sm:items-center sm:justify-center sm:p-6";
 const modalPanelClassName = "rounded-2xl bg-white shadow-sm shadow-black/5";
+const uiTextPrimaryClassName = "text-stone-950";
+const uiTextMutedClassName = "text-stone-500";
+const uiErrorMessageClassName = "rounded-2xl bg-rose-50 px-4 py-3 text-base font-medium text-rose-700";
+const uiNeutralButtonClassName = "rounded-xl bg-stone-50 px-4 py-2 text-base font-semibold text-stone-600 transition hover:bg-stone-100 disabled:text-stone-300";
+const uiDestructiveButtonClassName = "rounded-xl bg-[#bb2720] px-4 py-2 text-base font-semibold text-white transition hover:bg-[#a0201b] disabled:bg-stone-300";
 const calendarArrowClassName =
   "flex h-9 w-9 items-center justify-center rounded-full text-base text-[#bb2720] transition hover:bg-[#bb2720]/[0.08] disabled:cursor-not-allowed disabled:text-stone-300 disabled:hover:bg-transparent";
 const weekendColumnTintStyle: React.CSSProperties = {
@@ -11076,6 +11081,9 @@ function TeamTasksSheet({
   const [creating, setCreating] = useState(false);
   const [localError, setLocalError] = useState<string | null>(null);
   const [dragError, setDragError] = useState<string | null>(null);
+  const [deleteTaskCandidate, setDeleteTaskCandidate] = useState<AppTask | null>(null);
+  const [deletingTask, setDeletingTask] = useState(false);
+  const [deleteTaskError, setDeleteTaskError] = useState<string | null>(null);
   const sensors = useSensors(
     useSensor(MouseSensor, {
       activationConstraint: {
@@ -11234,14 +11242,23 @@ function TeamTasksSheet({
 
   async function requestDeleteTask(task: AppTask) {
     if (!canDeleteTask(task)) return;
-    const confirmed = window.confirm(`Supprimer la tâche « ${task.title} » ?`);
-    if (!confirmed) return;
+    setDeleteTaskError(null);
+    setDeleteTaskCandidate(task);
+  }
+
+  async function confirmDeleteTask() {
+    if (!deleteTaskCandidate || !canDeleteTask(deleteTaskCandidate)) return;
     setLocalError(null);
+    setDeleteTaskError(null);
+    setDeletingTask(true);
     try {
-      await onDeleteTask(task);
-      if (selectedTaskId === task.id) setSelectedTaskId(null);
+      await onDeleteTask(deleteTaskCandidate);
+      if (selectedTaskId === deleteTaskCandidate.id) setSelectedTaskId(null);
+      setDeleteTaskCandidate(null);
     } catch (deleteError) {
-      setLocalError(getUserFacingErrorMessage(deleteError, "Impossible de supprimer la tâche."));
+      setDeleteTaskError(getUserFacingErrorMessage(deleteError, "Impossible de supprimer la tâche."));
+    } finally {
+      setDeletingTask(false);
     }
   }
 
@@ -11387,6 +11404,21 @@ function TeamTasksSheet({
                 </section>
               )}
             </div>
+          )}
+          {deleteTaskCandidate && (
+            <SharedConfirmationDialog
+              title="Supprimer cette tâche ?"
+              detailTitle={deleteTaskCandidate.title}
+              confirmLabel="Supprimer"
+              busyLabel="Suppression..."
+              error={deleteTaskError}
+              busy={deletingTask}
+              elevated
+              onCancel={() => {
+                if (!deletingTask) setDeleteTaskCandidate(null);
+              }}
+              onConfirm={() => void confirmDeleteTask()}
+            />
           )}
         </div>
     </section>
@@ -11555,6 +11587,7 @@ function AdminTaskDetailPanel({
   const [notes, setNotes] = useState(task.notes ?? "");
   const [eventQuery, setEventQuery] = useState("");
   const [dueDatePickerOpen, setDueDatePickerOpen] = useState(false);
+  const [deleteConfirmationOpen, setDeleteConfirmationOpen] = useState(false);
   const [localError, setLocalError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const done = task.status === "done";
@@ -11607,13 +11640,18 @@ function AdminTaskDetailPanel({
 
   async function requestDeleteTask() {
     if (!canDelete) return;
-    const confirmed = window.confirm(`Supprimer la tâche « ${task.title} » ?`);
-    if (!confirmed) return;
+    setDeleteConfirmationOpen(true);
+  }
+
+  async function confirmDeleteTask() {
+    if (!canDelete) return;
     try {
+      setSaving(true);
       await onDeleteTask(task);
       onClose();
     } catch (deleteError) {
       setLocalError(getUserFacingErrorMessage(deleteError, "Impossible de supprimer la tâche."));
+      setSaving(false);
     }
   }
 
@@ -11776,6 +11814,21 @@ function AdminTaskDetailPanel({
           await updateTaskSafely({ dueDate: dateKey });
           setDueDatePickerOpen(false);
         }}
+      />
+    )}
+    {deleteConfirmationOpen && (
+      <SharedConfirmationDialog
+        title="Supprimer cette tâche ?"
+        detailTitle={task.title}
+        confirmLabel="Supprimer"
+        busyLabel="Suppression..."
+        error={localError}
+        busy={saving}
+        elevated
+        onCancel={() => {
+          if (!saving) setDeleteConfirmationOpen(false);
+        }}
+        onConfirm={() => void confirmDeleteTask()}
       />
     )}
     </>
@@ -17181,6 +17234,74 @@ function ExternalCalendarsListView({
   );
 }
 
+function SharedConfirmationDialog({
+  title,
+  description,
+  detailTitle,
+  detailSubtitle,
+  error,
+  busy,
+  confirmLabel,
+  busyLabel,
+  cancelLabel = "Annuler",
+  elevated = false,
+  maxWidthClassName = "sm:max-w-md",
+  onCancel,
+  onConfirm,
+}: {
+  title: string;
+  description?: string;
+  detailTitle?: string | null;
+  detailSubtitle?: string | null;
+  error?: string | null;
+  busy?: boolean;
+  confirmLabel: string;
+  busyLabel?: string;
+  cancelLabel?: string;
+  elevated?: boolean;
+  maxWidthClassName?: string;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  useEscapeToClose(onCancel);
+  if (typeof document === "undefined") return null;
+
+  return createPortal(
+    <div
+      className={cn(elevated ? elevatedModalBackdropClassName : modalBackdropClassName, modalSheetPositionClassName)}
+      onPointerDown={(pointerEvent) => handleModalBackdropPointerDown(pointerEvent, onCancel)}
+    >
+      <div
+        className={cn(modalPanelClassName, "w-full p-5 sm:p-6", maxWidthClassName)}
+        onPointerDown={(pointerEvent) => pointerEvent.stopPropagation()}
+      >
+        <div className="mb-5">
+          <h2 className={cn("text-base font-semibold", uiTextPrimaryClassName)}>{title}</h2>
+          {description && <p className={cn("mt-2 text-base font-medium leading-relaxed", uiTextMutedClassName)}>{description}</p>}
+          {detailTitle && (
+            <div className="mt-4">
+              <p className={cn("truncate text-base font-semibold", uiTextPrimaryClassName)}>{detailTitle}</p>
+              {detailSubtitle && <p className={cn("mt-1 truncate text-base", uiTextMutedClassName)}>{detailSubtitle}</p>}
+            </div>
+          )}
+        </div>
+
+        {error && <div className={cn("mb-4", uiErrorMessageClassName)}>{error}</div>}
+
+        <div className="flex justify-end gap-2">
+          <button type="button" onClick={onCancel} disabled={busy} className={uiNeutralButtonClassName}>
+            {cancelLabel}
+          </button>
+          <button type="button" onClick={onConfirm} disabled={busy} className={uiDestructiveButtonClassName}>
+            {busy ? busyLabel ?? confirmLabel : confirmLabel}
+          </button>
+        </div>
+      </div>
+    </div>,
+    document.body,
+  );
+}
+
 function ProviderDisconnectDialog({
   provider,
   busy,
@@ -17193,41 +17314,18 @@ function ProviderDisconnectDialog({
   onConfirm: () => void;
 }) {
   const providerName = provider === "google" ? "Google Calendar" : "Apple Calendar";
-  useEscapeToClose(onClose);
 
   return (
-    <div
-      className="fixed inset-0 z-[70] flex items-end bg-black/35 p-3 sm:items-center sm:justify-center sm:p-6"
-      onPointerDown={(pointerEvent) => handleModalBackdropPointerDown(pointerEvent, onClose)}
-    >
-      <div
-        className={cn(modalPanelClassName, "w-full p-5 sm:max-w-md")}
-        onPointerDown={(pointerEvent) => pointerEvent.stopPropagation()}
-      >
-        <h3 className="text-lg font-semibold text-stone-950">Déconnecter {providerName} ?</h3>
-        <p className="mt-2 text-base font-medium leading-relaxed text-stone-500">
-          Les calendriers de ce compte disparaîtront de MSTV. Les événements MSTV locaux ne seront pas supprimés.
-        </p>
-        <div className="mt-5 flex justify-end gap-2">
-          <button
-            type="button"
-            onClick={onClose}
-            disabled={busy}
-            className="rounded-xl bg-stone-50 px-4 py-2 text-base font-semibold text-stone-600 transition hover:bg-stone-100 disabled:text-stone-300"
-          >
-            Annuler
-          </button>
-          <button
-            type="button"
-            onClick={onConfirm}
-            disabled={busy}
-            className="rounded-full bg-[#bb2720] px-4 py-2 text-base font-semibold text-white transition hover:bg-[#a0201b] disabled:bg-stone-300"
-          >
-            {busy ? "Déconnexion..." : "Déconnecter"}
-          </button>
-        </div>
-      </div>
-    </div>
+    <SharedConfirmationDialog
+      title={`Déconnecter ${providerName} ?`}
+      description="Les calendriers de ce compte disparaîtront de MSTV. Les événements MSTV locaux ne seront pas supprimés."
+      confirmLabel="Déconnecter"
+      busyLabel="Déconnexion..."
+      busy={busy}
+      elevated
+      onCancel={onClose}
+      onConfirm={onConfirm}
+    />
   );
 }
 
@@ -17329,6 +17427,7 @@ function ExternalCalendarSettingsDetail({
   });
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [deleteConfirmationOpen, setDeleteConfirmationOpen] = useState(false);
   const [rowError, setRowError] = useState<string | null>(null);
   const [syncSummary, setSyncSummary] = useState<string | null>(null);
   const canManage = canManageExternalCalendar(permissions, profile, calendar);
@@ -17369,6 +17468,7 @@ function ExternalCalendarSettingsDetail({
     setDeleting(true);
     try {
       await onDelete(calendar);
+      setDeleteConfirmationOpen(false);
     } catch (deleteError) {
       setRowError(getUserFacingErrorMessage(deleteError, "Impossible de supprimer ce calendrier."));
       setDeleting(false);
@@ -17526,7 +17626,7 @@ function ExternalCalendarSettingsDetail({
           {canManage && (
             <button
               type="button"
-              onClick={() => void handleDelete()}
+              onClick={() => setDeleteConfirmationOpen(true)}
               disabled={deleting || syncing || saving}
               className="rounded-full border border-[#bb2720]/20 bg-white px-3 py-1.5 text-base font-semibold text-[#bb2720] transition hover:bg-[#bb2720]/[0.05] disabled:text-stone-300"
             >
@@ -17536,6 +17636,22 @@ function ExternalCalendarSettingsDetail({
         </div>
         </div>
       </div>
+      {deleteConfirmationOpen && (
+        <SharedConfirmationDialog
+          title="Supprimer ce calendrier ?"
+          description="Les événements déjà importés dans MSTV ne seront pas supprimés."
+          detailTitle={calendar.name}
+          error={rowError}
+          confirmLabel="Supprimer"
+          busyLabel="Suppression..."
+          busy={deleting}
+          elevated
+          onCancel={() => {
+            if (!deleting) setDeleteConfirmationOpen(false);
+          }}
+          onConfirm={() => void handleDelete()}
+        />
+      )}
     </div>
   );
 }
@@ -17753,11 +17869,6 @@ function DeleteEventDialog({
   const display = getProductionEventDisplay(event);
 
   async function handleConfirm() {
-    console.log("Delete event confirmation clicked", {
-      eventId: event.id,
-      clientName: event.clientName,
-      eventName: event.eventName,
-    });
     setDeleting(true);
     setError(null);
 
@@ -17768,40 +17879,20 @@ function DeleteEventDialog({
       setDeleting(false);
     }
   }
-  useEscapeToClose(onClose);
 
   return (
-    <div className={cn(modalBackdropClassName, modalSheetPositionClassName)} onPointerDown={(pointerEvent) => handleModalBackdropPointerDown(pointerEvent, onClose)}>
-      <div className={cn(modalPanelClassName, "w-full p-5 sm:max-w-md sm:p-6")} onPointerDown={(pointerEvent) => pointerEvent.stopPropagation()}>
-        <div className="mb-5">
-          <h2 className="text-base font-semibold text-stone-950">Placer cet événement dans la corbeille ?</h2>
-          <p className="mt-2 text-base font-medium text-stone-500">Vous pourrez le restaurer depuis la Corbeille.</p>
-          <p className="mt-4 truncate text-base font-semibold text-stone-950">{display.title}</p>
-          {display.subtitle && <p className="mt-1 truncate text-base text-stone-500">{display.subtitle}</p>}
-        </div>
-
-        {error && <div className="mb-4 rounded-2xl bg-rose-50 px-4 py-3 text-base font-medium text-rose-700">{error}</div>}
-
-        <div className="flex justify-end gap-2">
-          <button
-            type="button"
-            onClick={onClose}
-            disabled={deleting}
-            className="rounded-xl bg-stone-50 px-4 py-2 text-base font-semibold text-stone-600 transition hover:bg-stone-100 disabled:text-stone-300"
-          >
-            Annuler
-          </button>
-          <button
-            type="button"
-            onClick={() => void handleConfirm()}
-            disabled={deleting}
-            className="rounded-xl bg-[#bb2720] px-4 py-2 text-base font-semibold text-white disabled:bg-stone-300"
-          >
-            {deleting ? "Déplacement..." : "Supprimer"}
-          </button>
-        </div>
-      </div>
-    </div>
+    <SharedConfirmationDialog
+      title="Placer cet événement dans la corbeille ?"
+      description="Vous pourrez le restaurer depuis la Corbeille."
+      detailTitle={display.title}
+      detailSubtitle={display.subtitle}
+      error={error}
+      confirmLabel="Supprimer"
+      busyLabel="Déplacement..."
+      busy={deleting}
+      onCancel={onClose}
+      onConfirm={() => void handleConfirm()}
+    />
   );
 }
 
@@ -17829,40 +17920,21 @@ function PermanentDeleteEventDialog({
       setDeleting(false);
     }
   }
-  useEscapeToClose(onClose);
 
   return (
-    <div className={cn(elevatedModalBackdropClassName, modalSheetPositionClassName)} onPointerDown={(pointerEvent) => handleModalBackdropPointerDown(pointerEvent, onClose)}>
-      <div className={cn(modalPanelClassName, "w-full p-5 sm:max-w-md sm:p-6")} onPointerDown={(pointerEvent) => pointerEvent.stopPropagation()}>
-        <div className="mb-5">
-          <h2 className="text-base font-semibold text-stone-950">Supprimer définitivement cet événement ?</h2>
-          <p className="mt-2 text-base font-medium text-rose-700">Cette action est irréversible.</p>
-          <p className="mt-4 truncate text-base font-semibold text-stone-950">{display.title}</p>
-          {display.subtitle && <p className="mt-1 truncate text-base text-stone-500">{display.subtitle}</p>}
-        </div>
-
-        {error && <div className="mb-4 rounded-2xl bg-rose-50 px-4 py-3 text-base font-medium text-rose-700">{error}</div>}
-
-        <div className="flex justify-end gap-2">
-          <button
-            type="button"
-            onClick={onClose}
-            disabled={deleting}
-            className="rounded-xl bg-stone-50 px-4 py-2 text-base font-semibold text-stone-600 transition hover:bg-stone-100 disabled:text-stone-300"
-          >
-            Annuler
-          </button>
-          <button
-            type="button"
-            onClick={() => void handleConfirm()}
-            disabled={deleting}
-            className="rounded-xl bg-[#bb2720] px-4 py-2 text-base font-semibold text-white disabled:bg-stone-300"
-          >
-            {deleting ? "Suppression..." : "Supprimer"}
-          </button>
-        </div>
-      </div>
-    </div>
+    <SharedConfirmationDialog
+      title="Supprimer définitivement cet événement ?"
+      description="Cette action est irréversible."
+      detailTitle={display.title}
+      detailSubtitle={display.subtitle}
+      error={error}
+      confirmLabel="Supprimer"
+      busyLabel="Suppression..."
+      busy={deleting}
+      elevated
+      onCancel={onClose}
+      onConfirm={() => void handleConfirm()}
+    />
   );
 }
 
@@ -18778,34 +18850,17 @@ function CompactGridDeleteDialog({
   onCancel: () => void;
   onConfirm: () => void;
 }) {
-  useEscapeToClose(onCancel);
-  if (typeof document === "undefined") return null;
-
-  return createPortal(
-    <div className="fixed inset-0 z-[120] flex items-end justify-center bg-black/35 p-3 sm:items-center sm:p-6" onPointerDown={(pointerEvent) => handleModalBackdropPointerDown(pointerEvent, onCancel)}>
-      <div data-grid-delete-dialog className={cn(modalPanelClassName, "w-full max-w-xs p-4")} onPointerDown={(pointerEvent) => pointerEvent.stopPropagation()}>
-        <p className="text-center text-base font-semibold text-stone-950">Supprimer cet élément ?</p>
-        <div className="mt-4 grid grid-cols-2 gap-2">
-          <button
-            type="button"
-            onClick={onCancel}
-            disabled={deleting}
-            className="rounded-xl bg-stone-50 px-4 py-2 text-base font-semibold text-stone-600 transition hover:bg-stone-100 disabled:text-stone-300"
-          >
-            Annuler
-          </button>
-          <button
-            type="button"
-            onClick={onConfirm}
-            disabled={deleting}
-            className="rounded-full bg-[#bb2720] px-4 py-2 text-base font-semibold text-white transition hover:bg-[#a9231d] disabled:bg-stone-300"
-          >
-            {deleting ? "Suppression..." : "Supprimer"}
-          </button>
-        </div>
-      </div>
-    </div>,
-    document.body,
+  return (
+    <SharedConfirmationDialog
+      title="Supprimer cet élément ?"
+      confirmLabel="Supprimer"
+      busyLabel="Suppression..."
+      busy={deleting}
+      elevated
+      maxWidthClassName="max-w-xs"
+      onCancel={onCancel}
+      onConfirm={onConfirm}
+    />
   );
 }
 
