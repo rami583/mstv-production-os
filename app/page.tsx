@@ -11244,6 +11244,7 @@ function TeamTasksSheet({
 }) {
   const nativeKeyboard = useNativeKeyboardVisibility<HTMLDivElement>();
   const suppressTaskOpenRef = useRef(false);
+  const taskDetailSwipeStartRef = useRef<{ pointerId: number; x: number; y: number; axis: "horizontal" | "vertical" | null } | null>(null);
   const [selectedProfileId, setSelectedProfileId] = useState<string | null>(() => currentProfile?.id ?? null);
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const [orderIds, setOrderIds] = useState<string[]>([]);
@@ -11289,6 +11290,10 @@ function TeamTasksSheet({
   }, [orderIds, todoTasks, todoTasksById]);
   const selectedTask = selectedTaskId ? tasks.find((task) => task.id === selectedTaskId) ?? null : null;
   const visualIndexByTaskId = useMemo(() => new Map(orderedTodoTasks.map((task, index) => [task.id, index])), [orderedTodoTasks]);
+  const selectedTaskNavigationTasks = useMemo(() => {
+    if (!selectedTask) return [];
+    return selectedTask.status === "done" ? doneTasks : orderedTodoTasks;
+  }, [doneTasks, orderedTodoTasks, selectedTask]);
 
   useEscapeToClose(onClose);
 
@@ -11406,6 +11411,80 @@ function TeamTasksSheet({
     window.setTimeout(() => setSelectedTaskId(null), 0);
   }
 
+  function isTaskDetailSwipeTarget(target: EventTarget | null) {
+    if (!(target instanceof HTMLElement)) return false;
+    if (target.closest("input, textarea, select, button, a, [contenteditable='true'], [data-task-swipe-block]")) return false;
+
+    const activeElement = document.activeElement;
+    if (
+      activeElement instanceof HTMLElement &&
+      activeElement.matches("input, textarea, select, [contenteditable='true']")
+    ) {
+      return false;
+    }
+
+    return true;
+  }
+
+  function resetTaskDetailSwipe() {
+    taskDetailSwipeStartRef.current = null;
+  }
+
+  function navigateSelectedTaskByDirection(direction: -1 | 1) {
+    if (!selectedTask || selectedTaskNavigationTasks.length <= 1) return;
+    const currentIndex = selectedTaskNavigationTasks.findIndex((task) => task.id === selectedTask.id);
+    if (currentIndex === -1) return;
+    const nextTask = selectedTaskNavigationTasks[currentIndex + direction];
+    if (nextTask) setSelectedTaskId(nextTask.id);
+  }
+
+  function handleTaskDetailSwipePointerDown(pointerEvent: ReactPointerEvent<HTMLDivElement>) {
+    if (taskDetailSwipeStartRef.current || pointerEvent.pointerType === "mouse" || !isTaskDetailSwipeTarget(pointerEvent.target)) return;
+    if (selectedTaskNavigationTasks.length <= 1) return;
+
+    taskDetailSwipeStartRef.current = {
+      pointerId: pointerEvent.pointerId,
+      x: pointerEvent.clientX,
+      y: pointerEvent.clientY,
+      axis: null,
+    };
+    pointerEvent.currentTarget.setPointerCapture(pointerEvent.pointerId);
+  }
+
+  function handleTaskDetailSwipePointerMove(pointerEvent: ReactPointerEvent<HTMLDivElement>) {
+    const swipeStart = taskDetailSwipeStartRef.current;
+    if (!swipeStart || swipeStart.pointerId !== pointerEvent.pointerId) return;
+
+    const deltaX = pointerEvent.clientX - swipeStart.x;
+    const deltaY = pointerEvent.clientY - swipeStart.y;
+
+    if (!swipeStart.axis && (Math.abs(deltaX) > EVENT_SWIPE_AXIS_ACTIVATION_PX || Math.abs(deltaY) > EVENT_SWIPE_AXIS_ACTIVATION_PX)) {
+      swipeStart.axis = Math.abs(deltaX) > Math.abs(deltaY) ? "horizontal" : "vertical";
+    }
+
+    if (swipeStart.axis === "vertical") {
+      resetTaskDetailSwipe();
+      return;
+    }
+
+    if (swipeStart.axis !== "horizontal") return;
+    pointerEvent.preventDefault();
+  }
+
+  function handleTaskDetailSwipePointerUp(pointerEvent: ReactPointerEvent<HTMLDivElement>) {
+    const swipeStart = taskDetailSwipeStartRef.current;
+    if (!swipeStart || swipeStart.pointerId !== pointerEvent.pointerId) return;
+
+    const deltaX = pointerEvent.clientX - swipeStart.x;
+    const deltaY = pointerEvent.clientY - swipeStart.y;
+    const swipeThreshold = getEventSwipeThreshold(pointerEvent.currentTarget.clientWidth);
+    resetTaskDetailSwipe();
+
+    if (Math.abs(deltaX) >= swipeThreshold && Math.abs(deltaX) >= Math.abs(deltaY) * EVENT_SWIPE_HORIZONTAL_DOMINANCE) {
+      navigateSelectedTaskByDirection(deltaX < 0 ? 1 : -1);
+    }
+  }
+
   function canDeleteTask(task: AppTask) {
     return permissions.canManageEvents || Boolean(currentProfile?.id && task.assignedProfileId === currentProfile.id && task.createdBy === currentProfile.id);
   }
@@ -11520,7 +11599,11 @@ function TeamTasksSheet({
 
           {selectedTask ? (
             <div
-              className="min-h-full"
+              className="min-h-full touch-pan-y"
+              onPointerDown={handleTaskDetailSwipePointerDown}
+              onPointerMove={handleTaskDetailSwipePointerMove}
+              onPointerUp={handleTaskDetailSwipePointerUp}
+              onPointerCancel={resetTaskDetailSwipe}
               onClick={(event) => {
                 if (event.target === event.currentTarget) closeSelectedTaskEditor();
               }}
