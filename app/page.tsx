@@ -6365,11 +6365,13 @@ export default function Home() {
     const assignedToCurrentProfile = Boolean(profile?.id && task.assignedProfileId === profile.id);
     const createdByCurrentProfile = Boolean(profile?.id && task.createdBy === profile.id);
     const statusOnlyFields = new Set(["status"]);
+    const reorderOnlyFields = new Set(["sortOrder"]);
     const ownAllowedFields = new Set(["title", "dueDate", "notes", "status", "sortOrder"]);
     const patchKeys = Object.keys(patch);
     const canUpdateTask = permissions.canManageEvents ||
       (assignedToCurrentProfile && patchKeys.every((key) => statusOnlyFields.has(key))) ||
-      (assignedToCurrentProfile && createdByCurrentProfile && patchKeys.every((key) => ownAllowedFields.has(key)));
+      (assignedToCurrentProfile && !isTaskUrgent(task) && patchKeys.every((key) => reorderOnlyFields.has(key))) ||
+      (assignedToCurrentProfile && createdByCurrentProfile && patchKeys.every((key) => ownAllowedFields.has(key) && (key !== "sortOrder" || !isTaskUrgent(task))));
     if (!canUpdateTask) throw new Error("Modification de tâche non autorisée.");
 
     const payload: Database["public"]["Tables"]["tasks"]["Update"] = {};
@@ -6384,7 +6386,7 @@ export default function Home() {
     if (patch.notes !== undefined) payload.notes = patch.notes?.trim() || null;
     if (patch.status !== undefined) payload.status = patch.status;
     if (patch.priority !== undefined && permissions.canManageEvents) payload.priority = patch.priority;
-    if (patch.sortOrder !== undefined && (permissions.canManageEvents || createdByCurrentProfile)) payload.sort_order = patch.sortOrder;
+    if (patch.sortOrder !== undefined && (permissions.canManageEvents || (assignedToCurrentProfile && !isTaskUrgent(task)))) payload.sort_order = patch.sortOrder;
 
     const { data, error: updateError } = await supabase
       .from("tasks")
@@ -6399,7 +6401,10 @@ export default function Home() {
 
   async function reorderTasksForAssignee(orderedTasks: AppTask[], assignedProfileId: string | null) {
     const canReorderTasks = permissions.canManageEvents ||
-      (assignedProfileId === profile?.id && orderedTasks.every((task) => task.createdBy === profile?.id));
+      (
+        assignedProfileId === profile?.id &&
+        orderedTasks.every((task) => task.assignedProfileId === profile?.id && !isTaskUrgent(task))
+      );
     if (!canReorderTasks) throw new Error("Modification de tâche non autorisée.");
     if (!supabase) throw new Error("Configuration Supabase manquante.");
     const supabaseClient = supabase;
@@ -11105,7 +11110,7 @@ function TeamTasksSheet({
 }) {
   const nativeKeyboard = useNativeKeyboardVisibility<HTMLDivElement>();
   const suppressTaskOpenRef = useRef(false);
-  const [activeProfileIndex, setActiveProfileIndex] = useState(0);
+  const [selectedProfileId, setSelectedProfileId] = useState<string | null>(() => currentProfile?.id ?? null);
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const [orderIds, setOrderIds] = useState<string[]>([]);
   const [draggingId, setDraggingId] = useState<string | null>(null);
@@ -11127,7 +11132,7 @@ function TeamTasksSheet({
   );
   const eventsById = useMemo(() => new Map(events.map((event) => [event.id, event])), [events]);
   const taskPeople = useMemo(() => (profiles.length > 0 ? profiles : currentProfile ? [currentProfile] : []), [currentProfile, profiles]);
-  const activeProfile = taskPeople[Math.min(activeProfileIndex, Math.max(taskPeople.length - 1, 0))] ?? null;
+  const activeProfile = taskPeople.find((person) => person.id === selectedProfileId) ?? taskPeople[0] ?? null;
   const activeProfileId = activeProfile?.id ?? null;
   const canCreateForActiveProfile = Boolean(activeProfileId && (permissions.canManageEvents || activeProfileId === currentProfile?.id));
   const personTasks = useMemo(() => tasks.filter((task) => task.assignedProfileId === activeProfileId), [activeProfileId, tasks]);
@@ -11142,24 +11147,24 @@ function TeamTasksSheet({
   const orderedTodoTasks = useMemo(() => {
     const knownTasks = orderIds.map((id) => todoTasksById.get(id)).filter((task): task is AppTask => Boolean(task));
     const knownIds = new Set(knownTasks.map((task) => task.id));
-    return [...knownTasks, ...todoTasks.filter((task) => !knownIds.has(task.id))];
+    const mergedTasks = [...knownTasks, ...todoTasks.filter((task) => !knownIds.has(task.id))];
+    return [...mergedTasks.filter(isTaskUrgent), ...mergedTasks.filter((task) => !isTaskUrgent(task))];
   }, [orderIds, todoTasks, todoTasksById]);
   const selectedTask = selectedTaskId ? tasks.find((task) => task.id === selectedTaskId) ?? null : null;
-  const canReorderVisibleTasks = Boolean(
-    activeProfileId &&
-      orderedTodoTasks.length > 1 &&
-      (
-        permissions.canManageEvents ||
-        (activeProfileId === currentProfile?.id && orderedTodoTasks.every((task) => task.createdBy === currentProfile?.id))
-      ),
-  );
+  const urgentTodoTasks = useMemo(() => orderedTodoTasks.filter(isTaskUrgent), [orderedTodoTasks]);
+  const regularTodoTasks = useMemo(() => orderedTodoTasks.filter((task) => !isTaskUrgent(task)), [orderedTodoTasks]);
+  const urgentIndexById = useMemo(() => new Map(urgentTodoTasks.map((task, index) => [task.id, index])), [urgentTodoTasks]);
+  const regularIndexById = useMemo(() => new Map(regularTodoTasks.map((task, index) => [task.id, index])), [regularTodoTasks]);
 
   useEscapeToClose(onClose);
 
   useEffect(() => {
-    if (activeProfileIndex <= taskPeople.length - 1) return;
-    setActiveProfileIndex(Math.max(taskPeople.length - 1, 0));
-  }, [activeProfileIndex, taskPeople.length]);
+    setSelectedProfileId((currentId) => {
+      if (currentId && taskPeople.some((person) => person.id === currentId)) return currentId;
+      const currentUserPerson = currentProfile?.id ? taskPeople.find((person) => person.id === currentProfile.id) ?? null : null;
+      return currentUserPerson?.id ?? taskPeople[0]?.id ?? null;
+    });
+  }, [currentProfile?.id, taskPeople]);
 
   useEffect(() => {
     if (draggingId) return;
@@ -11167,11 +11172,21 @@ function TeamTasksSheet({
     setOrderIds((currentIds) => (currentIds.join("|") === nextIds.join("|") ? currentIds : nextIds));
   }, [draggingId, todoTasks]);
 
-  function selectPerson(index: number) {
+  function canMoveTask(task: AppTask) {
+    if (task.status !== "todo") return false;
+    if (permissions.canManageEvents) return true;
+    return Boolean(activeProfileId && currentProfile?.id && activeProfileId === currentProfile.id && task.assignedProfileId === currentProfile.id && !isTaskUrgent(task));
+  }
+
+  const sortableTodoTasks = useMemo(() => orderedTodoTasks.filter(canMoveTask), [activeProfileId, currentProfile?.id, orderedTodoTasks, permissions.canManageEvents]);
+  const sortableTaskIds = useMemo(() => sortableTodoTasks.map((task) => task.id), [sortableTodoTasks]);
+  const canSortAnyVisibleTasks = sortableTodoTasks.length > 1;
+
+  function selectPerson(profileId: string) {
     setSelectedTaskId(null);
     setLocalError(null);
     setDragError(null);
-    setActiveProfileIndex(index);
+    setSelectedProfileId(profileId);
   }
 
   async function persistDragOrder(nextIds: string[], previousIds: string[]) {
@@ -11202,7 +11217,7 @@ function TeamTasksSheet({
     const overId = event.over?.id ? String(event.over.id) : null;
     if (!overId || activeId === overId) return;
 
-    const previousIds = orderedTodoTasks.map((task) => task.id);
+    const previousIds = sortableTaskIds;
     const oldIndex = previousIds.indexOf(activeId);
     const newIndex = previousIds.indexOf(overId);
     if (oldIndex === -1 || newIndex === -1) return;
@@ -11271,14 +11286,18 @@ function TeamTasksSheet({
     }
   }
 
-  function renderQueueTask(task: AppTask, completed = false, priorityIndex: number | null = null) {
-    if (completed) {
+  function renderQueueTask(task: AppTask, completed = false) {
+    const urgentIndex = !completed && isTaskUrgent(task) ? urgentIndexById.get(task.id) ?? null : null;
+    const priorityIndex = !completed && !isTaskUrgent(task) ? regularIndexById.get(task.id) ?? null : null;
+    if (completed || !canSortAnyVisibleTasks || !canMoveTask(task)) {
       return (
         <TaskQueueRow
           key={task.id}
           task={task}
           selected={selectedTaskId === task.id}
-          completed
+          completed={completed}
+          priorityIndex={priorityIndex}
+          urgentIndex={urgentIndex}
           canDelete={canDeleteTask(task)}
           onDelete={() => void requestDeleteTask(task)}
           onOpen={() => openTaskDetail(task.id)}
@@ -11293,7 +11312,8 @@ function TeamTasksSheet({
         selected={selectedTaskId === task.id}
         dragging={draggingId === task.id}
         priorityIndex={priorityIndex}
-        canDrag={!completed && canReorderVisibleTasks}
+        urgentIndex={urgentIndex}
+        canDrag={canMoveTask(task)}
         canDelete={canDeleteTask(task)}
         onDelete={() => void requestDeleteTask(task)}
         onOpen={() => openTaskDetail(task.id)}
@@ -11314,20 +11334,23 @@ function TeamTasksSheet({
 
           {!selectedTask && taskPeople.length > 0 && (
             <div className="flex items-end gap-2 border-b border-white/70">
-              <div className="no-scrollbar flex min-w-0 flex-1 items-end gap-0.5 overflow-x-auto">
-                {taskPeople.map((person, index) => {
+              <div role="tablist" className="no-scrollbar flex min-w-0 flex-1 items-end gap-0.5 overflow-x-auto">
+                {taskPeople.map((person) => {
                   const firstName = person.firstName?.trim() || getProfileDisplayName(person)?.split(/\s+/)[0] || "Équipe";
                   const active = person.id === activeProfileId;
                   return (
                     <button
                       key={person.id}
                       type="button"
-                      onClick={() => selectPerson(index)}
+                      role="tab"
+                      aria-selected={active}
+                      onPointerLeave={(event) => event.currentTarget.blur()}
+                      onClick={() => selectPerson(person.id)}
                       className={cn(
-                        "shrink-0 rounded-t-xl border px-3 py-2 text-sm font-semibold transition",
+                        "shrink-0 rounded-t-xl border px-3 py-2 text-sm font-semibold transition focus:outline-none",
                         active
                           ? "border-stone-200/80 border-b-white bg-white text-stone-950 shadow-sm shadow-black/5"
-                          : "border-stone-200/30 bg-white/35 text-stone-300 hover:border-stone-200/45 hover:text-stone-500 active:bg-white/35",
+                          : "border-stone-200/35 bg-white/20 text-stone-300 hover:bg-white/25 hover:text-stone-400 active:bg-white/20",
                       )}
                     >
                       {firstName}
@@ -11374,7 +11397,7 @@ function TeamTasksSheet({
               <div className="grid gap-2 overflow-visible">
                 {orderedTodoTasks.length === 0 ? (
                   <p className="rounded-2xl bg-white px-3 py-4 text-center text-sm font-medium text-stone-300">Aucune tâche.</p>
-                ) : (
+                ) : canSortAnyVisibleTasks ? (
                   <DndContext
                     sensors={sensors}
                     collisionDetection={closestCenter}
@@ -11382,12 +11405,16 @@ function TeamTasksSheet({
                     onDragEnd={handleTaskDragEnd}
                     onDragCancel={handleTaskDragCancel}
                   >
-                    <SortableContext items={orderedTodoTasks.map((task) => task.id)} strategy={verticalListSortingStrategy}>
+                    <SortableContext items={sortableTaskIds} strategy={verticalListSortingStrategy}>
                       <div className="grid gap-2 overflow-visible">
-                        {orderedTodoTasks.map((task, index) => renderQueueTask(task, false, index))}
+                        {orderedTodoTasks.map((task) => renderQueueTask(task, false))}
                       </div>
                     </SortableContext>
                   </DndContext>
+                ) : (
+                  <div className="grid gap-2 overflow-visible">
+                    {orderedTodoTasks.map((task) => renderQueueTask(task, false))}
+                  </div>
                 )}
               </div>
               {dragError && <p className="px-1 text-xs font-semibold text-rose-600">{dragError}</p>}
@@ -11410,6 +11437,7 @@ function SortableTaskRow({
   selected,
   dragging = false,
   priorityIndex,
+  urgentIndex,
   canDrag,
   canDelete,
   onDelete,
@@ -11419,6 +11447,7 @@ function SortableTaskRow({
   selected: boolean;
   dragging?: boolean;
   priorityIndex: number | null;
+  urgentIndex: number | null;
   canDrag: boolean;
   canDelete: boolean;
   onDelete: () => void;
@@ -11456,6 +11485,7 @@ function SortableTaskRow({
         selected={selected}
         dragging={rowIsDragging}
         priorityIndex={priorityIndex}
+        urgentIndex={urgentIndex}
         draggable={canDrag}
         draggableProps={canDrag ? ({ ...attributes, ...listeners } as HTMLAttributes<HTMLDivElement>) : undefined}
         canDelete={canDelete}
@@ -11472,6 +11502,7 @@ const TaskQueueRow = forwardRef<HTMLDivElement, {
   completed?: boolean;
   dragging?: boolean;
   priorityIndex?: number | null;
+  urgentIndex?: number | null;
   draggable?: boolean;
   draggableProps?: HTMLAttributes<HTMLDivElement>;
   canDelete?: boolean;
@@ -11483,6 +11514,7 @@ const TaskQueueRow = forwardRef<HTMLDivElement, {
   completed = false,
   dragging = false,
   priorityIndex = null,
+  urgentIndex = null,
   draggable = false,
   draggableProps,
   canDelete = false,
@@ -11512,6 +11544,10 @@ const TaskQueueRow = forwardRef<HTMLDivElement, {
               : priorityIndex === 2
                 ? "bg-sky-50/90 hover:bg-sky-100/55"
                 : "bg-sky-50/55 hover:bg-sky-100/45",
+        !completed && urgentIndex === 0 && "ring-1 ring-rose-400/70",
+        !completed && urgentIndex === 1 && "ring-1 ring-rose-400/50",
+        !completed && urgentIndex === 2 && "ring-1 ring-rose-400/35",
+        !completed && urgentIndex !== null && urgentIndex > 2 && "ring-1 ring-rose-300/25",
         !completed && priorityIndex === 0 && "ring-1 ring-sky-300/45",
         !completed && priorityIndex === 1 && "ring-1 ring-sky-300/30",
         !completed && priorityIndex === 2 && "ring-1 ring-sky-300/20",
@@ -11581,6 +11617,7 @@ function AdminTaskDetailPanel({
   const createdByCurrentProfile = Boolean(currentProfile?.id && task.createdBy === currentProfile.id);
   const canEditContent = permissions.canManageEvents || (assignedToCurrentProfile && createdByCurrentProfile);
   const canToggleStatus = permissions.canManageEvents || assignedToCurrentProfile;
+  const canEditUrgent = permissions.canManageEvents;
   const canEditEventLink = permissions.canManageEvents;
   const canDelete = permissions.canManageEvents || (assignedToCurrentProfile && createdByCurrentProfile);
   const eventCandidates = useMemo(() => {
@@ -11654,7 +11691,7 @@ function AdminTaskDetailPanel({
       </div>
 
       <div className="space-y-2">
-        <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-2">
+        <div className="grid grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-2">
           <input
             {...iosKeyboardGuardProps}
             value={title}
@@ -11666,6 +11703,19 @@ function AdminTaskDetailPanel({
             }}
             className={cn("h-10 min-w-0 rounded-xl bg-white/85 px-3 text-base font-semibold outline-none transition focus:bg-white", done ? "text-stone-500 line-through" : taskTone.title)}
           />
+          <label className={cn(
+            "flex h-10 shrink-0 items-center gap-1.5 rounded-xl bg-white/80 px-2 text-xs font-semibold text-rose-600 transition sm:px-3 sm:text-sm",
+            !canEditUrgent && "opacity-70",
+          )}>
+            <input
+              type="checkbox"
+              checked={isTaskUrgent(task)}
+              disabled={saving || !canEditUrgent}
+              onChange={(event) => void updateTaskSafely({ priority: event.target.checked ? "urgent" : "normal" })}
+              className="h-3.5 w-3.5 rounded border-rose-200 accent-rose-600"
+            />
+            Urgent
+          </label>
           <label className={cn("flex h-10 shrink-0 items-center gap-1.5 rounded-xl bg-white/80 px-2 text-xs font-semibold transition sm:px-3 sm:text-sm", taskTone.actionText)}>
             <input
               type="checkbox"
@@ -16453,6 +16503,7 @@ function EventCalendarBadge({ event }: { event: ProductionEvent }) {
 function sortTasksForDisplay(tasks: AppTask[]) {
   return [...tasks].sort((left, right) => {
     if (left.status !== right.status) return left.status === "todo" ? -1 : 1;
+    if (left.status === "todo" && isTaskUrgent(left) !== isTaskUrgent(right)) return isTaskUrgent(left) ? -1 : 1;
     const leftOrder = left.sortOrder ?? Number.MAX_SAFE_INTEGER;
     const rightOrder = right.sortOrder ?? Number.MAX_SAFE_INTEGER;
     if (leftOrder !== rightOrder) return leftOrder - rightOrder;
@@ -16472,8 +16523,13 @@ function getNextTaskSortOrder(tasks: AppTask[], assignedProfileId: string | null
   return Math.max(...siblingOrders) + 1;
 }
 
+function isTaskUrgent(task: AppTask) {
+  return task.priority === "urgent";
+}
+
 function sortTaskQueue(tasks: AppTask[]) {
   return [...tasks].sort((left, right) => {
+    if (isTaskUrgent(left) !== isTaskUrgent(right)) return isTaskUrgent(left) ? -1 : 1;
     const leftOrder = left.sortOrder ?? Number.MAX_SAFE_INTEGER;
     const rightOrder = right.sortOrder ?? Number.MAX_SAFE_INTEGER;
     if (leftOrder !== rightOrder) return leftOrder - rightOrder;

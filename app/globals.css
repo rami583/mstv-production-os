@@ -31,6 +31,8 @@ html {
   min-height: 100%;
   overflow: hidden;
   background: var(--app-background);
+  touch-action: pan-x pan-y;
+  -webkit-text-size-adjust: 100%;
 }
 
 body {
@@ -72,6 +74,12 @@ a {
 }
 
 @media (max-width: 639px) {
+  input,
+  textarea,
+  select {
+    font-size: 16px !important;
+  }
+
   .mobile-no-scrollbar {
     -ms-overflow-style: none;
     scrollbar-width: none;
