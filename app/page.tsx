@@ -6961,6 +6961,7 @@ export default function Home() {
           setCreateModalOpen(true);
         }}
         onAssignOptionTask={assignOptionTask}
+        onUpdateOptionTaskDueDate={updateOptionTaskDueDate}
         onCreateOption={createEventOption}
         onDeleteOption={deleteEventOption}
         onRenameOption={renameEventOption}
@@ -8596,7 +8597,19 @@ export default function Home() {
 
     if (!assignedProfileId) {
       if (currentLinkedTask) {
-        await deleteTask(currentLinkedTask);
+        await updateTask(currentLinkedTask, {
+          assignedProfileId: null,
+          sortOrder: null,
+          status: "todo",
+        });
+        await updateOptionLink({
+          ...currentLinkedTask,
+          assignedProfileId: null,
+          sortOrder: null,
+          status: "todo",
+          completedAt: null,
+        });
+        return;
       }
       await updateOptionLink(null);
       return;
@@ -8621,6 +8634,73 @@ export default function Home() {
       dueDate: events.find((event) => event.id === option.eventId)?.date ?? null,
     });
     await updateOptionLink(createdTask);
+  }
+
+  async function updateOptionTaskDueDate(option: EventOption, dueDate: string | null) {
+    assertCanManageEvents();
+    if (!supabase) throw new Error("Configuration Supabase manquante.");
+    const supabaseClient = supabase;
+    const currentLinkedTask = option.taskId ? tasks.find((task) => task.id === option.taskId) ?? null : null;
+
+    async function linkTask(task: AppTask) {
+      const assignedProfile = task.assignedProfileId ? taskProfiles.find((userProfile) => userProfile.id === task.assignedProfileId) ?? null : null;
+      const assigneeLabel = assignedProfile ? getProfileOptionLabel(assignedProfile) : null;
+      const assigneeInitials = assignedProfile ? getProfileInitials(assignedProfile, assignedProfile.email ?? undefined) : null;
+      const completed = task.status === "done";
+      const updatePayload: Database["public"]["Tables"]["event_options"]["Update"] = {
+        task_id: task.id,
+        status: completed ? "completed" : "incomplete",
+        completed_by_profile_id: completed ? task.assignedProfileId : null,
+        completed_by_label: completed ? assigneeLabel : null,
+        completed_by_initials: completed ? assigneeInitials : null,
+        completed_at: completed ? (task.completedAt ?? new Date().toISOString()) : null,
+      };
+
+      const { error: updateError } = await supabaseClient
+        .from("event_options")
+        .update(updatePayload)
+        .eq("id", option.id);
+
+      if (updateError) throw updateError;
+
+      setEvents((current) =>
+        current.map((event) =>
+          event.id === option.eventId
+            ? {
+                ...event,
+                options: event.options.map((item) =>
+                  item.id === option.id
+                    ? {
+                        ...item,
+                        taskId: task.id,
+                        status: updatePayload.status ?? item.status,
+                        completedByProfileId: updatePayload.completed_by_profile_id ?? null,
+                        completedByLabel: updatePayload.completed_by_label ?? null,
+                        completedByInitials: updatePayload.completed_by_initials ?? null,
+                        completedAt: updatePayload.completed_at ?? null,
+                      }
+                    : item,
+                ),
+              }
+            : event,
+        ),
+      );
+    }
+
+    if (currentLinkedTask) {
+      await updateTask(currentLinkedTask, { dueDate });
+      await linkTask({ ...currentLinkedTask, dueDate });
+      return;
+    }
+
+    const createdTask = await createTask({
+      title: option.label,
+      eventId: option.eventId,
+      assignedProfileId: null,
+      priority: "normal",
+      dueDate,
+    });
+    await linkTask(createdTask);
   }
 
   async function syncEventLinkEntries(link: EventLink, drafts: LinkEntryDraft[]) {
@@ -11651,35 +11731,35 @@ function TeamTasksSheet({
           ) : taskPeople.length === 0 ? (
             <p className="rounded-2xl bg-stone-50 px-3 py-4 text-center text-sm font-medium text-stone-400">Aucun membre disponible.</p>
           ) : (
-            <>
-            <div className="grid gap-1.5">
-              {orderedTodoTasks.length === 0 ? (
-                <p className="rounded-2xl bg-white/55 px-3 py-4 text-center text-sm font-medium text-stone-300">Aucune tâche.</p>
-              ) : (
-                <DndContext
-                  sensors={sensors}
-                  collisionDetection={closestCenter}
-                  onDragStart={handleTaskDragStart}
-                  onDragEnd={handleTaskDragEnd}
-                  onDragCancel={handleTaskDragCancel}
-                >
-                  <SortableContext items={orderedTodoTasks.map((task) => task.id)} strategy={verticalListSortingStrategy}>
-                    <div className="grid gap-1.5">
-                      {orderedTodoTasks.map((task, index) => renderQueueTask(task, false, index))}
-                    </div>
-                  </SortableContext>
-                </DndContext>
+            <div className="rounded-b-2xl bg-white px-2 py-2">
+              <div className="grid gap-1.5">
+                {orderedTodoTasks.length === 0 ? (
+                  <p className="rounded-2xl bg-white px-3 py-4 text-center text-sm font-medium text-stone-300">Aucune tâche.</p>
+                ) : (
+                  <DndContext
+                    sensors={sensors}
+                    collisionDetection={closestCenter}
+                    onDragStart={handleTaskDragStart}
+                    onDragEnd={handleTaskDragEnd}
+                    onDragCancel={handleTaskDragCancel}
+                  >
+                    <SortableContext items={orderedTodoTasks.map((task) => task.id)} strategy={verticalListSortingStrategy}>
+                      <div className="grid gap-1.5">
+                        {orderedTodoTasks.map((task, index) => renderQueueTask(task, false, index))}
+                      </div>
+                    </SortableContext>
+                  </DndContext>
+                )}
+              </div>
+              {dragError && <p className="px-1 text-xs font-semibold text-rose-600">{dragError}</p>}
+
+              {doneTasks.length > 0 && (
+                <section className="space-y-1 pt-2">
+                  <p className="px-1 text-xs font-semibold uppercase tracking-[0.08em] text-stone-300">Terminé</p>
+                  <div className="grid gap-1">{doneTasks.map((task) => renderQueueTask(task, true))}</div>
+                </section>
               )}
             </div>
-            {dragError && <p className="px-1 text-xs font-semibold text-rose-600">{dragError}</p>}
-
-          {doneTasks.length > 0 && (
-            <section className="space-y-1 pt-2">
-              <p className="px-1 text-xs font-semibold uppercase tracking-[0.08em] text-stone-300">Terminé</p>
-              <div className="grid gap-1">{doneTasks.map((task) => renderQueueTask(task, true))}</div>
-            </section>
-          )}
-            </>
           )}
         </div>
     </section>
@@ -11786,9 +11866,13 @@ const TaskQueueRow = forwardRef<HTMLDivElement, {
         draggable ? "cursor-grab active:cursor-grabbing" : "cursor-pointer",
         completed
           ? "bg-white/80 opacity-65 hover:bg-stone-50/80"
-          : selected
-            ? "bg-sky-100/80"
-            : "bg-sky-50/80 hover:bg-sky-100/55",
+          : selected || priorityIndex === 0
+            ? "bg-sky-100/85 hover:bg-sky-100"
+            : priorityIndex === 1
+              ? "bg-sky-50 hover:bg-sky-100/60"
+              : priorityIndex === 2
+                ? "bg-sky-50/75 hover:bg-sky-100/45"
+                : "bg-sky-50/80 hover:bg-sky-100/55",
         !completed && priorityIndex === 0 && "ring-1 ring-stone-300/55",
         !completed && priorityIndex === 1 && "ring-1 ring-stone-300/35",
         !completed && priorityIndex === 2 && "ring-1 ring-stone-300/20",
@@ -13575,6 +13659,7 @@ function ProductionDetail({
   showHeaderControls,
   onEditEvent,
   onAssignOptionTask,
+  onUpdateOptionTaskDueDate,
   onCreateOption,
   onDeleteOption,
   onRenameOption,
@@ -13606,6 +13691,7 @@ function ProductionDetail({
   showHeaderControls: boolean;
   onEditEvent: () => void;
   onAssignOptionTask: (option: EventOption, assignedProfileId: string | null) => Promise<void>;
+  onUpdateOptionTaskDueDate: (option: EventOption, dueDate: string | null) => Promise<void>;
   onCreateOption: (eventId: string, label: string) => Promise<EventOption>;
   onDeleteOption: (option: EventOption) => Promise<void>;
   onRenameOption: (option: EventOption, label: string) => Promise<EventOption>;
@@ -14218,6 +14304,7 @@ function ProductionDetail({
             tasks={tasks}
             profiles={profiles}
             onAssignOptionTask={onAssignOptionTask}
+            onUpdateOptionTaskDueDate={onUpdateOptionTaskDueDate}
             onRenameOption={onRenameOption}
             onCreateOptionItem={onCreateOptionItem}
             onUpdateOptionItem={onUpdateOptionItem}
@@ -14660,6 +14747,7 @@ function ContextDetailBlock({
   tasks,
   profiles,
   onAssignOptionTask,
+  onUpdateOptionTaskDueDate,
   onRenameOption,
   onCreateOptionItem,
   onUpdateOptionItem,
@@ -14681,6 +14769,7 @@ function ContextDetailBlock({
   tasks: AppTask[];
   profiles: UserProfile[];
   onAssignOptionTask: (option: EventOption, assignedProfileId: string | null) => Promise<void>;
+  onUpdateOptionTaskDueDate: (option: EventOption, dueDate: string | null) => Promise<void>;
   onRenameOption: (option: EventOption, label: string) => Promise<EventOption>;
   onCreateOptionItem: (option: EventOption, label: string) => Promise<EventOptionItem>;
   onUpdateOptionItem: (option: EventOption, item: EventOptionItem, label: string) => Promise<EventOptionItem>;
@@ -15256,7 +15345,7 @@ function ContextDetailBlock({
       </div>
       {titleRenameError && <div className="mt-2 text-base font-medium text-rose-700">{titleRenameError}</div>}
       {canAssignOptionTask && (
-        <div className={cn("mt-3 grid items-end gap-2 rounded-xl bg-sky-50/70 px-3 py-2", linkedOptionTask ? "grid-cols-[minmax(0,1fr)_minmax(0,2fr)]" : "grid-cols-1")}>
+        <div className={cn("mt-3 grid items-end gap-2 rounded-xl bg-sky-50/70 px-3 py-2", canAssignOptionTask ? "grid-cols-[minmax(0,1fr)_minmax(0,2fr)]" : "grid-cols-1")}>
           <label className="grid min-w-0 gap-1">
             <span className="text-xs font-semibold uppercase tracking-[0.08em] text-sky-700/70">Assigné à</span>
             <select
@@ -15276,7 +15365,7 @@ function ContextDetailBlock({
               ))}
             </select>
           </label>
-          {linkedOptionTask && (
+          {canAssignOptionTask && (
             <label className="grid min-w-0 gap-1">
               <span className="text-right text-xs font-semibold uppercase tracking-[0.08em] text-sky-700/70">Échéance</span>
                 <button
@@ -15286,7 +15375,7 @@ function ContextDetailBlock({
                   className="h-8 w-full min-w-0 truncate rounded-full border border-transparent bg-white/80 px-2 text-right text-sm font-semibold text-sky-800 outline-none transition hover:bg-white focus:border-sky-300 disabled:text-sky-400 sm:px-3 sm:text-base"
                   aria-label="Échéance de la tâche liée"
                 >
-                  {linkedOptionTask.dueDate ? formatShortDateWithYear(linkedOptionTask.dueDate) : "Choisir une date"}
+                  {linkedOptionTask?.dueDate ? formatShortDateWithYear(linkedOptionTask.dueDate) : "Choisir une date"}
                 </button>
             </label>
           )}
@@ -15314,19 +15403,7 @@ function ContextDetailBlock({
       {completedByOverrideError && <div className="mt-2 text-base font-medium text-rose-700">{completedByOverrideError}</div>}
       <div className="mt-3">
         <div className="flex flex-col gap-2">
-          {canEdit && !addingOptionItem ? (
-            <button
-              onClick={() => {
-                setAddingOptionItem(true);
-              }}
-              className="flex h-8 w-fit shrink-0 items-center gap-2 rounded-full bg-sky-50 px-3 text-base font-semibold leading-none text-sky-700 transition hover:bg-sky-100"
-              aria-label="Ajouter une note"
-              title="Ajouter une note"
-            >
-              <span className="text-base leading-none">+</span>
-              <span>Ajouter une note</span>
-            </button>
-          ) : canEdit ? (
+          {canEdit && addingOptionItem ? (
             <form onSubmit={addOptionItem} className="flex min-w-0 flex-col gap-2">
               <textarea
                 {...iosKeyboardGuardProps}
@@ -15409,13 +15486,13 @@ function ContextDetailBlock({
         {optionItemError && <div className="text-base font-medium text-rose-700">{optionItemError}</div>}
       </div>
     </Card>
-    {linkedOptionTask && optionDueDatePickerOpen && (
+    {selectedOption && optionDueDatePickerOpen && (
       <SharedDatePicker
-        selectedDate={linkedOptionTask.dueDate ?? event.date}
-        allowSelectingCurrentDate={!linkedOptionTask.dueDate}
+        selectedDate={linkedOptionTask?.dueDate ?? event.date}
+        allowSelectingCurrentDate={!linkedOptionTask?.dueDate}
         onClose={() => setOptionDueDatePickerOpen(false)}
         onSelectDate={async (dateKey) => {
-          await updateLinkedOptionTask({ dueDate: dateKey });
+          await onUpdateOptionTaskDueDate(selectedOption, dateKey);
           setOptionDueDatePickerOpen(false);
         }}
       />
