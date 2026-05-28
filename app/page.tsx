@@ -11526,6 +11526,14 @@ function TeamTasksSheet({
     setSelectedTaskId(taskId);
   }
 
+  function closeSelectedTaskEditor() {
+    const activeElement = document.activeElement;
+    if (activeElement instanceof HTMLElement) {
+      activeElement.blur();
+    }
+    window.setTimeout(() => setSelectedTaskId(null), 0);
+  }
+
   function canDeleteTask(task: AppTask) {
     return permissions.canManageEvents;
   }
@@ -11573,7 +11581,10 @@ function TeamTasksSheet({
   }
 
   return (
-    <div className={cn(modalBackdropClassName, modalSheetPositionClassName)} onPointerDown={(pointerEvent) => handleModalBackdropPointerDown(pointerEvent, onClose)}>
+    <div
+      className={cn(modalBackdropClassName, modalSheetPositionClassName)}
+      onPointerDown={(pointerEvent) => handleModalBackdropPointerDown(pointerEvent, selectedTask ? closeSelectedTaskEditor : onClose)}
+    >
       <div
         className={cn(modalPanelClassName, "flex max-h-[86vh] w-full flex-col overflow-hidden p-4 sm:max-w-3xl sm:p-5")}
         onPointerDown={(pointerEvent) => pointerEvent.stopPropagation()}
@@ -11636,17 +11647,24 @@ function TeamTasksSheet({
           )}
 
           {selectedTask ? (
-            <AdminTaskDetailPanel
-              task={selectedTask}
-              linkedEvent={selectedTask.eventId ? eventsById.get(selectedTask.eventId) ?? null : null}
-              currentProfile={currentProfile}
-              permissions={permissions}
-              onUpdateTask={onUpdateTask}
-              onDeleteTask={onDeleteTask}
-              onOpenEvent={onOpenEvent}
-              onNativeFieldFocus={nativeKeyboard.handleFieldFocus}
-              onClose={() => setSelectedTaskId(null)}
-            />
+            <div
+              className="min-h-full"
+              onClick={(event) => {
+                if (event.target === event.currentTarget) closeSelectedTaskEditor();
+              }}
+            >
+              <AdminTaskDetailPanel
+                task={selectedTask}
+                linkedEvent={selectedTask.eventId ? eventsById.get(selectedTask.eventId) ?? null : null}
+                currentProfile={currentProfile}
+                permissions={permissions}
+                onUpdateTask={onUpdateTask}
+                onDeleteTask={onDeleteTask}
+                onOpenEvent={onOpenEvent}
+                onNativeFieldFocus={nativeKeyboard.handleFieldFocus}
+                onClose={closeSelectedTaskEditor}
+              />
+            </div>
           ) : taskPeople.length === 0 ? (
             <p className="rounded-2xl bg-stone-50 px-3 py-4 text-center text-sm font-medium text-stone-400">Aucun membre disponible.</p>
           ) : (
@@ -11672,16 +11690,12 @@ function TeamTasksSheet({
             </div>
             {dragError && <p className="px-1 text-xs font-semibold text-rose-600">{dragError}</p>}
 
-          <section className="space-y-1 pt-2">
-            <details>
-              <summary className="cursor-pointer px-1 text-xs font-semibold uppercase tracking-[0.08em] text-stone-300">Terminées</summary>
-              {doneTasks.length === 0 ? (
-                <p className="mt-2 rounded-2xl bg-stone-50 px-3 py-3 text-center text-sm font-medium text-stone-300">Aucune tâche terminée.</p>
-              ) : (
-                <div className="mt-2 grid gap-1">{doneTasks.map((task) => renderQueueTask(task, true))}</div>
-              )}
-            </details>
-          </section>
+          {doneTasks.length > 0 && (
+            <section className="space-y-1 pt-2">
+              <p className="px-1 text-xs font-semibold uppercase tracking-[0.08em] text-stone-300">Terminé</p>
+              <div className="grid gap-1">{doneTasks.map((task) => renderQueueTask(task, true))}</div>
+            </section>
+          )}
             </>
           )}
         </div>
@@ -11783,13 +11797,11 @@ const TaskQueueRow = forwardRef<HTMLDivElement, {
       className={cn(
         "group flex min-h-11 select-none items-center gap-2 rounded-xl px-3 py-2 transition",
         draggable ? "cursor-grab active:cursor-grabbing" : "cursor-pointer",
-        task.priority === "urgent"
-          ? "bg-rose-50/85 hover:bg-rose-100/70"
-          : completed
-            ? "bg-emerald-50/55 opacity-65"
-            : selected
-              ? "bg-emerald-100/80"
-              : "bg-emerald-50/80 hover:bg-emerald-100/55",
+        completed
+          ? "bg-white/80 opacity-65 hover:bg-stone-50/80"
+          : selected
+            ? "bg-emerald-100/80"
+            : "bg-emerald-50/80 hover:bg-emerald-100/55",
         dragging && "bg-white opacity-90 shadow-sm shadow-black/5",
       )}
       {...draggableProps}
@@ -11797,11 +11809,7 @@ const TaskQueueRow = forwardRef<HTMLDivElement, {
       <span
         className={cn(
           "min-w-0 flex-1 truncate text-left text-base font-semibold leading-snug transition",
-          task.priority === "urgent"
-            ? "text-rose-950 group-hover:text-rose-900"
-            : completed
-              ? "text-emerald-700/60 line-through"
-              : "text-stone-700 group-hover:text-emerald-950",
+          completed ? "text-stone-400 line-through" : "text-stone-700 group-hover:text-emerald-950",
         )}
       >
         {task.title}
@@ -11852,7 +11860,6 @@ function AdminTaskDetailPanel({
   const [localError, setLocalError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const done = task.status === "done";
-  const urgent = task.priority === "urgent";
   const taskTone = getTaskTone(task);
   const canEdit = permissions.canManageEvents || task.assignedProfileId === currentProfile?.id;
   const canDelete = permissions.canManageEvents;
@@ -11911,7 +11918,7 @@ function AdminTaskDetailPanel({
       </div>
 
       <div className="space-y-2">
-        <div className="grid grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-2">
+        <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-2">
           <input
             {...iosKeyboardGuardProps}
             value={title}
@@ -11923,16 +11930,6 @@ function AdminTaskDetailPanel({
             }}
             className={cn("h-10 min-w-0 rounded-xl bg-white/85 px-3 text-base font-semibold outline-none transition focus:bg-white", done ? "text-stone-500 line-through" : taskTone.title)}
           />
-          <label className={cn("flex h-10 shrink-0 items-center gap-1.5 rounded-xl bg-white/80 px-2 text-xs font-semibold transition sm:px-3 sm:text-sm", taskTone.actionText)}>
-            <input
-              type="checkbox"
-              checked={urgent}
-              disabled={saving || !permissions.canManageEvents}
-              onChange={(event) => void updateTaskSafely({ priority: event.target.checked ? "urgent" : "normal" })}
-              className="h-3.5 w-3.5 rounded border-stone-300 accent-[#bb2720]"
-            />
-            Urgent
-          </label>
           <label className={cn("flex h-10 shrink-0 items-center gap-1.5 rounded-xl bg-white/80 px-2 text-xs font-semibold transition sm:px-3 sm:text-sm", taskTone.actionText)}>
             <input
               type="checkbox"
@@ -14274,22 +14271,12 @@ function getOptionTone(state: CompletionStatus) {
 }
 
 function getTaskTone(task: AppTask) {
-  if (task.priority === "urgent") {
-    return {
-      panel: "bg-rose-50/85",
-      title: "text-rose-950",
-      body: "text-rose-950",
-      meta: "text-rose-700/70",
-      actionText: "text-rose-800",
-    };
-  }
-
   return {
-    panel: task.status === "done" ? "bg-emerald-100/70" : "bg-emerald-50/80",
-    title: task.status === "done" ? "text-emerald-900 line-through" : "text-emerald-950",
+    panel: task.status === "done" ? "bg-white/85" : "bg-emerald-50/80",
+    title: task.status === "done" ? "text-stone-500 line-through" : "text-emerald-950",
     body: "text-stone-700",
-    meta: "text-emerald-700/70",
-    actionText: "text-emerald-800",
+    meta: task.status === "done" ? "text-stone-400" : "text-emerald-700/70",
+    actionText: task.status === "done" ? "text-stone-600" : "text-emerald-800",
   };
 }
 
@@ -14655,6 +14642,7 @@ function ContextDetailBlock({
   const selectedLinkId = selectedLink?.id ?? "";
   const selectedDocumentGroupId = selectedDocumentGroup?.id ?? "";
   const selectedLinkIsPlatform = selectedLink ? isPlatformLink(selectedLink) : false;
+  const selectedLinkedOptionTask = selectedOption?.taskId ? tasks.find((task) => task.id === selectedOption.taskId) ?? null : null;
   const canEdit = permissions.canManageOperational;
   const canRenameSelectedOption = selectedOption ? canManageCreatedEntity(permissions, profile, selectedOption) : false;
   const canRenameSelectedLink = selectedLink ? canManageCreatedEntity(permissions, profile, selectedLink) : false;
@@ -14673,6 +14661,7 @@ function ContextDetailBlock({
   const [savingCompletedByOverride, setSavingCompletedByOverride] = useState(false);
   const [completedByOverrideError, setCompletedByOverrideError] = useState<string | null>(null);
   const [optionDueDatePickerOpen, setOptionDueDatePickerOpen] = useState(false);
+  const [optionTaskNotesInput, setOptionTaskNotesInput] = useState(selectedLinkedOptionTask?.notes ?? "");
   const [titleRenameError, setTitleRenameError] = useState<string | null>(null);
   const [draggingDocumentFiles, setDraggingDocumentFiles] = useState(false);
   const [uploadingDocumentFiles, setUploadingDocumentFiles] = useState(false);
@@ -14712,11 +14701,12 @@ function ContextDetailBlock({
     setSavingCompletedByOverride(false);
     setCompletedByOverrideError(null);
     setOptionDueDatePickerOpen(false);
+    setOptionTaskNotesInput(selectedLinkedOptionTask?.notes ?? "");
     setTitleRenameError(null);
     setDraggingDocumentFiles(false);
     setUploadingDocumentFiles(false);
     setDocumentOpenError(null);
-  }, [selectedDocumentGroupId, selectedLinkId, selectedOptionId]);
+  }, [selectedDocumentGroupId, selectedLinkId, selectedOptionId, selectedLinkedOptionTask?.id, selectedLinkedOptionTask?.notes]);
 
   async function copyLinkValue(value: string | null | undefined, field: string) {
     const valueToCopy = value?.trim();
@@ -15153,12 +15143,12 @@ function ContextDetailBlock({
 
   if (!selectedOption) return null;
 
-  const linkedOptionTask = getLinkedTaskForOption(selectedOption, tasks);
+  const linkedOptionTask = selectedLinkedOptionTask;
   const effectiveOptionStatus = getOptionEffectiveStatus(selectedOption, tasks);
   const optionTone = getOptionTone(effectiveOptionStatus);
   const optionAssigneeValue = linkedOptionTask?.assignedProfileId ?? "";
-  const optionTaskStatusLabel = linkedOptionTask ? (linkedOptionTask.status === "done" ? "Terminé" : "À faire") : "Non assignée";
   const canAssignOptionTask = permissions.canManageEvents;
+  const canEditLinkedTaskNotes = Boolean(linkedOptionTask && (permissions.canManageEvents || linkedOptionTask.assignedProfileId === profile?.id));
 
   async function updateLinkedOptionTask(patch: TaskUpdatePatch) {
     if (!linkedOptionTask) return;
@@ -15188,13 +15178,10 @@ function ContextDetailBlock({
             onFocusTarget={onNativeFieldFocus}
           />
         </div>
-        <span className={cn("shrink-0 rounded-full px-3 py-1.5 text-base font-semibold", optionTone.surface, optionTone.text)}>
-          {optionTaskStatusLabel}
-        </span>
       </div>
       {titleRenameError && <div className="mt-2 text-base font-medium text-rose-700">{titleRenameError}</div>}
       {canAssignOptionTask && (
-        <div className={cn("mt-3 grid gap-2 rounded-xl bg-emerald-50/70 px-3 py-2", linkedOptionTask ? "grid-cols-[minmax(0,1fr)_minmax(0,1fr)]" : "grid-cols-1")}>
+        <div className={cn("mt-3 grid gap-2 rounded-xl bg-emerald-50/70 px-3 py-2", linkedOptionTask ? "grid-cols-[minmax(0,1fr)_minmax(0,2fr)]" : "grid-cols-1")}>
           <label className="grid min-w-0 gap-1">
             <span className="text-xs font-semibold uppercase tracking-[0.08em] text-emerald-700/70">Assigné à</span>
             <select
@@ -15230,6 +15217,25 @@ function ContextDetailBlock({
           )}
         </div>
       )}
+      <label className="mt-3 block rounded-xl bg-emerald-50/70 px-3 py-2">
+        <span className="mb-1 block text-xs font-semibold uppercase tracking-[0.08em] text-emerald-700/70">Notes</span>
+        <textarea
+          {...iosKeyboardGuardProps}
+          value={optionTaskNotesInput}
+          disabled={!linkedOptionTask || !canEditLinkedTaskNotes || savingCompletedByOverride}
+          rows={4}
+          onFocus={(event) => onNativeFieldFocus(event.currentTarget)}
+          onChange={(event) => setOptionTaskNotesInput(event.target.value)}
+          onBlur={() => {
+            if (!linkedOptionTask) return;
+            if (optionTaskNotesInput.trim() !== (linkedOptionTask.notes ?? "")) {
+              void updateLinkedOptionTask({ notes: optionTaskNotesInput });
+            }
+          }}
+          className="min-h-24 w-full resize-none rounded-xl border border-transparent bg-white/80 px-3 py-2 text-base font-medium leading-relaxed text-stone-700 outline-none transition placeholder:text-emerald-700/35 focus:border-emerald-300 focus:bg-white disabled:text-emerald-400"
+          placeholder={linkedOptionTask ? "Notes" : "Assignez cette option pour ajouter des notes"}
+        />
+      </label>
       {completedByOverrideError && <div className="mt-2 text-base font-medium text-rose-700">{completedByOverrideError}</div>}
       <div className="mt-3">
         <div className="flex flex-col gap-2">
