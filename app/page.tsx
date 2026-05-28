@@ -36,7 +36,6 @@ import {
   FileStack,
   FileText,
   FileSpreadsheet,
-  GripVertical,
   Import,
   KeyRound,
   ListTodo,
@@ -119,7 +118,7 @@ import {
   type LinkStatus,
 } from "@/lib/supabase";
 
-type Screen = "calendar" | "detail";
+type Screen = "calendar" | "detail" | "tasks";
 type ItemKind = "option" | "link" | "document";
 
 type EventRow = Database["public"]["Tables"]["events"]["Row"];
@@ -419,7 +418,7 @@ type TaskCreateInput = {
   sortOrder?: number | null;
 };
 
-type TaskUpdatePatch = Partial<Pick<AppTask, "title" | "assignedProfileId" | "dueDate" | "notes" | "status" | "priority" | "sortOrder">>;
+type TaskUpdatePatch = Partial<Pick<AppTask, "title" | "eventId" | "assignedProfileId" | "dueDate" | "notes" | "status" | "priority" | "sortOrder">>;
 
 type TaskDiagnosticProfile = {
   id: string;
@@ -3831,7 +3830,6 @@ export default function Home() {
   const [quoteImportOpen, setQuoteImportOpen] = useState(false);
   const [quoteImportFile, setQuoteImportFile] = useState<File | null>(null);
   const [nativeMstvIcsImportOpen, setNativeMstvIcsImportOpen] = useState(false);
-  const [tasksOpen, setTasksOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
   const [yearOverviewOpen, setYearOverviewOpen] = useState(false);
   const [globalQuoteDragActive, setGlobalQuoteDragActive] = useState(false);
@@ -4505,12 +4503,12 @@ export default function Home() {
   }, [trashOpen]);
 
   useEffect(() => {
-    if (!tasksOpen) return;
+    if (screen !== "tasks") return;
     void refreshTasks({ silent: tasks.length > 0 });
     if (taskProfiles.length === 0) {
       void refreshTaskProfiles();
     }
-  }, [tasksOpen]);
+  }, [screen]);
 
   useEffect(() => {
     if (!userManagementOpen || !permissions.canManageUsers) return;
@@ -6358,6 +6356,7 @@ export default function Home() {
       payload.title = title;
     }
     if (patch.assignedProfileId !== undefined) payload.assigned_profile_id = patch.assignedProfileId || null;
+    if (patch.eventId !== undefined && permissions.canManageEvents) payload.event_id = patch.eventId || null;
     if (patch.dueDate !== undefined) payload.due_date = patch.dueDate || null;
     if (patch.notes !== undefined) payload.notes = patch.notes?.trim() || null;
     if (patch.status !== undefined) payload.status = patch.status;
@@ -10442,7 +10441,6 @@ export default function Home() {
     setSelectedId(null);
     setScreen("calendar");
     setCreateMenuOpen(false);
-    setTasksOpen(false);
   }
 
   if (!hasMounted || authLoading) {
@@ -10554,7 +10552,10 @@ export default function Home() {
           setNotificationsOpen={setNotificationsOpen}
           onOpenNotification={handleNotificationOpen}
           onDismissNotification={markNotificationRead}
-          onOpenTasks={() => setTasksOpen(true)}
+          onOpenTasks={() => {
+            setCreateMenuOpen(false);
+            setScreen("tasks");
+          }}
           onImportQuote={() => {
             if (!headerPermissions.canManageEvents) return;
             openQuoteImport();
@@ -10627,6 +10628,24 @@ export default function Home() {
             />
           )}
 
+          {!loading && screen === "tasks" && (
+            <TeamTasksSheet
+              tasks={tasks}
+              events={visibleProductionEvents}
+              profiles={taskProfiles}
+              currentProfile={profile}
+              permissions={permissions}
+              loading={tasksLoading}
+              error={tasksError}
+              onClose={() => setScreen("calendar")}
+              onCreateTask={createTask}
+              onUpdateTask={updateTask}
+              onDeleteTask={deleteTask}
+              onReorderTasks={reorderTasksForAssignee}
+              onOpenEvent={openEvent}
+            />
+          )}
+
           {!loading && screen === "detail" && selectedEvent && (
             <EventDetailCarousel
               currentEvent={selectedEvent}
@@ -10683,7 +10702,11 @@ export default function Home() {
           setNotificationsOpen={setNotificationsOpen}
           onOpenNotification={handleNotificationOpen}
           onDismissNotification={markNotificationRead}
-          onOpenTasks={() => setTasksOpen(true)}
+          onOpenTasks={() => {
+            setYearOverviewOpen(false);
+            setCreateMenuOpen(false);
+            setScreen("tasks");
+          }}
           onGoToday={() => {
             goToday();
             setYearOverviewOpen(false);
@@ -10799,27 +10822,6 @@ export default function Home() {
           events={chronologicalEvents}
           onClose={() => setSearchOpen(false)}
           onOpenEvent={openEvent}
-        />
-      )}
-
-      {tasksOpen && (
-        <TeamTasksSheet
-          tasks={tasks}
-          events={chronologicalEvents}
-          profiles={taskProfiles}
-          currentProfile={profile}
-          permissions={permissions}
-          loading={tasksLoading}
-          error={tasksError}
-          onClose={() => setTasksOpen(false)}
-          onCreateTask={createTask}
-          onUpdateTask={updateTask}
-          onDeleteTask={deleteTask}
-          onReorderTasks={reorderTasksForAssignee}
-          onOpenEvent={(eventId) => {
-            openEvent(eventId);
-            setTasksOpen(false);
-          }}
         />
       )}
 
@@ -11581,28 +11583,10 @@ function TeamTasksSheet({
   }
 
   return (
-    <div
-      className={cn(modalBackdropClassName, modalSheetPositionClassName)}
-      onPointerDown={(pointerEvent) => handleModalBackdropPointerDown(pointerEvent, selectedTask ? closeSelectedTaskEditor : onClose)}
-    >
-      <div
-        className={cn(modalPanelClassName, "flex max-h-[86vh] w-full flex-col overflow-hidden p-4 sm:max-w-3xl sm:p-5")}
-        onPointerDown={(pointerEvent) => pointerEvent.stopPropagation()}
-      >
-        {!selectedTask && (
-          <div className="mb-3 flex items-center justify-between gap-3">
-            <div className="flex min-w-0 items-center gap-2">
-              <h2 className="truncate text-lg font-semibold text-stone-950">Tâches</h2>
-            </div>
-            <button type="button" onClick={onClose} className="rounded-xl bg-stone-50 px-3 py-1.5 text-base font-semibold text-stone-600 transition hover:bg-stone-100">
-              Fermer
-            </button>
-          </div>
-        )}
-
+    <section className="mx-auto flex min-h-0 w-full max-w-3xl flex-1 flex-col">
         <div
           ref={nativeKeyboard.scrollContainerRef}
-          className="no-scrollbar min-h-0 flex-1 space-y-3 overflow-y-auto overscroll-contain"
+          className="no-scrollbar min-h-0 flex-1 space-y-3 overflow-y-auto overscroll-contain pb-4"
           style={nativeKeyboard.scrollContainerStyle}
         >
           {(error) && <p className="text-sm font-semibold text-rose-700">{error}</p>}
@@ -11655,6 +11639,7 @@ function TeamTasksSheet({
             >
               <AdminTaskDetailPanel
                 task={selectedTask}
+                events={events}
                 linkedEvent={selectedTask.eventId ? eventsById.get(selectedTask.eventId) ?? null : null}
                 currentProfile={currentProfile}
                 permissions={permissions}
@@ -11699,8 +11684,7 @@ function TeamTasksSheet({
             </>
           )}
         </div>
-      </div>
-    </div>
+    </section>
   );
 }
 
@@ -11835,6 +11819,7 @@ const TaskQueueRow = forwardRef<HTMLDivElement, {
 
 function AdminTaskDetailPanel({
   task,
+  events,
   linkedEvent,
   currentProfile,
   permissions,
@@ -11845,6 +11830,7 @@ function AdminTaskDetailPanel({
   onClose,
 }: {
   task: AppTask;
+  events: ProductionEvent[];
   linkedEvent: ProductionEvent | null;
   currentProfile: UserProfile | null;
   permissions: AppPermissions;
@@ -11856,17 +11842,31 @@ function AdminTaskDetailPanel({
 }) {
   const [title, setTitle] = useState(task.title);
   const [notes, setNotes] = useState(task.notes ?? "");
+  const [eventQuery, setEventQuery] = useState("");
   const [dueDatePickerOpen, setDueDatePickerOpen] = useState(false);
   const [localError, setLocalError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const done = task.status === "done";
   const taskTone = getTaskTone(task);
   const canEdit = permissions.canManageEvents || task.assignedProfileId === currentProfile?.id;
+  const canEditEventLink = permissions.canManageEvents;
   const canDelete = permissions.canManageEvents;
+  const eventCandidates = useMemo(() => {
+    const query = normalizeLabel(eventQuery);
+    if (query.length < 2) return [];
+    return events
+      .filter((event) => {
+        const display = getProductionEventDisplay(event);
+        const haystack = normalizeLabel(`${display.title} ${display.subtitle ?? ""} ${formatFullDate(event.date)}`);
+        return haystack.includes(query);
+      })
+      .slice(0, 8);
+  }, [eventQuery, events]);
 
   useEffect(() => {
     setTitle(task.title);
     setNotes(task.notes ?? "");
+    setEventQuery("");
     setLocalError(null);
     setDueDatePickerOpen(false);
   }, [task.id, task.title, task.notes]);
@@ -11972,11 +11972,67 @@ function AdminTaskDetailPanel({
         </label>
       </div>
 
-      {linkedEvent && (
-        <button type="button" onClick={() => onOpenEvent(linkedEvent.id)} className="mt-2 w-full rounded-xl bg-white px-3 py-2 text-left text-sm font-semibold text-stone-500 transition hover:text-stone-900">
-          {getProductionEventDisplay(linkedEvent).title} · {formatFullDate(linkedEvent.date)}
-        </button>
-      )}
+      <div className="mt-2 rounded-xl bg-white/70 px-3 py-2">
+        <div className="mb-1 flex items-center justify-between gap-2">
+          <span className={cn("text-xs font-semibold uppercase tracking-[0.08em]", taskTone.meta)}>Événement</span>
+          {linkedEvent && canEditEventLink && (
+            <button
+              type="button"
+              onClick={() => void updateTaskSafely({ eventId: null })}
+              disabled={saving}
+              className="text-xs font-semibold text-stone-400 transition hover:text-rose-600 disabled:text-stone-300"
+            >
+              Retirer
+            </button>
+          )}
+        </div>
+        {linkedEvent ? (
+          <button
+            type="button"
+            onClick={() => onOpenEvent(linkedEvent.id)}
+            className="block w-full truncate rounded-lg py-1 text-left text-sm font-semibold text-stone-600 transition hover:text-stone-950"
+          >
+            {getProductionEventDisplay(linkedEvent).title} · {formatShortDate(linkedEvent.date)}
+          </button>
+        ) : (
+          <p className="py-1 text-sm font-semibold text-stone-400">Aucun événement lié</p>
+        )}
+        {canEditEventLink && (
+          <div className="mt-2 space-y-1.5">
+            <input
+              {...iosKeyboardGuardProps}
+              value={eventQuery}
+              disabled={saving}
+              onFocus={(event) => onNativeFieldFocus?.(event.currentTarget)}
+              onChange={(event) => setEventQuery(event.target.value)}
+              className="h-9 w-full rounded-xl bg-white/85 px-3 text-sm font-semibold text-stone-700 outline-none transition placeholder:text-stone-300 focus:bg-white"
+              placeholder="Rechercher un événement"
+            />
+            {eventCandidates.length > 0 && (
+              <div className="grid gap-1">
+                {eventCandidates.map((event) => {
+                  const display = getProductionEventDisplay(event);
+                  return (
+                    <button
+                      key={event.id}
+                      type="button"
+                      disabled={saving}
+                      onClick={() => {
+                        setEventQuery("");
+                        void updateTaskSafely({ eventId: event.id });
+                      }}
+                      className="grid min-w-0 gap-0.5 rounded-lg bg-white/65 px-2 py-1.5 text-left transition hover:bg-white disabled:text-stone-300"
+                    >
+                      <span className="truncate text-sm font-semibold text-stone-700">{display.title}</span>
+                      <span className="truncate text-xs font-semibold text-stone-400">{formatShortDate(event.date)}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
       {localError && <p className="mt-2 text-xs font-semibold text-rose-700">{localError}</p>}
     </div>
     {dueDatePickerOpen && (
@@ -13984,7 +14040,7 @@ function ProductionDetail({
                         <>
                           <span className="flex max-w-full shrink-0 items-center gap-1 overflow-hidden">
                             {optionCompletedName && (
-                              <span className="inline-flex h-5 min-w-0 items-center rounded-full bg-white/75 px-2 text-[0.7rem] font-bold leading-none text-emerald-800 sm:text-xs">
+                              <span className="inline-flex h-5 min-w-0 items-center rounded-full bg-stone-50 px-2 text-[0.7rem] font-bold leading-none text-stone-500 sm:text-xs">
                                 <span className="truncate">{optionCompletedName}</span>
                               </span>
                             )}
@@ -14235,12 +14291,12 @@ function getLinkState(link: EventLink): LinkStatus {
 function getDocumentTone(hasFiles: boolean) {
   return hasFiles
     ? {
-        surface: "bg-amber-200/90",
-        border: "border-amber-400/70",
-        hover: "hover:bg-amber-200",
-        icon: "text-amber-900",
-        text: "text-amber-950",
-        selected: "border-amber-700",
+        surface: "bg-white/85",
+        border: "border-stone-100",
+        hover: "hover:bg-stone-50",
+        icon: "text-stone-400",
+        text: "text-stone-500",
+        selected: "border-stone-300",
       }
     : {
         surface: "bg-amber-50/80",
@@ -14255,11 +14311,11 @@ function getDocumentTone(hasFiles: boolean) {
 function getOptionTone(state: CompletionStatus) {
   return state === "completed"
     ? {
-        surface: "bg-emerald-200/90",
-        border: "border-emerald-400/70",
-        hover: "hover:bg-emerald-200",
-        icon: "text-emerald-900",
-        text: "text-emerald-950",
+        surface: "bg-white/85",
+        border: "border-stone-100",
+        hover: "hover:bg-stone-50",
+        icon: "text-stone-400",
+        text: "text-stone-500",
       }
     : {
         surface: "bg-emerald-50/80",
@@ -14283,11 +14339,11 @@ function getTaskTone(task: AppTask) {
 function getLinkTone(state: LinkStatus) {
   return state === "available"
     ? {
-        surface: "bg-sky-200/90",
-        border: "border-sky-400/70",
-        hover: "hover:bg-sky-200",
-        icon: "text-sky-900",
-        text: "text-sky-950",
+        surface: "bg-white/85",
+        border: "border-stone-100",
+        hover: "hover:bg-stone-50",
+        icon: "text-stone-400",
+        text: "text-stone-500",
       }
     : {
         surface: "bg-sky-50/80",
@@ -15181,7 +15237,7 @@ function ContextDetailBlock({
       </div>
       {titleRenameError && <div className="mt-2 text-base font-medium text-rose-700">{titleRenameError}</div>}
       {canAssignOptionTask && (
-        <div className={cn("mt-3 grid gap-2 rounded-xl bg-emerald-50/70 px-3 py-2", linkedOptionTask ? "grid-cols-[minmax(0,1fr)_minmax(0,2fr)]" : "grid-cols-1")}>
+        <div className={cn("mt-3 grid items-end gap-2 rounded-xl bg-emerald-50/70 px-3 py-2", linkedOptionTask ? "grid-cols-[minmax(0,1fr)_minmax(0,2fr)]" : "grid-cols-1")}>
           <label className="grid min-w-0 gap-1">
             <span className="text-xs font-semibold uppercase tracking-[0.08em] text-emerald-700/70">Assigné à</span>
             <select
@@ -15190,7 +15246,7 @@ function ContextDetailBlock({
               disabled={savingCompletedByOverride}
               onFocus={(event) => onNativeFieldFocus(event.currentTarget)}
               onChange={(event) => void changeSelectedOptionAssignee(event.target.value || null)}
-              className="h-8 rounded-full border border-transparent bg-white/80 px-3 text-base font-semibold text-emerald-800 outline-none transition focus:border-emerald-300 focus:bg-white disabled:text-emerald-400"
+              className="h-8 w-full min-w-0 rounded-full border border-transparent bg-white/80 px-2 text-sm font-semibold text-emerald-800 outline-none transition focus:border-emerald-300 focus:bg-white disabled:text-emerald-400 sm:px-3 sm:text-base"
               aria-label="Assigner l'option"
             >
               <option value="">Non assignée</option>
@@ -15208,10 +15264,10 @@ function ContextDetailBlock({
                   type="button"
                   disabled={savingCompletedByOverride}
                   onClick={() => setOptionDueDatePickerOpen(true)}
-                  className="h-8 truncate rounded-full border border-transparent bg-white/80 px-3 text-right text-base font-semibold text-emerald-800 outline-none transition hover:bg-white focus:border-emerald-300 disabled:text-emerald-400"
+                  className="h-8 w-full min-w-0 truncate rounded-full border border-transparent bg-white/80 px-2 text-right text-sm font-semibold text-emerald-800 outline-none transition hover:bg-white focus:border-emerald-300 disabled:text-emerald-400 sm:px-3 sm:text-base"
                   aria-label="Échéance de la tâche liée"
                 >
-                  {linkedOptionTask.dueDate ? formatFullDate(linkedOptionTask.dueDate) : "Choisir une date"}
+                  {linkedOptionTask.dueDate ? formatShortDate(linkedOptionTask.dueDate) : "Choisir une date"}
                 </button>
             </label>
           )}
@@ -16706,49 +16762,39 @@ function getOptionAssigneeLabel(option: EventOption, tasks: AppTask[], profiles:
   return getCompletedByNameForDisplay(option);
 }
 
-function CalendarSettingsListRow({
-  name,
-  color,
-  enabled,
-  disabled = false,
-  compact = false,
-  dragging = false,
-  dragHandleProps,
-  onOpen,
-}: {
+const CalendarSettingsListRow = forwardRef<HTMLDivElement, {
   name: string;
   color: string | null;
   enabled: boolean;
   disabled?: boolean;
   compact?: boolean;
   dragging?: boolean;
-  dragHandleProps?: {
-    disabled?: boolean;
-    onPointerDown: (event: ReactPointerEvent<HTMLButtonElement>) => void;
-  };
+  draggable?: boolean;
+  draggableProps?: HTMLAttributes<HTMLDivElement>;
   onOpen: () => void;
-}) {
+}>(function CalendarSettingsListRow({
+  name,
+  color,
+  enabled,
+  disabled = false,
+  compact = false,
+  dragging = false,
+  draggable = false,
+  draggableProps,
+  onOpen,
+}, ref) {
   return (
     <div
+      ref={ref}
       className={cn(
-        "flex min-w-0 items-center gap-3 rounded-2xl transition",
+        "flex min-w-0 select-none items-center gap-3 rounded-2xl transition",
+        draggable ? "cursor-grab active:cursor-grabbing" : "cursor-default",
         compact ? "px-3 py-1.5" : "px-3 py-2",
         enabled ? "bg-white hover:bg-stone-50" : "bg-stone-50/70 text-stone-400",
-        dragging && "opacity-70",
+        dragging && "relative z-10 opacity-80 shadow-sm shadow-black/5",
       )}
+      {...draggableProps}
     >
-      {dragHandleProps && (
-        <button
-          type="button"
-          onPointerDown={dragHandleProps.onPointerDown}
-          disabled={dragHandleProps.disabled}
-          className="-mr-1 flex h-8 w-5 shrink-0 touch-none items-center justify-center rounded-full text-stone-300 transition hover:text-stone-500 disabled:cursor-default disabled:opacity-20"
-          aria-label={`Réordonner ${name}`}
-          title="Déplacer"
-        >
-          <GripVertical className="h-3.5 w-3.5" strokeWidth={2} />
-        </button>
-      )}
       <ExternalCalendarColorDot color={color} className={cn(!enabled && "opacity-30")} />
       <div className="min-w-0 flex-1">
         <p className={cn("truncate font-semibold", compact ? "text-sm" : "text-base", enabled ? "text-stone-900" : "text-stone-400")}>{name}</p>
@@ -16756,6 +16802,7 @@ function CalendarSettingsListRow({
       <span className={cn("shrink-0 text-xs font-semibold", enabled ? "text-emerald-600" : "text-stone-400")}>{enabled ? "Actif" : "Inactif"}</span>
       <button
         type="button"
+        onPointerDown={(event) => event.stopPropagation()}
         onClick={onOpen}
         disabled={disabled}
         className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-stone-300 transition hover:bg-stone-100 hover:text-stone-700 disabled:cursor-default disabled:opacity-30 disabled:hover:bg-transparent"
@@ -16765,7 +16812,7 @@ function CalendarSettingsListRow({
       </button>
     </div>
   );
-}
+});
 
 function CalendarSettingsListGroup({ label, rows }: { label: string; rows: ReactNode[] }) {
   if (rows.length === 0) return null;
@@ -16786,14 +16833,6 @@ type CalendarSettingsDraggableRow = {
   canDrag: boolean;
 };
 
-function moveArrayItem<T>(items: T[], fromIndex: number, toIndex: number) {
-  const nextItems = [...items];
-  const [item] = nextItems.splice(fromIndex, 1);
-  if (!item) return items;
-  nextItems.splice(toIndex, 0, item);
-  return nextItems;
-}
-
 function CalendarSettingsDraggableListGroup({
   label,
   rows,
@@ -16805,11 +16844,22 @@ function CalendarSettingsDraggableListGroup({
   onOpen: (calendar: ExternalCalendar) => void;
   onReorder: (orderedCalendars: ExternalCalendar[]) => Promise<void>;
 }) {
-  const rowRefs = useRef(new Map<string, HTMLDivElement>());
-  const latestOrderIdsRef = useRef<string[]>([]);
   const [orderIds, setOrderIds] = useState(() => rows.map((row) => row.id));
   const [draggingId, setDraggingId] = useState<string | null>(null);
   const [dragError, setDragError] = useState<string | null>(null);
+  const sensors = useSensors(
+    useSensor(MouseSensor, {
+      activationConstraint: {
+        distance: 5,
+      },
+    }),
+    useSensor(TouchSensor, {
+      activationConstraint: {
+        delay: 180,
+        tolerance: 8,
+      },
+    }),
+  );
   const rowsById = useMemo(() => new Map(rows.map((row) => [row.id, row])), [rows]);
   const orderedRows = useMemo(() => {
     const knownRows = orderIds.map((id) => rowsById.get(id)).filter((row): row is CalendarSettingsDraggableRow => Boolean(row));
@@ -16822,49 +16872,14 @@ function CalendarSettingsDraggableListGroup({
     setOrderIds(rows.map((row) => row.id));
   }, [draggingId, rows]);
 
-  useEffect(() => {
-    latestOrderIdsRef.current = orderedRows.map((row) => row.id);
-  }, [orderedRows]);
-
   if (rows.length === 0) return null;
 
-  function setRowRef(id: string, node: HTMLDivElement | null) {
-    if (node) {
-      rowRefs.current.set(id, node);
-    } else {
-      rowRefs.current.delete(id);
-    }
-  }
+  async function persistDragOrder(nextIds: string[], previousIds: string[]) {
+    if (nextIds.join("|") === previousIds.join("|")) return;
 
-  function updateDragOrder(pointerY: number, activeId: string) {
-    setOrderIds((currentIds) => {
-      const currentIndex = currentIds.indexOf(activeId);
-      if (currentIndex === -1) return currentIds;
-
-      let targetIndex = currentIds.length - 1;
-      for (let index = 0; index < currentIds.length; index += 1) {
-        const node = rowRefs.current.get(currentIds[index]);
-        if (!node) continue;
-        const rect = node.getBoundingClientRect();
-        if (pointerY < rect.top + rect.height / 2) {
-          targetIndex = index;
-          break;
-        }
-      }
-
-      if (targetIndex === currentIndex) return currentIds;
-      const nextIds = moveArrayItem(currentIds, currentIndex, targetIndex);
-      latestOrderIdsRef.current = nextIds;
-      return nextIds;
-    });
-  }
-
-  async function persistDragOrder(previousIds: string[]) {
-    const nextRows = latestOrderIdsRef.current
+    const nextRows = nextIds
       .map((id) => rowsById.get(id))
       .filter((row): row is CalendarSettingsDraggableRow => Boolean(row));
-    const nextIds = nextRows.map((row) => row.id);
-    if (nextIds.join("|") === previousIds.join("|")) return;
 
     try {
       await onReorder(nextRows.map((row) => row.storedCalendar));
@@ -16874,55 +16889,105 @@ function CalendarSettingsDraggableListGroup({
     }
   }
 
-  function startDrag(row: CalendarSettingsDraggableRow, event: ReactPointerEvent<HTMLButtonElement>) {
-    if (!row.canDrag || rows.length < 2) return;
-    event.preventDefault();
-    event.stopPropagation();
+  function handleCalendarDragStart(event: DragStartEvent) {
     setDragError(null);
-    const previousIds = orderedRows.map((orderedRow) => orderedRow.id);
-    latestOrderIdsRef.current = previousIds;
-    setDraggingId(row.id);
-    event.currentTarget.setPointerCapture(event.pointerId);
+    setDraggingId(String(event.active.id));
+  }
 
-    function handlePointerMove(pointerEvent: PointerEvent) {
-      pointerEvent.preventDefault();
-      updateDragOrder(pointerEvent.clientY, row.id);
-    }
+  function handleCalendarDragEnd(event: DragEndEvent) {
+    setDraggingId(null);
+    const activeId = String(event.active.id);
+    const overId = event.over?.id ? String(event.over.id) : null;
+    if (!overId || activeId === overId) return;
 
-    function handlePointerEnd() {
-      window.removeEventListener("pointermove", handlePointerMove);
-      window.removeEventListener("pointerup", handlePointerEnd);
-      window.removeEventListener("pointercancel", handlePointerEnd);
-      setDraggingId(null);
-      void persistDragOrder(previousIds);
-    }
+    const previousIds = orderedRows.map((row) => row.id);
+    const oldIndex = previousIds.indexOf(activeId);
+    const newIndex = previousIds.indexOf(overId);
+    if (oldIndex === -1 || newIndex === -1) return;
 
-    window.addEventListener("pointermove", handlePointerMove, { passive: false });
-    window.addEventListener("pointerup", handlePointerEnd, { once: true });
-    window.addEventListener("pointercancel", handlePointerEnd, { once: true });
+    const nextIds = arrayMove(previousIds, oldIndex, newIndex);
+    setOrderIds(nextIds);
+    void persistDragOrder(nextIds, previousIds);
   }
 
   return (
     <div className="space-y-1.5">
       <p className="px-1 text-[0.68rem] font-semibold uppercase tracking-[0.08em] text-stone-400">{label}</p>
       <div className="space-y-1">
-        {orderedRows.map((row) => (
-          <div key={row.id} ref={(node) => setRowRef(row.id, node)}>
-            <CalendarSettingsListRow
-              name={row.name}
-              color={row.color}
-              enabled
-              dragging={draggingId === row.id}
-              dragHandleProps={{
-                disabled: !row.canDrag || rows.length < 2,
-                onPointerDown: (event) => startDrag(row, event),
-              }}
-              onOpen={() => onOpen(row.storedCalendar)}
-            />
-          </div>
-        ))}
+        <DndContext
+          sensors={sensors}
+          collisionDetection={closestCenter}
+          onDragStart={handleCalendarDragStart}
+          onDragEnd={handleCalendarDragEnd}
+          onDragCancel={() => setDraggingId(null)}
+        >
+          <SortableContext items={orderedRows.map((row) => row.id)} strategy={verticalListSortingStrategy}>
+            <div className="space-y-1">
+              {orderedRows.map((row) => (
+                <SortableCalendarSettingsRow
+                  key={row.id}
+                  row={row}
+                  dragging={draggingId === row.id}
+                  canDrag={row.canDrag && rows.length > 1}
+                  onOpen={() => onOpen(row.storedCalendar)}
+                />
+              ))}
+            </div>
+          </SortableContext>
+        </DndContext>
       </div>
       {dragError && <p className="px-1 text-xs font-semibold text-rose-600">{dragError}</p>}
+    </div>
+  );
+}
+
+function SortableCalendarSettingsRow({
+  row,
+  dragging,
+  canDrag,
+  onOpen,
+}: {
+  row: CalendarSettingsDraggableRow;
+  dragging: boolean;
+  canDrag: boolean;
+  onOpen: () => void;
+}) {
+  const {
+    attributes,
+    listeners,
+    setActivatorNodeRef,
+    setNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({
+    id: row.id,
+    disabled: !canDrag,
+  });
+  const rowIsDragging = dragging || isDragging;
+  const style: CSSProperties = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    zIndex: rowIsDragging ? 10 : undefined,
+    position: rowIsDragging ? "relative" : undefined,
+  };
+  const setCalendarRowRef = (node: HTMLDivElement | null) => {
+    setNodeRef(node);
+    setActivatorNodeRef(node);
+  };
+
+  return (
+    <div style={style}>
+      <CalendarSettingsListRow
+        ref={setCalendarRowRef}
+        name={row.name}
+        color={row.color}
+        enabled
+        dragging={rowIsDragging}
+        draggable={canDrag}
+        draggableProps={canDrag ? ({ ...attributes, ...listeners } as HTMLAttributes<HTMLDivElement>) : undefined}
+        onOpen={onOpen}
+      />
     </div>
   );
 }
