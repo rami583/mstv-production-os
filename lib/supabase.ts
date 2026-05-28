@@ -77,6 +77,8 @@ export type Database = {
           assigned_team_member_id: string | null;
           task_id: string | null;
           external_assignee_name: string | null;
+          task_due_date: string | null;
+          task_notes: string | null;
           completed_by_profile_id: string | null;
           completed_by_label: string | null;
           completed_by_initials: string | null;
@@ -95,6 +97,8 @@ export type Database = {
           assigned_team_member_id?: string | null;
           task_id?: string | null;
           external_assignee_name?: string | null;
+          task_due_date?: string | null;
+          task_notes?: string | null;
           completed_by_profile_id?: string | null;
           completed_by_label?: string | null;
           completed_by_initials?: string | null;

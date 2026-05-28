@@ -284,6 +284,8 @@ type EventOption = {
   details: string | null;
   taskId: string | null;
   externalAssigneeName: string | null;
+  taskDueDate: string | null;
+  taskNotes: string | null;
   completedByProfileId: string | null;
   completedByLabel: string | null;
   completedByInitials: string | null;
@@ -439,6 +441,19 @@ type TaskCreateDiagnostic = {
 type TaskCreateError = Error & {
   taskCreateDiagnostic?: TaskCreateDiagnostic;
   userMessage?: string;
+};
+
+type OptionAssignmentDiagnostic = {
+  optionId: string;
+  assigneeType: OptionTaskAssignment["type"];
+  assignedProfileId: string | null;
+  externalAssigneeName: string | null;
+  linkedTaskId: string | null;
+  stage: string;
+  supabaseErrorCode: string | null;
+  supabaseErrorMessage: string | null;
+  supabaseErrorDetails: string | null;
+  supabaseErrorHint: string | null;
 };
 
 type ExternalCalendar = {
@@ -2892,6 +2907,34 @@ function getTaskCreateDiagnostic(error: unknown) {
   return (error as TaskCreateError).taskCreateDiagnostic ?? null;
 }
 
+function getPreciseOptionAssignmentMessage(error: unknown) {
+  const code = getSupabaseErrorField(error, "code");
+  const message = getSupabaseErrorField(error, "message") ?? getRawErrorMessage(error);
+  const details = getSupabaseErrorField(error, "details");
+  const hint = getSupabaseErrorField(error, "hint");
+  const combined = [message, details, hint].filter(Boolean).join(" ").toLocaleLowerCase("fr-FR");
+
+  if (code === "42703" || /external_assignee_name|task_due_date|task_notes|column .* does not exist|schema cache|pgrst204/.test(combined)) {
+    return "la structure Supabase des options n'est pas à jour.";
+  }
+  if (code === "23503" && combined.includes("task_id")) {
+    return "la tâche liée à cette option n'existe plus.";
+  }
+  if (code === "23503" && combined.includes("completed_by_profile_id")) {
+    return "le profil assigné n'existe pas dans MSTV.";
+  }
+  if (code === "42501" || /row-level security|rls|policy|permission denied|not authorized|unauthorized|forbidden/.test(combined)) {
+    return "droits Supabase insuffisants pour modifier cette assignation.";
+  }
+  return getUserFacingErrorMessage(error, "erreur Supabase inconnue.");
+}
+
+function createOptionAssignmentError(error: unknown, diagnostic: OptionAssignmentDiagnostic) {
+  const preciseMessage = getPreciseOptionAssignmentMessage(error);
+  console.error("[MSTV options] assignment failed", diagnostic);
+  return new Error(`Impossible de modifier l’assignation : ${preciseMessage}`);
+}
+
 function getProfileInitials(profile: UserProfile | null, email?: string | null) {
   const firstName = profile?.firstName?.trim() ?? "";
   const lastName = profile?.lastName?.trim() ?? "";
@@ -3250,6 +3293,8 @@ function mapEvent(row: EventQueryRow): ProductionEvent {
       details: option.details,
       taskId: option.task_id ?? null,
       externalAssigneeName: option.external_assignee_name ?? null,
+      taskDueDate: option.task_due_date ?? null,
+      taskNotes: option.task_notes ?? null,
       completedByProfileId: option.completed_by_profile_id ?? null,
       completedByLabel: option.completed_by_label ?? null,
       completedByInitials: option.completed_by_initials ?? null,
@@ -6959,6 +7004,7 @@ export default function Home() {
         }}
         onAssignOptionTask={assignOptionTask}
         onUpdateOptionTaskDueDate={updateOptionTaskDueDate}
+        onUpdateOptionTaskNotes={updateOptionTaskNotes}
         onCreateOption={createEventOption}
         onDeleteOption={deleteEventOption}
         onRenameOption={renameEventOption}
@@ -8135,26 +8181,39 @@ export default function Home() {
     const currentLinkedTask = option.taskId ? tasks.find((task) => task.id === option.taskId) ?? null : null;
     const assignedProfileId = assignment.type === "profile" ? assignment.profileId : null;
     const externalAssigneeName = assignment.type === "external" ? assignment.name?.trim() || null : null;
+    let failedStage = "préparation";
+
+    try {
     const assignedProfile = assignedProfileId ? taskProfiles.find((userProfile) => userProfile.id === assignedProfileId) ?? null : null;
+    failedStage = "validation_profil";
     if (assignedProfileId && !assignedProfile) {
       throw new Error("Profil assigné introuvable.");
     }
 
-    async function updateOptionLink(task: AppTask | null, nextExternalAssigneeName: string | null) {
+    async function updateOptionAssignmentState(input: {
+      task: AppTask | null;
+      externalName: string | null;
+      dueDate: string | null;
+      notes: string | null;
+    }) {
+      const { task, externalName, dueDate, notes } = input;
       const assigneeLabel = task && assignedProfile ? getProfileOptionLabel(assignedProfile) : null;
       const assigneeInitials = assignedProfile ? getProfileInitials(assignedProfile, assignedProfile.email ?? undefined) : null;
-      const assignmentLabel = assigneeLabel ?? nextExternalAssigneeName;
-      const completed = task?.status === "done";
+      const assignmentLabel = assigneeLabel ?? externalName;
+      const completed = Boolean(task?.assignedProfileId && task.status === "done");
       const updatePayload: Database["public"]["Tables"]["event_options"]["Update"] = {
         task_id: task?.id ?? null,
-        external_assignee_name: nextExternalAssigneeName,
+        external_assignee_name: externalName,
+        task_due_date: dueDate,
+        task_notes: notes?.trim() || null,
         status: completed ? "completed" : "incomplete",
-        completed_by_profile_id: completed ? task.assignedProfileId : null,
+        completed_by_profile_id: completed ? task?.assignedProfileId ?? null : null,
         completed_by_label: completed ? assigneeLabel : null,
         completed_by_initials: completed ? assigneeInitials : null,
-        completed_at: completed ? (task.completedAt ?? new Date().toISOString()) : null,
+        completed_at: completed ? (task?.completedAt ?? new Date().toISOString()) : null,
       };
 
+      failedStage = "update_option";
       const { error: updateError } = await supabaseClient
         .from("event_options")
         .update(updatePayload)
@@ -8173,6 +8232,8 @@ export default function Home() {
                         ...item,
                         taskId: updatePayload.task_id ?? null,
                         externalAssigneeName: updatePayload.external_assignee_name ?? null,
+                        taskDueDate: updatePayload.task_due_date ?? null,
+                        taskNotes: updatePayload.task_notes ?? null,
                         status: updatePayload.status ?? item.status,
                         completedByProfileId: updatePayload.completed_by_profile_id ?? null,
                         completedByLabel: updatePayload.completed_by_label ?? null,
@@ -8195,6 +8256,8 @@ export default function Home() {
         previousValue: {
           taskId: option.taskId,
           externalAssigneeName: option.externalAssigneeName,
+          taskDueDate: option.taskDueDate,
+          taskNotes: option.taskNotes,
           completedByProfileId: option.completedByProfileId,
           completedByLabel: option.completedByLabel,
           status: option.status,
@@ -8202,51 +8265,109 @@ export default function Home() {
         newValue: {
           taskId: updatePayload.task_id ?? null,
           assignedProfileId: task?.assignedProfileId ?? null,
-          externalAssigneeName: nextExternalAssigneeName,
+          externalAssigneeName: externalName,
+          taskDueDate: updatePayload.task_due_date ?? null,
+          taskNotes: updatePayload.task_notes ?? null,
           status: updatePayload.status,
         },
       });
     }
 
     if (assignment.type !== "profile") {
+      const preservedDueDate = currentLinkedTask?.dueDate ?? option.taskDueDate ?? null;
+      const preservedNotes = currentLinkedTask?.notes ?? option.taskNotes ?? null;
       if (currentLinkedTask) {
+        failedStage = "unlink_existing_task";
         await updateTask(currentLinkedTask, {
           assignedProfileId: null,
           sortOrder: null,
           status: "todo",
         });
-        await updateOptionLink({
-          ...currentLinkedTask,
-          assignedProfileId: null,
-          sortOrder: null,
-          status: "todo",
-          completedAt: null,
-        }, externalAssigneeName);
-        return;
       }
-      await updateOptionLink(null, externalAssigneeName);
+      await updateOptionAssignmentState({
+        task: null,
+        externalName: externalAssigneeName,
+        dueDate: preservedDueDate,
+        notes: preservedNotes,
+      });
+      if (currentLinkedTask) {
+        failedStage = "delete_unlinked_task";
+        const { error: deleteTaskError } = await supabaseClient.from("tasks").delete().eq("id", currentLinkedTask.id);
+        if (deleteTaskError) {
+          console.warn("[MSTV options] unable to delete unlinked option task", {
+            optionId: option.id,
+            taskId: currentLinkedTask.id,
+            errorCode: deleteTaskError.code,
+            errorMessage: deleteTaskError.message,
+            errorDetails: deleteTaskError.details,
+            errorHint: deleteTaskError.hint,
+          });
+        } else {
+          setTasks((current) => current.filter((task) => task.id !== currentLinkedTask.id));
+        }
+      }
       return;
     }
 
     if (currentLinkedTask) {
       const nextSortOrder = getNextTaskSortOrder(tasks, assignedProfileId);
+      const nextDueDate = currentLinkedTask.dueDate ?? option.taskDueDate ?? null;
+      const nextNotes = currentLinkedTask.notes ?? option.taskNotes ?? null;
+      failedStage = "update_existing_task";
       await updateTask(currentLinkedTask, {
         title: option.label,
         assignedProfileId,
         sortOrder: nextSortOrder,
+        dueDate: nextDueDate,
+        notes: nextNotes,
       });
-      await updateOptionLink({ ...currentLinkedTask, title: option.label, assignedProfileId, sortOrder: nextSortOrder }, null);
+      await updateOptionAssignmentState({
+        task: {
+          ...currentLinkedTask,
+          title: option.label,
+          assignedProfileId,
+          sortOrder: nextSortOrder,
+          dueDate: nextDueDate,
+          notes: nextNotes,
+        },
+        externalName: null,
+        dueDate: nextDueDate,
+        notes: nextNotes,
+      });
       return;
     }
 
+    const createdTaskDueDate = option.taskDueDate ?? events.find((event) => event.id === option.eventId)?.date ?? null;
+    failedStage = "create_internal_task";
     const createdTask = await createTask({
       title: option.label,
       eventId: option.eventId,
       assignedProfileId,
       priority: "normal",
-      dueDate: events.find((event) => event.id === option.eventId)?.date ?? null,
+      dueDate: createdTaskDueDate,
+      notes: option.taskNotes,
     });
-    await updateOptionLink(createdTask, null);
+    await updateOptionAssignmentState({
+      task: createdTask,
+      externalName: null,
+      dueDate: createdTask.dueDate,
+      notes: createdTask.notes,
+    });
+    } catch (assignmentError) {
+      const diagnostic: OptionAssignmentDiagnostic = {
+        optionId: option.id,
+        assigneeType: assignment.type,
+        assignedProfileId,
+        externalAssigneeName,
+        linkedTaskId: option.taskId,
+        stage: failedStage,
+        supabaseErrorCode: getSupabaseErrorField(assignmentError, "code"),
+        supabaseErrorMessage: getSupabaseErrorField(assignmentError, "message"),
+        supabaseErrorDetails: getSupabaseErrorField(assignmentError, "details"),
+        supabaseErrorHint: getSupabaseErrorField(assignmentError, "hint"),
+      };
+      throw createOptionAssignmentError(assignmentError, diagnostic);
+    }
   }
 
   async function updateOptionTaskDueDate(option: EventOption, dueDate: string | null) {
@@ -8255,19 +8376,21 @@ export default function Home() {
     const supabaseClient = supabase;
     const currentLinkedTask = option.taskId ? tasks.find((task) => task.id === option.taskId) ?? null : null;
 
-    async function linkTask(task: AppTask) {
-      const assignedProfile = task.assignedProfileId ? taskProfiles.find((userProfile) => userProfile.id === task.assignedProfileId) ?? null : null;
+    async function updateOptionDueDateState(task: AppTask | null, nextDueDate: string | null) {
+      const assignedProfile = task?.assignedProfileId ? taskProfiles.find((userProfile) => userProfile.id === task.assignedProfileId) ?? null : null;
       const assigneeLabel = assignedProfile ? getProfileOptionLabel(assignedProfile) : null;
       const assigneeInitials = assignedProfile ? getProfileInitials(assignedProfile, assignedProfile.email ?? undefined) : null;
-      const completed = task.status === "done";
+      const completed = Boolean(task?.assignedProfileId && task.status === "done");
       const updatePayload: Database["public"]["Tables"]["event_options"]["Update"] = {
-        task_id: task.id,
+        task_id: task?.id ?? null,
         external_assignee_name: option.externalAssigneeName ?? null,
+        task_due_date: nextDueDate,
+        task_notes: task?.notes ?? option.taskNotes ?? null,
         status: completed ? "completed" : "incomplete",
-        completed_by_profile_id: completed ? task.assignedProfileId : null,
+        completed_by_profile_id: completed ? task?.assignedProfileId ?? null : null,
         completed_by_label: completed ? assigneeLabel : null,
         completed_by_initials: completed ? assigneeInitials : null,
-        completed_at: completed ? (task.completedAt ?? new Date().toISOString()) : null,
+        completed_at: completed ? (task?.completedAt ?? new Date().toISOString()) : null,
       };
 
       const { error: updateError } = await supabaseClient
@@ -8286,8 +8409,10 @@ export default function Home() {
                   item.id === option.id
                     ? {
                         ...item,
-                        taskId: task.id,
+                        taskId: updatePayload.task_id ?? null,
                         externalAssigneeName: updatePayload.external_assignee_name ?? null,
+                        taskDueDate: updatePayload.task_due_date ?? null,
+                        taskNotes: updatePayload.task_notes ?? null,
                         status: updatePayload.status ?? item.status,
                         completedByProfileId: updatePayload.completed_by_profile_id ?? null,
                         completedByLabel: updatePayload.completed_by_label ?? null,
@@ -8302,20 +8427,43 @@ export default function Home() {
       );
     }
 
-    if (currentLinkedTask) {
+    if (currentLinkedTask?.assignedProfileId) {
       await updateTask(currentLinkedTask, { dueDate });
-      await linkTask({ ...currentLinkedTask, dueDate });
+      await updateOptionDueDateState({ ...currentLinkedTask, dueDate }, dueDate);
       return;
     }
 
-    const createdTask = await createTask({
-      title: option.label,
-      eventId: option.eventId,
-      assignedProfileId: null,
-      priority: "normal",
-      dueDate,
-    });
-    await linkTask(createdTask);
+    await updateOptionDueDateState(null, dueDate);
+  }
+
+  async function updateOptionTaskNotes(option: EventOption, notes: string | null) {
+    assertCanManageEvents();
+    if (!supabase) throw new Error("Configuration Supabase manquante.");
+
+    const nextNotes = notes?.trim() || null;
+    const updatePayload: Database["public"]["Tables"]["event_options"]["Update"] = {
+      task_notes: nextNotes,
+    };
+
+    const { error: updateError } = await supabase
+      .from("event_options")
+      .update(updatePayload)
+      .eq("id", option.id);
+
+    if (updateError) throw updateError;
+
+    setEvents((current) =>
+      current.map((event) =>
+        event.id === option.eventId
+          ? {
+              ...event,
+              options: event.options.map((item) => (
+                item.id === option.id ? { ...item, taskNotes: nextNotes } : item
+              )),
+            }
+          : event,
+      ),
+    );
   }
 
   async function syncEventLinkEntries(link: EventLink, drafts: LinkEntryDraft[]) {
@@ -8565,6 +8713,8 @@ export default function Home() {
         details: null,
         taskId: null,
         externalAssigneeName: null,
+        taskDueDate: null,
+        taskNotes: null,
         completedByProfileId: null,
         completedByLabel: null,
         completedByInitials: null,
@@ -8643,6 +8793,8 @@ export default function Home() {
       details: data.details,
       taskId: data.task_id ?? null,
       externalAssigneeName: data.external_assignee_name ?? null,
+      taskDueDate: data.task_due_date ?? null,
+      taskNotes: data.task_notes ?? null,
       completedByProfileId: data.completed_by_profile_id ?? null,
       completedByLabel: data.completed_by_label ?? null,
       completedByInitials: data.completed_by_initials ?? null,
@@ -13378,6 +13530,7 @@ function ProductionDetail({
   onEditEvent,
   onAssignOptionTask,
   onUpdateOptionTaskDueDate,
+  onUpdateOptionTaskNotes,
   onCreateOption,
   onDeleteOption,
   onRenameOption,
@@ -13410,6 +13563,7 @@ function ProductionDetail({
   onEditEvent: () => void;
   onAssignOptionTask: (option: EventOption, assignment: OptionTaskAssignment) => Promise<void>;
   onUpdateOptionTaskDueDate: (option: EventOption, dueDate: string | null) => Promise<void>;
+  onUpdateOptionTaskNotes: (option: EventOption, notes: string | null) => Promise<void>;
   onCreateOption: (eventId: string, label: string) => Promise<EventOption>;
   onDeleteOption: (option: EventOption) => Promise<void>;
   onRenameOption: (option: EventOption, label: string) => Promise<EventOption>;
@@ -14030,6 +14184,7 @@ function ProductionDetail({
             profiles={profiles}
             onAssignOptionTask={onAssignOptionTask}
             onUpdateOptionTaskDueDate={onUpdateOptionTaskDueDate}
+            onUpdateOptionTaskNotes={onUpdateOptionTaskNotes}
             onRenameOption={onRenameOption}
             onCreateOptionItem={onCreateOptionItem}
             onUpdateOptionItem={onUpdateOptionItem}
@@ -14486,6 +14641,7 @@ function ContextDetailBlock({
   profiles,
   onAssignOptionTask,
   onUpdateOptionTaskDueDate,
+  onUpdateOptionTaskNotes,
   onRenameOption,
   onCreateOptionItem,
   onUpdateOptionItem,
@@ -14508,6 +14664,7 @@ function ContextDetailBlock({
   profiles: UserProfile[];
   onAssignOptionTask: (option: EventOption, assignment: OptionTaskAssignment) => Promise<void>;
   onUpdateOptionTaskDueDate: (option: EventOption, dueDate: string | null) => Promise<void>;
+  onUpdateOptionTaskNotes: (option: EventOption, notes: string | null) => Promise<void>;
   onRenameOption: (option: EventOption, label: string) => Promise<EventOption>;
   onCreateOptionItem: (option: EventOption, label: string) => Promise<EventOptionItem>;
   onUpdateOptionItem: (option: EventOption, item: EventOptionItem, label: string) => Promise<EventOptionItem>;
@@ -14550,7 +14707,7 @@ function ContextDetailBlock({
   const [savingCompletedByOverride, setSavingCompletedByOverride] = useState(false);
   const [completedByOverrideError, setCompletedByOverrideError] = useState<string | null>(null);
   const [optionDueDatePickerOpen, setOptionDueDatePickerOpen] = useState(false);
-  const [optionTaskNotesInput, setOptionTaskNotesInput] = useState(selectedLinkedOptionTask?.notes ?? "");
+  const [optionTaskNotesInput, setOptionTaskNotesInput] = useState(selectedLinkedOptionTask?.notes ?? selectedOption?.taskNotes ?? "");
   const [externalAssigneeInput, setExternalAssigneeInput] = useState(selectedOption?.externalAssigneeName ?? "");
   const [titleRenameError, setTitleRenameError] = useState<string | null>(null);
   const [draggingDocumentFiles, setDraggingDocumentFiles] = useState(false);
@@ -14591,13 +14748,13 @@ function ContextDetailBlock({
     setSavingCompletedByOverride(false);
     setCompletedByOverrideError(null);
     setOptionDueDatePickerOpen(false);
-    setOptionTaskNotesInput(selectedLinkedOptionTask?.notes ?? "");
+    setOptionTaskNotesInput(selectedLinkedOptionTask?.notes ?? selectedOption?.taskNotes ?? "");
     setExternalAssigneeInput(selectedOption?.externalAssigneeName ?? "");
     setTitleRenameError(null);
     setDraggingDocumentFiles(false);
     setUploadingDocumentFiles(false);
     setDocumentOpenError(null);
-  }, [selectedDocumentGroupId, selectedLinkId, selectedOptionId, selectedLinkedOptionTask?.id, selectedLinkedOptionTask?.notes, selectedOption?.externalAssigneeName]);
+  }, [selectedDocumentGroupId, selectedLinkId, selectedOptionId, selectedLinkedOptionTask?.id, selectedLinkedOptionTask?.notes, selectedOption?.externalAssigneeName, selectedOption?.taskNotes]);
 
   async function copyLinkValue(value: string | null | undefined, field: string) {
     const valueToCopy = value?.trim();
@@ -15053,7 +15210,10 @@ function ContextDetailBlock({
   const linkedTaskAssignedToCurrentProfile = Boolean(linkedOptionTask && profile?.id && linkedOptionTask.assignedProfileId === profile.id);
   const linkedTaskCreatedByCurrentProfile = Boolean(linkedOptionTask && profile?.id && linkedOptionTask.createdBy === profile.id);
   const canToggleLinkedOptionTaskStatus = Boolean(linkedOptionTask && (permissions.canManageEvents || linkedTaskAssignedToCurrentProfile));
-  const canEditLinkedTaskNotes = Boolean(linkedOptionTask && (permissions.canManageEvents || (linkedTaskAssignedToCurrentProfile && linkedTaskCreatedByCurrentProfile)));
+  const canEditLinkedTaskNotes = Boolean(linkedOptionTask?.assignedProfileId && (permissions.canManageEvents || (linkedTaskAssignedToCurrentProfile && linkedTaskCreatedByCurrentProfile)));
+  const canEditOptionTaskNotes = permissions.canManageEvents || canEditLinkedTaskNotes;
+  const optionTaskDueDate = linkedOptionTask?.dueDate ?? selectedOption.taskDueDate ?? null;
+  const optionTaskNotes = linkedOptionTask?.notes ?? selectedOption.taskNotes ?? "";
 
   async function updateLinkedOptionTask(patch: TaskUpdatePatch) {
     if (!linkedOptionTask) return;
@@ -15161,7 +15321,7 @@ function ContextDetailBlock({
                   className="h-8 w-full min-w-0 truncate rounded-full border border-transparent bg-white/80 px-2 text-right text-sm font-semibold text-emerald-800 outline-none transition hover:bg-white focus:border-emerald-300 disabled:text-emerald-400 sm:px-3 sm:text-base"
                   aria-label="Échéance de la tâche liée"
                 >
-                  {linkedOptionTask?.dueDate ? formatShortDateWithYear(linkedOptionTask.dueDate) : "Choisir une date"}
+                  {optionTaskDueDate ? formatShortDateWithYear(optionTaskDueDate) : "Choisir une date"}
                 </button>
             </label>
           )}
@@ -15172,18 +15332,23 @@ function ContextDetailBlock({
         <textarea
           {...iosKeyboardGuardProps}
           value={optionTaskNotesInput}
-          disabled={!linkedOptionTask || !canEditLinkedTaskNotes || savingCompletedByOverride}
+          disabled={!canEditOptionTaskNotes || savingCompletedByOverride}
           rows={4}
           onFocus={(event) => onNativeFieldFocus(event.currentTarget)}
           onChange={(event) => setOptionTaskNotesInput(event.target.value)}
           onBlur={() => {
-            if (!linkedOptionTask) return;
-            if (optionTaskNotesInput.trim() !== (linkedOptionTask.notes ?? "")) {
-              void updateLinkedOptionTask({ notes: optionTaskNotesInput });
+            if (linkedOptionTask?.assignedProfileId) {
+              if (optionTaskNotesInput.trim() !== (linkedOptionTask.notes ?? "")) {
+                void updateLinkedOptionTask({ notes: optionTaskNotesInput });
+              }
+              return;
+            }
+            if (optionTaskNotesInput.trim() !== optionTaskNotes) {
+              void onUpdateOptionTaskNotes(selectedOption, optionTaskNotesInput);
             }
           }}
           className="min-h-24 w-full resize-none rounded-xl border border-transparent bg-white/80 px-3 py-2 text-base font-medium leading-relaxed text-neutral-700 outline-none transition placeholder:text-emerald-700/35 focus:border-emerald-300 focus:bg-white disabled:text-emerald-400"
-          placeholder={linkedOptionTask ? "Notes" : "Assignez cette option pour ajouter des notes"}
+          placeholder="Notes"
         />
       </label>
       {completedByOverrideError && <div className="mt-2 text-base font-medium text-rose-700">{completedByOverrideError}</div>}
@@ -15274,8 +15439,8 @@ function ContextDetailBlock({
     </Card>
     {selectedOption && optionDueDatePickerOpen && (
       <SharedDatePicker
-        selectedDate={linkedOptionTask?.dueDate ?? event.date}
-        allowSelectingCurrentDate={!linkedOptionTask?.dueDate}
+        selectedDate={optionTaskDueDate ?? event.date}
+        allowSelectingCurrentDate={!optionTaskDueDate}
         onClose={() => setOptionDueDatePickerOpen(false)}
         onSelectDate={async (dateKey) => {
           await onUpdateOptionTaskDueDate(selectedOption, dateKey);
