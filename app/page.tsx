@@ -1401,7 +1401,7 @@ const iconKeywordRules: { keywords: string[]; icon: LucideIcon }[] = [
   { keywords: ["habillage", "design", "graphique"], icon: Palette },
   { keywords: ["timer", "chrono", "compte a rebours"], icon: Timer },
   { keywords: ["prompteur", "texte", "script"], icon: FileText },
-  { keywords: ["plateforme", "platform", "livemaker", "evenement"], icon: MonitorPlay },
+  { keywords: ["plateforme", "plate-forme", "plate forme", "platform", "livemaker", "evenement"], icon: MonitorPlay },
   { keywords: ["quiz", "question", "q&a", "qa"], icon: CircleHelp },
   { keywords: ["moderation", "moderateur", "chat"], icon: ShieldCheck },
   { keywords: ["sous titres", "sous-titres", "subtitles", "caption"], icon: Captions },
@@ -1420,7 +1420,7 @@ const defaultOptions = [
   { label: "Modération", details: "Comptes modérateurs à préparer" },
 ];
 
-const platformLinkLabels = new Set(["plateforme", "plateforme de diffusion", "evenement plateforme", "event plateforme"]);
+const platformLinkLabels = new Set(["plateforme", "plateformedediffusion", "evenementplateforme", "eventplateforme"]);
 const eventDocumentsBucket = "event-documents";
 const nativeMstvIcsImportSource = "apple_ics_mstv";
 const pendingSyncDbName = "mstv-production-os-sync";
@@ -2537,6 +2537,10 @@ function normalizeLabel(label: string) {
     .trim();
 }
 
+function normalizeCompactLabel(label: string) {
+  return normalizeLabel(label).replace(/[^a-z0-9]+/g, "");
+}
+
 function getTokenSet(value: string) {
   return new Set(normalizeLabel(value).split(/[^a-z0-9]+/).filter((token) => token.length > 1));
 }
@@ -2667,6 +2671,17 @@ function normalizeLinkEntryDrafts(drafts: LinkEntryDraft[], isPlatform: boolean)
   const nonEmptyDrafts = drafts.filter((draft) => !isLinkEntryDraftEmpty(draft, isPlatform));
   const emptyDraft = drafts.find((draft) => isLinkEntryDraftEmpty(draft, isPlatform) && draft.id) ??
     drafts.find((draft) => isLinkEntryDraftEmpty(draft, isPlatform)) ?? { id: null, url: "", streamKey: "" };
+
+  if (isPlatform) {
+    const primaryDraft = nonEmptyDrafts[0] ?? emptyDraft;
+    return [
+      {
+        ...primaryDraft,
+        url: primaryDraft.url ?? "",
+        streamKey: primaryDraft.streamKey ?? "",
+      },
+    ];
+  }
 
   return [
     ...nonEmptyDrafts,
@@ -6345,8 +6360,14 @@ export default function Home() {
 
   async function updateTask(task: AppTask, patch: TaskUpdatePatch) {
     if (!supabase) throw new Error("Configuration Supabase manquante.");
+    const assignedToCurrentProfile = Boolean(profile?.id && task.assignedProfileId === profile.id);
+    const createdByCurrentProfile = Boolean(profile?.id && task.createdBy === profile.id);
+    const statusOnlyFields = new Set(["status"]);
     const ownAllowedFields = new Set(["title", "dueDate", "notes", "status", "sortOrder"]);
-    const canUpdateTask = permissions.canManageEvents || (task.assignedProfileId === profile?.id && Object.keys(patch).every((key) => ownAllowedFields.has(key)));
+    const patchKeys = Object.keys(patch);
+    const canUpdateTask = permissions.canManageEvents ||
+      (assignedToCurrentProfile && patchKeys.every((key) => statusOnlyFields.has(key))) ||
+      (assignedToCurrentProfile && createdByCurrentProfile && patchKeys.every((key) => ownAllowedFields.has(key)));
     if (!canUpdateTask) throw new Error("Modification de tâche non autorisée.");
 
     const payload: Database["public"]["Tables"]["tasks"]["Update"] = {};
@@ -6361,7 +6382,7 @@ export default function Home() {
     if (patch.notes !== undefined) payload.notes = patch.notes?.trim() || null;
     if (patch.status !== undefined) payload.status = patch.status;
     if (patch.priority !== undefined && permissions.canManageEvents) payload.priority = patch.priority;
-    if (patch.sortOrder !== undefined && permissions.canManageEvents) payload.sort_order = patch.sortOrder;
+    if (patch.sortOrder !== undefined && (permissions.canManageEvents || createdByCurrentProfile)) payload.sort_order = patch.sortOrder;
 
     const { data, error: updateError } = await supabase
       .from("tasks")
@@ -6375,7 +6396,8 @@ export default function Home() {
   }
 
   async function reorderTasksForAssignee(orderedTasks: AppTask[], assignedProfileId: string | null) {
-    const canReorderTasks = permissions.canManageEvents || assignedProfileId === profile?.id;
+    const canReorderTasks = permissions.canManageEvents ||
+      (assignedProfileId === profile?.id && orderedTasks.every((task) => task.createdBy === profile?.id));
     if (!canReorderTasks) throw new Error("Modification de tâche non autorisée.");
     if (!supabase) throw new Error("Configuration Supabase manquante.");
     const supabaseClient = supabase;
@@ -6412,7 +6434,8 @@ export default function Home() {
   }
 
   async function deleteTask(task: AppTask) {
-    assertCanManageEvents();
+    const canDeleteTask = permissions.canManageEvents || Boolean(profile?.id && task.assignedProfileId === profile.id && task.createdBy === profile.id);
+    if (!canDeleteTask) throw new Error("Suppression de tâche non autorisée.");
     if (!supabase) throw new Error("Configuration Supabase manquante.");
 
     const { error: deleteError } = await supabase
@@ -9526,7 +9549,9 @@ export default function Home() {
           event.id === eventId
             ? {
                 ...event,
-                links: [...event.links, link],
+                links: event.links.some((item) => item.id === link.id)
+                  ? event.links.map((item) => (item.id === link.id ? link : item))
+                  : [...event.links, link],
               }
             : event,
         ),
@@ -11219,7 +11244,7 @@ function AppHeader({
             syncing={syncingPendingActions}
             error={pendingSyncError}
           />
-          {screen === "calendar" && (
+          {(screen === "calendar" || screen === "detail" || screen === "tasks") && (
             <button
               onClick={goToday}
               className={cn(
@@ -11497,8 +11522,7 @@ function TeamTasksSheet({
   const taskPeople = useMemo(() => (profiles.length > 0 ? profiles : currentProfile ? [currentProfile] : []), [currentProfile, profiles]);
   const activeProfile = taskPeople[Math.min(activeProfileIndex, Math.max(taskPeople.length - 1, 0))] ?? null;
   const activeProfileId = activeProfile?.id ?? null;
-  const canManageActiveProfileTasks = Boolean(activeProfileId && (permissions.canManageEvents || activeProfileId === currentProfile?.id));
-  const canCreateForActiveProfile = canManageActiveProfileTasks;
+  const canCreateForActiveProfile = Boolean(activeProfileId && (permissions.canManageEvents || activeProfileId === currentProfile?.id));
   const personTasks = useMemo(() => tasks.filter((task) => task.assignedProfileId === activeProfileId), [activeProfileId, tasks]);
   const todoTasks = useMemo(() => sortTaskQueue(personTasks.filter((task) => task.status === "todo")), [personTasks]);
   const doneTasks = useMemo(() => (
@@ -11514,6 +11538,14 @@ function TeamTasksSheet({
     return [...knownTasks, ...todoTasks.filter((task) => !knownIds.has(task.id))];
   }, [orderIds, todoTasks, todoTasksById]);
   const selectedTask = selectedTaskId ? tasks.find((task) => task.id === selectedTaskId) ?? null : null;
+  const canReorderVisibleTasks = Boolean(
+    activeProfileId &&
+      orderedTodoTasks.length > 1 &&
+      (
+        permissions.canManageEvents ||
+        (activeProfileId === currentProfile?.id && orderedTodoTasks.every((task) => task.createdBy === currentProfile?.id))
+      ),
+  );
 
   useEscapeToClose(onClose);
 
@@ -11616,7 +11648,7 @@ function TeamTasksSheet({
   }
 
   function canDeleteTask(task: AppTask) {
-    return permissions.canManageEvents;
+    return permissions.canManageEvents || Boolean(currentProfile?.id && task.assignedProfileId === currentProfile.id && task.createdBy === currentProfile.id);
   }
 
   async function requestDeleteTask(task: AppTask) {
@@ -11654,7 +11686,7 @@ function TeamTasksSheet({
         selected={selectedTaskId === task.id}
         dragging={draggingId === task.id}
         priorityIndex={priorityIndex}
-        canDrag={!completed && canManageActiveProfileTasks && orderedTodoTasks.length > 1}
+        canDrag={!completed && canReorderVisibleTasks}
         canDelete={canDeleteTask(task)}
         onDelete={() => void requestDeleteTask(task)}
         onOpen={() => openTaskDetail(task.id)}
@@ -11938,9 +11970,12 @@ function AdminTaskDetailPanel({
   const [saving, setSaving] = useState(false);
   const done = task.status === "done";
   const taskTone = getTaskTone(task);
-  const canEdit = permissions.canManageEvents || task.assignedProfileId === currentProfile?.id;
+  const assignedToCurrentProfile = Boolean(currentProfile?.id && task.assignedProfileId === currentProfile.id);
+  const createdByCurrentProfile = Boolean(currentProfile?.id && task.createdBy === currentProfile.id);
+  const canEditContent = permissions.canManageEvents || (assignedToCurrentProfile && createdByCurrentProfile);
+  const canToggleStatus = permissions.canManageEvents || assignedToCurrentProfile;
   const canEditEventLink = permissions.canManageEvents;
-  const canDelete = permissions.canManageEvents;
+  const canDelete = permissions.canManageEvents || (assignedToCurrentProfile && createdByCurrentProfile);
   const eventCandidates = useMemo(() => {
     const query = normalizeLabel(eventQuery);
     if (query.length < 2) return [];
@@ -11962,7 +11997,11 @@ function AdminTaskDetailPanel({
   }, [task.id, task.title, task.notes]);
 
   async function updateTaskSafely(patch: TaskUpdatePatch) {
-    if (!canEdit) return;
+    const patchKeys = Object.keys(patch);
+    const canApplyPatch = permissions.canManageEvents ||
+      (assignedToCurrentProfile && patchKeys.every((key) => key === "status")) ||
+      (canEditContent && patchKeys.every((key) => ["title", "dueDate", "notes", "status", "sortOrder"].includes(key)));
+    if (!canApplyPatch) return;
     setSaving(true);
     setLocalError(null);
     try {
@@ -12012,7 +12051,7 @@ function AdminTaskDetailPanel({
           <input
             {...iosKeyboardGuardProps}
             value={title}
-            disabled={saving || !canEdit}
+            disabled={saving || !canEditContent}
             onFocus={(event) => onNativeFieldFocus?.(event.currentTarget)}
             onChange={(event) => setTitle(event.target.value)}
             onBlur={() => {
@@ -12024,7 +12063,7 @@ function AdminTaskDetailPanel({
             <input
               type="checkbox"
               checked={done}
-              disabled={saving || !canEdit}
+              disabled={saving || !canToggleStatus}
               onChange={(event) => void updateTaskSafely({ status: event.target.checked ? "done" : "todo" })}
               className="h-3.5 w-3.5 rounded border-stone-300 accent-sky-600"
             />
@@ -12036,7 +12075,7 @@ function AdminTaskDetailPanel({
           <span className={cn("mb-1 block px-1 text-xs font-semibold uppercase tracking-[0.08em]", taskTone.meta)}>Échéance</span>
           <button
             type="button"
-            disabled={saving || !canEdit}
+            disabled={saving || !canEditContent}
             onClick={() => setDueDatePickerOpen(true)}
             className={cn("h-10 w-full rounded-xl bg-white/85 px-3 text-left text-sm font-semibold outline-none transition hover:bg-white disabled:text-stone-300", taskTone.actionText)}
           >
@@ -12049,7 +12088,7 @@ function AdminTaskDetailPanel({
           <textarea
             {...iosKeyboardGuardProps}
             value={notes}
-            disabled={saving || !canEdit}
+            disabled={saving || !canEditContent}
             rows={4}
             onFocus={(event) => onNativeFieldFocus?.(event.currentTarget)}
             onChange={(event) => setNotes(event.target.value)}
@@ -13721,6 +13760,7 @@ function ProductionDetail({
   const [confirmDelete, setConfirmDelete] = useState<DeleteSelection | null>(null);
   const [deleteConfirmationOpen, setDeleteConfirmationOpen] = useState(false);
   const [deletingItem, setDeletingItem] = useState(false);
+  const submittingAddRef = useRef(false);
   const detailScrollContainerRef = useRef<HTMLDivElement | null>(null);
   const detailBlockRef = useRef<HTMLDivElement | null>(null);
   const nativeKeyboard = useNativeKeyboardVisibility<HTMLDivElement>();
@@ -13844,7 +13884,8 @@ function ProductionDetail({
   }
 
   async function addOption() {
-    if (submittingAdd) return;
+    if (submittingAddRef.current) return;
+    submittingAddRef.current = true;
     setSubmittingAdd(true);
     setManageError(null);
 
@@ -13854,12 +13895,14 @@ function ProductionDetail({
     } catch (createError) {
       setManageError(getUserFacingErrorMessage(createError, "Impossible d'ajouter l'option."));
     } finally {
+      submittingAddRef.current = false;
       setSubmittingAdd(false);
     }
   }
 
   async function addLink() {
-    if (submittingAdd) return;
+    if (submittingAddRef.current) return;
+    submittingAddRef.current = true;
     setSubmittingAdd(true);
     setManageError(null);
 
@@ -13869,12 +13912,14 @@ function ProductionDetail({
     } catch (createError) {
       setManageError(getUserFacingErrorMessage(createError, "Impossible d'ajouter le lien."));
     } finally {
+      submittingAddRef.current = false;
       setSubmittingAdd(false);
     }
   }
 
   async function addDocumentGroup() {
-    if (submittingAdd) return;
+    if (submittingAddRef.current) return;
+    submittingAddRef.current = true;
     setSubmittingAdd(true);
     setManageError(null);
 
@@ -13884,6 +13929,7 @@ function ProductionDetail({
     } catch (createError) {
       setManageError(getUserFacingErrorMessage(createError, "Impossible d'ajouter le document."));
     } finally {
+      submittingAddRef.current = false;
       setSubmittingAdd(false);
     }
   }
@@ -14366,7 +14412,7 @@ function getAutomaticIcon(label: string, fallbackIcon: LucideIcon) {
 }
 
 function isPlatformLink(link: EventLink) {
-  return platformLinkLabels.has(normalizeLabel(link.label));
+  return platformLinkLabels.has(normalizeCompactLabel(link.label));
 }
 
 function getLinkState(link: EventLink): LinkStatus {
@@ -14382,23 +14428,14 @@ function getLinkState(link: EventLink): LinkStatus {
 }
 
 function getDocumentTone(hasFiles: boolean) {
-  return hasFiles
-    ? {
-        surface: "bg-white/85",
-        border: "border-stone-100",
-        hover: "hover:bg-stone-50",
-        icon: "text-stone-400",
-        text: "text-stone-500",
-        selected: "border-stone-300",
-      }
-    : {
-        surface: "bg-amber-50/80",
-        border: "border-amber-100",
-        hover: "hover:bg-amber-100/60",
-        icon: "text-amber-600",
-        text: "text-stone-700",
-        selected: "border-amber-700",
-      };
+  return {
+    surface: hasFiles ? "bg-amber-50/70" : "bg-amber-50/80",
+    border: "border-amber-100",
+    hover: "hover:bg-amber-100/60",
+    icon: "text-amber-600",
+    text: "text-stone-700",
+    selected: "border-amber-700",
+  };
 }
 
 function getOptionTone(state: CompletionStatus) {
@@ -14430,21 +14467,13 @@ function getTaskTone(task: AppTask) {
 }
 
 function getLinkTone(state: LinkStatus) {
-  return state === "available"
-    ? {
-        surface: "bg-white/85",
-        border: "border-stone-100",
-        hover: "hover:bg-stone-50",
-        icon: "text-stone-400",
-        text: "text-stone-500",
-      }
-    : {
-        surface: "bg-emerald-50/80",
-        border: "border-emerald-100",
-        hover: "hover:bg-emerald-100/55",
-        icon: "text-emerald-600",
-        text: "text-stone-700",
-      };
+  return {
+    surface: state === "available" ? "bg-emerald-50/70" : "bg-emerald-50/80",
+    border: "border-emerald-100",
+    hover: "hover:bg-emerald-100/55",
+    icon: "text-emerald-600",
+    text: "text-stone-700",
+  };
 }
 
 function ProductionTimeCards({ event }: { event: ProductionEvent }) {
@@ -14829,7 +14858,7 @@ function ContextDetailBlock({
     setLastSavedLinkEntrySignature(selectedLink ? serializeLinkEntryDrafts(nextDrafts, selectedLinkIsPlatform) : "[]");
     setLinkSaveError(null);
     setCopiedLinkField(null);
-  }, [selectedLinkId]);
+  }, [selectedLinkId, selectedLinkIsPlatform]);
 
   useEffect(() => {
     if (!copiedLinkField) return;
@@ -15299,7 +15328,10 @@ function ContextDetailBlock({
   const optionTone = getOptionTone(effectiveOptionStatus);
   const optionAssigneeValue = linkedOptionTask?.assignedProfileId ?? "";
   const canAssignOptionTask = permissions.canManageEvents;
-  const canEditLinkedTaskNotes = Boolean(linkedOptionTask && (permissions.canManageEvents || linkedOptionTask.assignedProfileId === profile?.id));
+  const linkedTaskAssignedToCurrentProfile = Boolean(linkedOptionTask && profile?.id && linkedOptionTask.assignedProfileId === profile.id);
+  const linkedTaskCreatedByCurrentProfile = Boolean(linkedOptionTask && profile?.id && linkedOptionTask.createdBy === profile.id);
+  const canToggleLinkedOptionTaskStatus = Boolean(linkedOptionTask && (permissions.canManageEvents || linkedTaskAssignedToCurrentProfile));
+  const canEditLinkedTaskNotes = Boolean(linkedOptionTask && (permissions.canManageEvents || (linkedTaskAssignedToCurrentProfile && linkedTaskCreatedByCurrentProfile)));
 
   async function updateLinkedOptionTask(patch: TaskUpdatePatch) {
     if (!linkedOptionTask) return;
@@ -15334,7 +15366,7 @@ function ContextDetailBlock({
             <input
               type="checkbox"
               checked={linkedOptionTask.status === "done"}
-              disabled={savingCompletedByOverride || !canEditLinkedTaskNotes}
+              disabled={savingCompletedByOverride || !canToggleLinkedOptionTaskStatus}
               onChange={(event) => void updateLinkedOptionTask({ status: event.target.checked ? "done" : "todo" })}
               className="h-3.5 w-3.5 rounded border-stone-300 accent-sky-600"
               aria-label={linkedOptionTask.status === "done" ? "Marquer à faire" : "Marquer terminé"}
