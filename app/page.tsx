@@ -11604,10 +11604,10 @@ function TeamTasksSheet({
                       type="button"
                       onClick={() => selectPerson(index)}
                       className={cn(
-                        "shrink-0 rounded-t-xl px-3 py-2 text-sm font-semibold transition",
+                        "shrink-0 rounded-t-xl border px-3 py-2 text-sm font-semibold transition",
                         active
-                          ? "bg-white text-stone-950 shadow-sm shadow-black/5"
-                          : "bg-white/45 text-stone-500 hover:bg-white/70 hover:text-stone-900",
+                          ? "border-stone-200/80 border-b-white bg-white text-stone-950 shadow-sm shadow-black/5"
+                          : "border-white/70 bg-white/45 text-stone-500 hover:border-stone-200/50 hover:bg-white/70 hover:text-stone-900",
                       )}
                     >
                       {firstName}
@@ -11781,8 +11781,8 @@ const TaskQueueRow = forwardRef<HTMLDivElement, {
         completed
           ? "bg-white/80 opacity-65 hover:bg-stone-50/80"
           : selected
-            ? "bg-white"
-            : "bg-white/80 hover:bg-white",
+            ? "bg-emerald-100/80"
+            : "bg-emerald-50/80 hover:bg-emerald-100/55",
         dragging && "bg-white opacity-90 shadow-sm shadow-black/5",
       )}
       {...draggableProps}
@@ -11790,7 +11790,7 @@ const TaskQueueRow = forwardRef<HTMLDivElement, {
       <span
         className={cn(
           "min-w-0 flex-1 truncate text-left text-base font-semibold leading-snug transition",
-          completed ? "text-stone-400 line-through" : "text-stone-700 group-hover:text-stone-950",
+          completed ? "text-stone-400 line-through" : "text-stone-700 group-hover:text-emerald-950",
         )}
       >
         {task.title}
@@ -14325,11 +14325,11 @@ function getOptionTone(state: CompletionStatus) {
 
 function getTaskTone(task: AppTask) {
   return {
-    panel: "bg-white/85",
-    title: task.status === "done" ? "text-stone-500 line-through" : "text-stone-950",
+    panel: task.status === "done" ? "bg-white/85" : "bg-emerald-50/80",
+    title: task.status === "done" ? "text-stone-500 line-through" : "text-emerald-950",
     body: "text-stone-700",
-    meta: "text-stone-400",
-    actionText: "text-stone-600",
+    meta: task.status === "done" ? "text-stone-400" : "text-emerald-700/70",
+    actionText: task.status === "done" ? "text-stone-600" : "text-emerald-800",
   };
 }
 
