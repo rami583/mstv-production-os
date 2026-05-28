@@ -1441,6 +1441,8 @@ const nativeMstvIcsImportBatchSize = 100;
 const supabaseFetchPageSize = 1000;
 const noCreatableCalendarMessage = "Aucun calendrier synchronisé actif n’est disponible pour créer cet événement.";
 const legacyLocalCalendarImportDisabledMessage = "L’import vers le calendrier local MSTV n’est plus disponible. Choisissez un calendrier Apple ou Google synchronisé.";
+const maxUrgentTasksPerPerson = 3;
+const maxUrgentTasksMessage = "Impossible de marquer plus de 3 tâches urgentes pour cette personne.";
 const cachedAuthSessionKey = "mstv.cachedAuthSession";
 const cachedProfileKeyPrefix = "mstv.cachedProfile.";
 const cachedProfileMetaKeyPrefix = "mstv.cachedProfileMeta.";
@@ -6373,6 +6375,17 @@ export default function Home() {
       (assignedToCurrentProfile && !isTaskUrgent(task) && patchKeys.every((key) => reorderOnlyFields.has(key))) ||
       (assignedToCurrentProfile && createdByCurrentProfile && patchKeys.every((key) => ownAllowedFields.has(key) && (key !== "sortOrder" || !isTaskUrgent(task))));
     if (!canUpdateTask) throw new Error("Modification de tâche non autorisée.");
+    if (patch.priority === "urgent" && !isTaskUrgent(task) && task.status === "todo") {
+      const urgentSiblingCount = tasks.filter((item) => (
+        item.id !== task.id &&
+        item.status === "todo" &&
+        item.assignedProfileId === task.assignedProfileId &&
+        isTaskUrgent(item)
+      )).length;
+      if (urgentSiblingCount >= maxUrgentTasksPerPerson) {
+        throw new Error(maxUrgentTasksMessage);
+      }
+    }
 
     const payload: Database["public"]["Tables"]["tasks"]["Update"] = {};
     if (patch.title !== undefined) {
@@ -11151,10 +11164,7 @@ function TeamTasksSheet({
     return [...mergedTasks.filter(isTaskUrgent), ...mergedTasks.filter((task) => !isTaskUrgent(task))];
   }, [orderIds, todoTasks, todoTasksById]);
   const selectedTask = selectedTaskId ? tasks.find((task) => task.id === selectedTaskId) ?? null : null;
-  const urgentTodoTasks = useMemo(() => orderedTodoTasks.filter(isTaskUrgent), [orderedTodoTasks]);
-  const regularTodoTasks = useMemo(() => orderedTodoTasks.filter((task) => !isTaskUrgent(task)), [orderedTodoTasks]);
-  const urgentIndexById = useMemo(() => new Map(urgentTodoTasks.map((task, index) => [task.id, index])), [urgentTodoTasks]);
-  const regularIndexById = useMemo(() => new Map(regularTodoTasks.map((task, index) => [task.id, index])), [regularTodoTasks]);
+  const visualIndexByTaskId = useMemo(() => new Map(orderedTodoTasks.map((task, index) => [task.id, index])), [orderedTodoTasks]);
 
   useEscapeToClose(onClose);
 
@@ -11262,6 +11272,9 @@ function TeamTasksSheet({
   }
 
   function closeSelectedTaskEditor() {
+    if (selectedTask?.assignedProfileId) {
+      setSelectedProfileId(selectedTask.assignedProfileId);
+    }
     const activeElement = document.activeElement;
     if (activeElement instanceof HTMLElement) {
       activeElement.blur();
@@ -11287,8 +11300,7 @@ function TeamTasksSheet({
   }
 
   function renderQueueTask(task: AppTask, completed = false) {
-    const urgentIndex = !completed && isTaskUrgent(task) ? urgentIndexById.get(task.id) ?? null : null;
-    const priorityIndex = !completed && !isTaskUrgent(task) ? regularIndexById.get(task.id) ?? null : null;
+    const priorityIndex = !completed ? visualIndexByTaskId.get(task.id) ?? null : null;
     if (completed || !canSortAnyVisibleTasks || !canMoveTask(task)) {
       return (
         <TaskQueueRow
@@ -11297,7 +11309,6 @@ function TeamTasksSheet({
           selected={selectedTaskId === task.id}
           completed={completed}
           priorityIndex={priorityIndex}
-          urgentIndex={urgentIndex}
           canDelete={canDeleteTask(task)}
           onDelete={() => void requestDeleteTask(task)}
           onOpen={() => openTaskDetail(task.id)}
@@ -11312,7 +11323,6 @@ function TeamTasksSheet({
         selected={selectedTaskId === task.id}
         dragging={draggingId === task.id}
         priorityIndex={priorityIndex}
-        urgentIndex={urgentIndex}
         canDrag={canMoveTask(task)}
         canDelete={canDeleteTask(task)}
         onDelete={() => void requestDeleteTask(task)}
@@ -11344,13 +11354,18 @@ function TeamTasksSheet({
                       type="button"
                       role="tab"
                       aria-selected={active}
-                      onPointerLeave={(event) => event.currentTarget.blur()}
-                      onClick={() => selectPerson(person.id)}
+                      onPointerDown={(event) => event.currentTarget.blur()}
+                      onPointerUp={(event) => event.currentTarget.blur()}
+                      onPointerCancel={(event) => event.currentTarget.blur()}
+                      onClick={(event) => {
+                        selectPerson(person.id);
+                        event.currentTarget.blur();
+                      }}
                       className={cn(
-                        "shrink-0 rounded-t-xl border px-3 py-2 text-sm font-semibold transition focus:outline-none",
+                        "shrink-0 rounded-t-xl border px-3 py-2 text-sm font-semibold transition focus:bg-transparent focus:shadow-none focus:outline-none focus-visible:bg-transparent focus-visible:shadow-none focus-visible:outline-none active:bg-transparent",
                         active
                           ? "border-stone-200/80 border-b-white bg-white text-stone-950 shadow-sm shadow-black/5"
-                          : "border-stone-200/35 bg-white/20 text-stone-300 hover:bg-white/25 hover:text-stone-400 active:bg-white/20",
+                          : "border-stone-200/35 bg-transparent text-stone-300 hover:bg-transparent hover:text-stone-300 active:bg-transparent active:text-stone-300 focus:text-stone-300",
                       )}
                     >
                       {firstName}
@@ -11437,7 +11452,6 @@ function SortableTaskRow({
   selected,
   dragging = false,
   priorityIndex,
-  urgentIndex,
   canDrag,
   canDelete,
   onDelete,
@@ -11447,7 +11461,6 @@ function SortableTaskRow({
   selected: boolean;
   dragging?: boolean;
   priorityIndex: number | null;
-  urgentIndex: number | null;
   canDrag: boolean;
   canDelete: boolean;
   onDelete: () => void;
@@ -11485,7 +11498,6 @@ function SortableTaskRow({
         selected={selected}
         dragging={rowIsDragging}
         priorityIndex={priorityIndex}
-        urgentIndex={urgentIndex}
         draggable={canDrag}
         draggableProps={canDrag ? ({ ...attributes, ...listeners } as HTMLAttributes<HTMLDivElement>) : undefined}
         canDelete={canDelete}
@@ -11502,7 +11514,6 @@ const TaskQueueRow = forwardRef<HTMLDivElement, {
   completed?: boolean;
   dragging?: boolean;
   priorityIndex?: number | null;
-  urgentIndex?: number | null;
   draggable?: boolean;
   draggableProps?: HTMLAttributes<HTMLDivElement>;
   canDelete?: boolean;
@@ -11514,7 +11525,6 @@ const TaskQueueRow = forwardRef<HTMLDivElement, {
   completed = false,
   dragging = false,
   priorityIndex = null,
-  urgentIndex = null,
   draggable = false,
   draggableProps,
   canDelete = false,
@@ -11544,13 +11554,12 @@ const TaskQueueRow = forwardRef<HTMLDivElement, {
               : priorityIndex === 2
                 ? "bg-sky-50/90 hover:bg-sky-100/55"
                 : "bg-sky-50/55 hover:bg-sky-100/45",
-        !completed && urgentIndex === 0 && "ring-1 ring-rose-400/70",
-        !completed && urgentIndex === 1 && "ring-1 ring-rose-400/50",
-        !completed && urgentIndex === 2 && "ring-1 ring-rose-400/35",
-        !completed && urgentIndex !== null && urgentIndex > 2 && "ring-1 ring-rose-300/25",
-        !completed && priorityIndex === 0 && "ring-1 ring-sky-300/45",
-        !completed && priorityIndex === 1 && "ring-1 ring-sky-300/30",
-        !completed && priorityIndex === 2 && "ring-1 ring-sky-300/20",
+        !completed && isTaskUrgent(task) && priorityIndex === 0 && "ring-1 ring-rose-400/70",
+        !completed && isTaskUrgent(task) && priorityIndex === 1 && "ring-1 ring-rose-400/50",
+        !completed && isTaskUrgent(task) && priorityIndex === 2 && "ring-1 ring-rose-400/35",
+        !completed && !isTaskUrgent(task) && priorityIndex === 0 && "ring-1 ring-sky-300/45",
+        !completed && !isTaskUrgent(task) && priorityIndex === 1 && "ring-1 ring-sky-300/30",
+        !completed && !isTaskUrgent(task) && priorityIndex === 2 && "ring-1 ring-sky-300/20",
         dragging && "bg-white opacity-90 shadow-sm shadow-black/5",
       )}
       {...draggableProps}
