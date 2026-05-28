@@ -12309,16 +12309,19 @@ function YearOverviewMiniMonth({
     >
       <span
         className={cn(
-          "flex w-full min-w-0 flex-1 flex-col overflow-visible rounded-[1.15rem] transition-colors hover:bg-white/[0.28] sm:rounded-[1.2rem]",
-          isVisibleMonth
-            ? "bg-white/[0.58] px-2.5 pb-2.5 pt-2.5 sm:px-3 sm:pb-3 sm:pt-3 lg:px-3.5 lg:pb-3.5 lg:pt-3.5"
-            : "px-1 pb-1.5 pt-1.5 sm:px-2 sm:pb-2 sm:pt-2 lg:px-2.5 lg:pb-2.5 lg:pt-2.5",
+          "relative flex w-full min-w-0 flex-1 flex-col overflow-visible rounded-[1.15rem] px-1 pb-1.5 pt-1.5 transition-colors hover:bg-white/[0.28] sm:rounded-[1.2rem] sm:px-2 sm:pb-2 sm:pt-2 lg:px-2.5 lg:pb-2.5 lg:pt-2.5",
         )}
       >
-      <span className={cn("mb-1.5 block truncate text-xs font-semibold leading-none sm:mb-2 sm:text-sm lg:mb-2", isVisibleMonth ? "text-[#bb2720]" : "text-neutral-950")}>
+      {isVisibleMonth && (
+        <span
+          aria-hidden="true"
+          className="pointer-events-none absolute -inset-1 rounded-[1.35rem] bg-white/[0.58] sm:-inset-1.5 sm:rounded-[1.45rem] lg:-inset-2"
+        />
+      )}
+      <span className={cn("relative z-10 mb-1.5 block truncate text-xs font-semibold leading-none sm:mb-2 sm:text-sm lg:mb-2", isVisibleMonth ? "text-[#bb2720]" : "text-neutral-950")}>
         {monthName}
       </span>
-      <span className="grid min-h-0 grid-cols-7 content-start gap-x-1.5 gap-y-1 sm:gap-x-2.5 sm:gap-y-1.5 lg:gap-x-3 lg:gap-y-1.5">
+      <span className="relative z-10 grid min-h-0 grid-cols-7 content-start gap-x-1.5 gap-y-1 sm:gap-x-2.5 sm:gap-y-1.5 lg:gap-x-3 lg:gap-y-1.5">
         {weekdays.map((weekday, index) => (
           <span key={`${weekday}-${index}`} className={cn("text-center text-[0.5rem] font-semibold leading-[1.1] sm:text-[0.55rem] lg:text-[0.6rem]", index >= 5 ? "text-neutral-300" : "text-neutral-400")}>
             {weekday}
