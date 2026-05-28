@@ -36,7 +36,7 @@ const modalBackdropClassName = "fixed inset-0 z-40 flex bg-black/35";
 const modalSheetPositionClassName = "items-end p-3 sm:items-center sm:justify-center sm:p-6";
 const modalPanelClassName = "rounded-2xl bg-white shadow-sm shadow-black/5";
 const formInputClassName =
-  "h-11 w-full rounded-xl border border-stone-200 bg-white px-3 text-base font-medium text-stone-950 outline-none transition focus:border-[#bb2720]/50";
+  "h-11 w-full rounded-xl border border-neutral-200 bg-white px-3 text-base font-medium text-neutral-950 outline-none transition focus:border-[#bb2720]/50";
 const iosKeyboardGuardProps = { "data-ios-keyboard-guard": "true" } as const;
 
 function useEscapeToClose(onClose: () => void, enabled = true) {
@@ -117,7 +117,7 @@ function TimeTextInput({
 
 function Field({ label, children }: { label: string; children: ReactNode }) {
   return (
-    <label className="block text-sm font-semibold text-stone-500">
+    <label className="block text-sm font-semibold text-neutral-500">
       <span className="mb-1 block">{label}</span>
       {children}
     </label>
@@ -224,8 +224,8 @@ export function EventEditorModal({
         onPointerDown={(pointerEvent) => pointerEvent.stopPropagation()}
       >
         <div className="mb-4 flex shrink-0 items-center justify-between gap-4">
-          <h2 className="text-base font-semibold text-stone-950">{isEditing ? "Modifier l'événement" : "Créer un événement"}</h2>
-          <button type="button" onClick={onClose} className="rounded-xl bg-stone-50 px-3 py-1.5 text-base font-semibold text-stone-600 transition hover:bg-stone-100">
+          <h2 className="text-base font-semibold text-neutral-950">{isEditing ? "Modifier l'événement" : "Créer un événement"}</h2>
+          <button type="button" onClick={onClose} className="rounded-xl bg-neutral-50 px-3 py-1.5 text-base font-semibold text-neutral-600 transition hover:bg-neutral-100">
             Fermer
           </button>
         </div>
@@ -262,7 +262,7 @@ export function EventEditorModal({
                     ))}
                   </select>
                 ) : (
-                  <p className="rounded-xl bg-stone-50 px-3 py-2 text-sm font-semibold text-stone-500">
+                  <p className="rounded-xl bg-neutral-50 px-3 py-2 text-sm font-semibold text-neutral-500">
                     Aucun calendrier synchronisé actif n’est disponible pour créer cet événement.
                   </p>
                 )}
@@ -272,8 +272,8 @@ export function EventEditorModal({
 
           <div className="space-y-1">
             <div className="flex items-center justify-between gap-3">
-              <span className="text-sm font-semibold text-stone-500">Date</span>
-              <label className="flex shrink-0 items-center gap-2 text-sm font-semibold text-stone-600">
+              <span className="text-sm font-semibold text-neutral-500">Date</span>
+              <label className="flex shrink-0 items-center gap-2 text-sm font-semibold text-neutral-600">
                 <span>Jour entier</span>
                 <input
                   {...iosKeyboardGuardProps}
@@ -361,21 +361,21 @@ export function EventEditorModal({
         {error && <div className="mt-4 rounded-2xl bg-rose-50 px-4 py-3 text-base font-medium text-rose-700">{error}</div>}
 
         {timeKeyboardActive && (
-          <div className="-mx-4 mt-3 flex shrink-0 justify-end border-y border-stone-100 bg-stone-50 px-4 py-2 sm:hidden">
-            <button type="button" onPointerDown={(event) => event.preventDefault()} onClick={dismissTimeKeyboard} className="rounded-xl bg-white px-4 py-2 text-base font-semibold text-stone-700 shadow-sm shadow-black/5">
+          <div className="-mx-4 mt-3 flex shrink-0 justify-end border-y border-neutral-100 bg-neutral-50 px-4 py-2 sm:hidden">
+            <button type="button" onPointerDown={(event) => event.preventDefault()} onClick={dismissTimeKeyboard} className="rounded-xl bg-white px-4 py-2 text-base font-semibold text-neutral-700 shadow-sm shadow-black/5">
               Terminé
             </button>
           </div>
         )}
 
         <div
-          className="sticky bottom-0 -mx-4 mt-4 flex shrink-0 justify-end gap-2 border-t border-stone-100 bg-white px-4 pb-[calc(env(safe-area-inset-bottom)+1rem)] pt-4 sm:static sm:mx-0 sm:px-0 sm:pb-0"
+          className="sticky bottom-0 -mx-4 mt-4 flex shrink-0 justify-end gap-2 border-t border-neutral-100 bg-white px-4 pb-[calc(env(safe-area-inset-bottom)+1rem)] pt-4 sm:static sm:mx-0 sm:px-0 sm:pb-0"
           style={nativeKeyboard.footerLiftStyle}
         >
-          <button type="button" onClick={onClose} className="rounded-xl bg-stone-50 px-4 py-2 text-base font-semibold text-stone-600 transition hover:bg-stone-100">
+          <button type="button" onClick={onClose} className="rounded-xl bg-neutral-50 px-4 py-2 text-base font-semibold text-neutral-600 transition hover:bg-neutral-100">
             Annuler
           </button>
-          <button disabled={submitting} className="rounded-xl bg-[#bb2720] px-4 py-2 text-base font-semibold text-white disabled:bg-stone-300">
+          <button disabled={submitting} className="rounded-xl bg-[#bb2720] px-4 py-2 text-base font-semibold text-white disabled:bg-neutral-300">
             {submitting ? (isEditing ? "Modification..." : "Création...") : isEditing ? "Modifier" : "Créer"}
           </button>
         </div>

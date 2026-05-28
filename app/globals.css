@@ -11,14 +11,14 @@
   --app-height: 100svh;
   --app-viewport-offset-top: 0px;
   --surface-card: #ffffff;
-  --surface-muted: color-mix(in srgb, var(--app-background-base) 3%, white);
-  --surface-soft-border: rgba(214, 205, 193, 0.38);
-  --surface-soft-shadow: 0 10px 30px rgba(36, 31, 25, 0.055);
-  --background: 38 35% 95%;
-  --foreground: 24 15% 10%;
-  --muted: 28 9% 43%;
-  --border: 30 17% 86%;
-  --accent: 31 22% 32%;
+  --surface-muted: #fafafa;
+  --surface-soft-border: rgba(214, 214, 214, 0.38);
+  --surface-soft-shadow: 0 10px 30px rgba(32, 32, 32, 0.055);
+  --background: 0 0% 95%;
+  --foreground: 0 0% 10%;
+  --muted: 0 0% 43%;
+  --border: 0 0% 86%;
+  --accent: 0 0% 32%;
 }
 
 * {
@@ -52,7 +52,7 @@ a {
 }
 
 ::selection {
-  background: rgba(191, 171, 139, 0.34);
+  background: rgba(191, 191, 191, 0.34);
 }
 
 .premium-surface {
@@ -61,7 +61,7 @@ a {
 }
 
 .quiet-scrollbar {
-  scrollbar-color: rgba(120, 109, 95, 0.28) transparent;
+  scrollbar-color: rgba(120, 120, 120, 0.28) transparent;
 }
 
 .no-scrollbar {
