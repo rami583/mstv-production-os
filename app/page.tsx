@@ -11537,9 +11537,9 @@ const TaskQueueRow = forwardRef<HTMLDivElement, {
       : priorityIndex === 0
         ? "bg-rose-100/90 hover:bg-rose-100"
         : priorityIndex === 1
-          ? "bg-[#FED7AA]/90 hover:bg-[#FED7AA]"
+          ? "bg-[#FEDFC0]/92 hover:bg-[#FEDFC0]"
           : priorityIndex === 2
-            ? "bg-[#FEF9C3]/95 hover:bg-[#FEF9C3]"
+            ? "bg-[#FEF3B2]/90 hover:bg-[#FEF3B2]"
             : "bg-emerald-100/95 hover:bg-emerald-100";
 
   return (
