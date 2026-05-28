@@ -10852,7 +10852,7 @@ function AppHeader({
 
       <div className="flex min-h-10 items-center justify-between gap-2">
         <div className="flex min-w-0 items-center gap-2">
-          {screen === "calendar" && (
+          {(screen === "calendar" || screen === "detail" || screen === "tasks") && (
             <button
               type="button"
               onClick={onOpenYearOverview}
@@ -13900,7 +13900,7 @@ function ProductionDetail({
                       "group relative flex h-[4.75rem] items-center gap-1.5 overflow-hidden rounded-xl border border-transparent transition sm:h-20 sm:gap-2",
                       linkTone.surface,
                       linkTone.hover,
-                      isSelectedLink && "border-sky-700",
+                      isSelectedLink && "border-blue-700",
                     )}
                   >
                     {isConfirmingDelete ? (
@@ -13916,14 +13916,14 @@ function ProductionDetail({
                           <Icon className={cn("h-4 w-4 shrink-0 sm:h-5 sm:w-5", linkTone.icon)} />
                           <span className={cn("min-w-0 flex-1 truncate pr-5 text-base font-semibold", linkTone.text)}>{link.label}</span>
                         </button>
-                        <ExternalLink className="mr-8 hidden h-4 w-4 shrink-0 text-sky-400 sm:block" />
+                        <ExternalLink className="mr-8 hidden h-4 w-4 shrink-0 text-blue-500 sm:block" />
                         {canDeleteLink && (
                           <button
                             onClick={(event) => {
                               event.stopPropagation();
                               setConfirmDelete({ type: "link", linkId: link.id });
                             }}
-                            className="absolute right-1.5 top-1.5 flex h-6 w-6 items-center justify-center rounded-full text-sky-500 opacity-100 transition hover:bg-white/70 hover:text-sky-800 focus:opacity-100 [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover:opacity-100"
+                            className="absolute right-1.5 top-1.5 flex h-6 w-6 items-center justify-center rounded-full text-blue-600 opacity-100 transition hover:bg-white/70 hover:text-blue-800 focus:opacity-100 [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover:opacity-100"
                             aria-label="Supprimer ce lien"
                           >
                             <X className="h-3.5 w-3.5" />
@@ -14088,11 +14088,11 @@ function getLinkState(link: EventLink): LinkStatus {
   return isLinkEntryDraftComplete({ url: link.url ?? "", streamKey: link.streamKey ?? "" }, isPlatform) ? "available" : "missing";
 }
 
-function getDocumentTone(hasFiles: boolean) {
+function getDocumentTone(_hasFiles: boolean) {
   return {
-    surface: hasFiles ? "bg-amber-50/70" : "bg-amber-50/80",
+    surface: "bg-[#FEF4BD]",
     border: "border-amber-100",
-    hover: "hover:bg-amber-100/60",
+    hover: "hover:bg-[#FEF3B2]",
     icon: "text-amber-600",
     text: "text-stone-700",
     selected: "border-amber-700",
@@ -14109,9 +14109,9 @@ function getOptionTone(state: CompletionStatus) {
         text: "text-stone-500",
       }
     : {
-        surface: "bg-emerald-50/80",
+        surface: "bg-emerald-100/95",
         border: "border-emerald-100",
-        hover: "hover:bg-emerald-100/55",
+        hover: "hover:bg-emerald-100",
         icon: "text-emerald-600",
         text: "text-stone-700",
       };
@@ -14134,8 +14134,8 @@ function getTaskSurfaceTone(task: AppTask, priorityIndex: number | null) {
 
   if (priorityIndex === 1) {
     return {
-      row: "bg-[#FEE2C5] hover:bg-[#FEDFC0]",
-      panel: "bg-[#FEE2C5]",
+      row: "bg-[#FEF4BD] hover:bg-[#FEF3B2]",
+      panel: "bg-[#FEF4BD]",
     };
   }
 
@@ -14163,12 +14163,12 @@ function getTaskTone(task: AppTask, priorityIndex: number | null) {
   };
 }
 
-function getLinkTone(state: LinkStatus) {
+function getLinkTone(_state: LinkStatus) {
   return {
-    surface: state === "available" ? "bg-sky-50/70" : "bg-sky-50/80",
-    border: "border-sky-100",
-    hover: "hover:bg-sky-100/55",
-    icon: "text-sky-600",
+    surface: "bg-[#DBEAFE]",
+    border: "border-blue-100",
+    hover: "hover:bg-blue-100",
+    icon: "text-blue-700",
     text: "text-stone-700",
   };
 }
@@ -14379,7 +14379,7 @@ function LinkValueRow({
 
   return (
     <div className="flex w-full min-w-0 items-center gap-2">
-      <div className={cn("inline-flex min-h-9 min-w-0 flex-1 items-center gap-2 rounded-full border border-transparent px-3 py-1.5 transition focus-within:border-sky-300", rowTone.surface)}>
+      <div className={cn("inline-flex min-h-9 min-w-0 flex-1 items-center gap-2 rounded-full border border-transparent px-3 py-1.5 transition focus-within:border-blue-300", rowTone.surface)}>
         <Icon className={cn("h-4 w-4 shrink-0", rowTone.icon)} />
         {editable ? (
           <input
@@ -14412,7 +14412,7 @@ function LinkValueRow({
               }
             }}
             placeholder={placeholder}
-            className={cn("min-w-0 flex-1 bg-transparent text-base font-semibold outline-none placeholder:text-sky-300 disabled:opacity-70", rowTone.text)}
+            className={cn("min-w-0 flex-1 bg-transparent text-base font-semibold outline-none placeholder:text-blue-300 disabled:opacity-70", rowTone.text)}
           />
         ) : canOpen ? (
           <button
@@ -14437,7 +14437,7 @@ function LinkValueRow({
           rowTone.surface,
           rowTone.icon,
           rowTone.hover,
-          copied && "bg-sky-200 text-sky-900",
+          copied && "bg-blue-200 text-blue-900",
         )}
         aria-label={copyLabel}
       >
@@ -14846,7 +14846,7 @@ function ContextDetailBlock({
             value={selectedLink.label}
             onSave={renameSelectedLink}
             className="truncate"
-            inputClassName="text-sky-950 focus:border-sky-300"
+            inputClassName="text-blue-950 focus:border-blue-300"
             editable={canRenameSelectedLink}
             onFocusTarget={onNativeFieldFocus}
           />
@@ -18849,10 +18849,10 @@ function InlineGridDeleteConfirmation({
 }) {
   const toneClassName =
     tone === "option"
-      ? "bg-emerald-50/80"
+      ? "bg-emerald-100/95"
       : tone === "link"
-        ? "bg-sky-50/80"
-        : "bg-amber-50/80";
+        ? "bg-[#DBEAFE]"
+        : "bg-[#FEF4BD]";
 
   return (
     <div className={cn("flex h-[4.75rem] min-w-0 flex-1 items-center justify-center rounded-[0.65rem] px-2 py-2.5 transition sm:h-20 sm:px-3", toneClassName)}>
