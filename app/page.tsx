@@ -68,6 +68,7 @@ import {
   type CSSProperties,
   type Dispatch,
   type HTMLAttributes,
+  type MouseEvent as ReactMouseEvent,
   type PointerEvent as ReactPointerEvent,
   type ReactNode,
   type SetStateAction,
@@ -920,10 +921,11 @@ const EVENT_SWIPE_AXIS_ACTIVATION_PX = 8;
 const EVENT_SWIPE_HORIZONTAL_DOMINANCE = 1.12;
 const EVENT_DETAIL_CAROUSEL_TRANSITION_MS = 240;
 const EVENT_DETAIL_CAROUSEL_EASING = "cubic-bezier(0.22, 1, 0.36, 1)";
-const TASK_DETAIL_SWIPE_THRESHOLD_PX = 50;
+const TASK_DETAIL_SWIPE_THRESHOLD_PX = 60;
 const TASK_DETAIL_SWIPE_HORIZONTAL_DOMINANCE = 1.5;
 const TASK_DETAIL_SWIPE_AXIS_DOMINANCE = 1.2;
-const TASK_DETAIL_SWIPE_BLOCK_SELECTOR = "input, textarea, select, button, a, label, [role='button'], [contenteditable='true'], [data-task-swipe-block]";
+const TASK_DETAIL_ACTIVE_EDIT_SELECTOR = "input, textarea, select, [contenteditable='true']";
+const TASK_DETAIL_SWIPE_BLOCK_SELECTOR = "[data-task-swipe-block]";
 
 function getSwipePageStep(viewportWidth: number) {
   return viewportWidth + PAGE_GAP;
@@ -11249,6 +11251,7 @@ function TeamTasksSheet({
   const nativeKeyboard = useNativeKeyboardVisibility<HTMLDivElement>();
   const suppressTaskOpenRef = useRef(false);
   const taskDetailSwipeStartRef = useRef<{ pointerId: number; x: number; y: number; axis: "horizontal" | "vertical" | null } | null>(null);
+  const suppressTaskDetailClickRef = useRef(false);
   const taskDetailSlideFrameRef = useRef<number | null>(null);
   const [selectedProfileId, setSelectedProfileId] = useState<string | null>(() => currentProfile?.id ?? null);
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
@@ -11434,19 +11437,19 @@ function TeamTasksSheet({
     window.setTimeout(() => setSelectedTaskId(null), 0);
   }
 
-  function isTaskDetailSwipeTarget(target: EventTarget | null) {
+  function shouldBlockTaskDetailSwipeStart(target: EventTarget | null) {
     if (!(target instanceof HTMLElement)) return false;
-    if (target.closest(TASK_DETAIL_SWIPE_BLOCK_SELECTOR)) return false;
+    if (target.closest(TASK_DETAIL_SWIPE_BLOCK_SELECTOR)) return true;
 
     const activeElement = document.activeElement;
     if (
       activeElement instanceof HTMLElement &&
-      activeElement.closest(TASK_DETAIL_SWIPE_BLOCK_SELECTOR)
+      activeElement.closest(TASK_DETAIL_ACTIVE_EDIT_SELECTOR)
     ) {
-      return false;
+      return true;
     }
 
-    return true;
+    return false;
   }
 
   function resetTaskDetailSwipe() {
@@ -11477,7 +11480,7 @@ function TeamTasksSheet({
   }
 
   function handleTaskDetailSwipePointerDown(pointerEvent: ReactPointerEvent<HTMLDivElement>) {
-    if (taskDetailSlide || taskDetailSwipeStartRef.current || pointerEvent.pointerType === "mouse" || !isTaskDetailSwipeTarget(pointerEvent.target)) return;
+    if (taskDetailSlide || taskDetailSwipeStartRef.current || pointerEvent.pointerType === "mouse" || shouldBlockTaskDetailSwipeStart(pointerEvent.target)) return;
     if (selectedTaskNavigationTasks.length <= 1) return;
 
     taskDetailSwipeStartRef.current = {
@@ -11524,8 +11527,19 @@ function TeamTasksSheet({
     resetTaskDetailSwipe();
 
     if (Math.abs(deltaX) >= TASK_DETAIL_SWIPE_THRESHOLD_PX && Math.abs(deltaX) >= Math.abs(deltaY) * TASK_DETAIL_SWIPE_HORIZONTAL_DOMINANCE) {
+      suppressTaskDetailClickRef.current = true;
+      window.setTimeout(() => {
+        suppressTaskDetailClickRef.current = false;
+      }, 0);
+      pointerEvent.preventDefault();
       navigateSelectedTaskByDirection(deltaX < 0 ? 1 : -1);
     }
+  }
+
+  function handleTaskDetailClickCapture(event: ReactMouseEvent<HTMLDivElement>) {
+    if (!suppressTaskDetailClickRef.current) return;
+    event.preventDefault();
+    event.stopPropagation();
   }
 
   function canDeleteTask(task: AppTask) {
@@ -11664,6 +11678,7 @@ function TeamTasksSheet({
               onPointerMoveCapture={handleTaskDetailSwipePointerMove}
               onPointerUpCapture={handleTaskDetailSwipePointerUp}
               onPointerCancelCapture={resetTaskDetailSwipe}
+              onClickCapture={handleTaskDetailClickCapture}
               onClick={(event) => {
                 if (event.target === event.currentTarget) closeSelectedTaskEditor();
               }}
@@ -11991,6 +12006,7 @@ function AdminTaskDetailPanel({
         {canDelete && (
           <button
             type="button"
+            data-task-swipe-block
             onClick={() => void requestDeleteTask()}
             disabled={saving}
             className="h-9 rounded-xl bg-[#bb2720]/[0.07] px-3 text-sm font-semibold text-[#bb2720] transition hover:bg-[#bb2720]/[0.11] disabled:text-neutral-300"
