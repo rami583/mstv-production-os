@@ -283,6 +283,7 @@ type EventOption = {
   status: CompletionStatus;
   details: string | null;
   taskId: string | null;
+  externalAssigneeName: string | null;
   completedByProfileId: string | null;
   completedByLabel: string | null;
   completedByInitials: string | null;
@@ -290,6 +291,11 @@ type EventOption = {
   createdAt: string;
   items: EventOptionItem[];
 } & CreatorMetadata;
+
+type OptionTaskAssignment =
+  | { type: "profile"; profileId: string }
+  | { type: "external"; name: string | null }
+  | { type: "none" };
 
 type EventOptionItem = {
   id: string;
@@ -3243,6 +3249,7 @@ function mapEvent(row: EventQueryRow): ProductionEvent {
       status: option.status,
       details: option.details,
       taskId: option.task_id ?? null,
+      externalAssigneeName: option.external_assignee_name ?? null,
       completedByProfileId: option.completed_by_profile_id ?? null,
       completedByLabel: option.completed_by_label ?? null,
       completedByInitials: option.completed_by_initials ?? null,
@@ -8120,23 +8127,27 @@ export default function Home() {
     });
   }
 
-  async function assignOptionTask(option: EventOption, assignedProfileId: string | null) {
+  async function assignOptionTask(option: EventOption, assignment: OptionTaskAssignment) {
     assertCanManageEvents();
     if (!supabase) throw new Error("Configuration Supabase manquante.");
     const supabaseClient = supabase;
 
     const currentLinkedTask = option.taskId ? tasks.find((task) => task.id === option.taskId) ?? null : null;
+    const assignedProfileId = assignment.type === "profile" ? assignment.profileId : null;
+    const externalAssigneeName = assignment.type === "external" ? assignment.name?.trim() || null : null;
     const assignedProfile = assignedProfileId ? taskProfiles.find((userProfile) => userProfile.id === assignedProfileId) ?? null : null;
     if (assignedProfileId && !assignedProfile) {
       throw new Error("Profil assigné introuvable.");
     }
 
-    async function updateOptionLink(task: AppTask | null) {
+    async function updateOptionLink(task: AppTask | null, nextExternalAssigneeName: string | null) {
       const assigneeLabel = task && assignedProfile ? getProfileOptionLabel(assignedProfile) : null;
       const assigneeInitials = assignedProfile ? getProfileInitials(assignedProfile, assignedProfile.email ?? undefined) : null;
+      const assignmentLabel = assigneeLabel ?? nextExternalAssigneeName;
       const completed = task?.status === "done";
       const updatePayload: Database["public"]["Tables"]["event_options"]["Update"] = {
         task_id: task?.id ?? null,
+        external_assignee_name: nextExternalAssigneeName,
         status: completed ? "completed" : "incomplete",
         completed_by_profile_id: completed ? task.assignedProfileId : null,
         completed_by_label: completed ? assigneeLabel : null,
@@ -8161,6 +8172,7 @@ export default function Home() {
                     ? {
                         ...item,
                         taskId: updatePayload.task_id ?? null,
+                        externalAssigneeName: updatePayload.external_assignee_name ?? null,
                         status: updatePayload.status ?? item.status,
                         completedByProfileId: updatePayload.completed_by_profile_id ?? null,
                         completedByLabel: updatePayload.completed_by_label ?? null,
@@ -8179,9 +8191,10 @@ export default function Home() {
         actionType: "option_task_assignment_changed",
         entityType: "option",
         entityId: option.id,
-        description: task ? `Option ${option.label} assignée à ${assigneeLabel ?? "Non assignée"}` : `Assignation de l'option ${option.label} retirée`,
+        description: assignmentLabel ? `Option ${option.label} assignée à ${assignmentLabel}` : `Assignation de l'option ${option.label} retirée`,
         previousValue: {
           taskId: option.taskId,
+          externalAssigneeName: option.externalAssigneeName,
           completedByProfileId: option.completedByProfileId,
           completedByLabel: option.completedByLabel,
           status: option.status,
@@ -8189,12 +8202,13 @@ export default function Home() {
         newValue: {
           taskId: updatePayload.task_id ?? null,
           assignedProfileId: task?.assignedProfileId ?? null,
+          externalAssigneeName: nextExternalAssigneeName,
           status: updatePayload.status,
         },
       });
     }
 
-    if (!assignedProfileId) {
+    if (assignment.type !== "profile") {
       if (currentLinkedTask) {
         await updateTask(currentLinkedTask, {
           assignedProfileId: null,
@@ -8207,10 +8221,10 @@ export default function Home() {
           sortOrder: null,
           status: "todo",
           completedAt: null,
-        });
+        }, externalAssigneeName);
         return;
       }
-      await updateOptionLink(null);
+      await updateOptionLink(null, externalAssigneeName);
       return;
     }
 
@@ -8221,7 +8235,7 @@ export default function Home() {
         assignedProfileId,
         sortOrder: nextSortOrder,
       });
-      await updateOptionLink({ ...currentLinkedTask, title: option.label, assignedProfileId, sortOrder: nextSortOrder });
+      await updateOptionLink({ ...currentLinkedTask, title: option.label, assignedProfileId, sortOrder: nextSortOrder }, null);
       return;
     }
 
@@ -8232,7 +8246,7 @@ export default function Home() {
       priority: "normal",
       dueDate: events.find((event) => event.id === option.eventId)?.date ?? null,
     });
-    await updateOptionLink(createdTask);
+    await updateOptionLink(createdTask, null);
   }
 
   async function updateOptionTaskDueDate(option: EventOption, dueDate: string | null) {
@@ -8248,6 +8262,7 @@ export default function Home() {
       const completed = task.status === "done";
       const updatePayload: Database["public"]["Tables"]["event_options"]["Update"] = {
         task_id: task.id,
+        external_assignee_name: option.externalAssigneeName ?? null,
         status: completed ? "completed" : "incomplete",
         completed_by_profile_id: completed ? task.assignedProfileId : null,
         completed_by_label: completed ? assigneeLabel : null,
@@ -8272,6 +8287,7 @@ export default function Home() {
                     ? {
                         ...item,
                         taskId: task.id,
+                        externalAssigneeName: updatePayload.external_assignee_name ?? null,
                         status: updatePayload.status ?? item.status,
                         completedByProfileId: updatePayload.completed_by_profile_id ?? null,
                         completedByLabel: updatePayload.completed_by_label ?? null,
@@ -8548,6 +8564,7 @@ export default function Home() {
         status: "incomplete",
         details: null,
         taskId: null,
+        externalAssigneeName: null,
         completedByProfileId: null,
         completedByLabel: null,
         completedByInitials: null,
@@ -8625,6 +8642,7 @@ export default function Home() {
       status: data.status,
       details: data.details,
       taskId: data.task_id ?? null,
+      externalAssigneeName: data.external_assignee_name ?? null,
       completedByProfileId: data.completed_by_profile_id ?? null,
       completedByLabel: data.completed_by_label ?? null,
       completedByInitials: data.completed_by_initials ?? null,
@@ -10826,7 +10844,7 @@ function AppHeader({
               className={cn(
                 "rounded-full border px-2.5 py-2 text-base font-semibold transition sm:px-3",
                 isSelectedDateToday
-                  ? "border-transparent bg-rose-50 text-rose-700 hover:bg-rose-100"
+                  ? "border-transparent bg-[#bb2720]/[0.07] text-[#bb2720] hover:bg-[#bb2720]/[0.11]"
                   : "border-transparent bg-white text-neutral-700 hover:bg-neutral-50",
               )}
               aria-pressed={isSelectedDateToday}
@@ -11531,7 +11549,7 @@ const TaskQueueRow = forwardRef<HTMLDivElement, {
       {...draggableProps}
     >
       {!completed && isTaskUrgent(task) && (
-        <AlertCircle className="h-3.5 w-3.5 shrink-0 text-rose-600/80" aria-label="Urgent" />
+        <AlertCircle className="h-3.5 w-3.5 shrink-0 text-[#bb2720]" aria-label="Urgent" />
       )}
       <span
         className={cn(
@@ -11659,7 +11677,7 @@ function AdminTaskDetailPanel({
     <>
     <div className={cn("rounded-2xl p-3", taskTone.panel)}>
       <div className="mb-3 flex items-center justify-between gap-2">
-        <button type="button" onClick={onClose} className={cn("rounded-xl bg-white/80 px-3 py-1.5 text-sm font-semibold transition hover:bg-white", taskTone.actionText)}>
+        <button type="button" onClick={onClose} className={cn("rounded-xl bg-white px-3 py-1.5 text-sm font-semibold transition hover:bg-neutral-50", taskTone.actionText)}>
           Retour
         </button>
         {canDelete && (
@@ -11667,7 +11685,7 @@ function AdminTaskDetailPanel({
             type="button"
             onClick={() => void requestDeleteTask()}
             disabled={saving}
-            className="h-9 rounded-xl bg-rose-50 px-3 text-sm font-semibold text-rose-700 transition hover:bg-rose-100 disabled:text-neutral-300"
+            className="h-9 rounded-xl bg-[#bb2720]/[0.07] px-3 text-sm font-semibold text-[#bb2720] transition hover:bg-[#bb2720]/[0.11] disabled:text-neutral-300"
           >
             Supprimer
           </button>
@@ -11685,10 +11703,10 @@ function AdminTaskDetailPanel({
             onBlur={() => {
               if (title.trim() !== task.title) void updateTaskSafely({ title });
             }}
-            className={cn("h-10 min-w-0 rounded-xl bg-white/85 px-3 text-base font-semibold outline-none transition focus:bg-white", done ? "text-neutral-500 line-through" : taskTone.title)}
+            className={cn("h-10 min-w-0 rounded-xl bg-white px-3 text-base font-semibold outline-none transition focus:bg-white", done ? "text-neutral-500 line-through" : taskTone.title)}
           />
           <label className={cn(
-            "flex h-10 shrink-0 items-center gap-1.5 rounded-xl bg-white/80 px-2 text-xs font-semibold text-neutral-600 transition sm:px-3 sm:text-sm",
+            "flex h-10 shrink-0 items-center gap-1.5 rounded-xl bg-[#bb2720]/[0.07] px-2 text-xs font-semibold text-[#bb2720] transition hover:bg-[#bb2720]/[0.11] sm:px-3 sm:text-sm",
             !canEditUrgent && "opacity-70",
           )}>
             <input
@@ -11696,11 +11714,11 @@ function AdminTaskDetailPanel({
               checked={isTaskUrgent(task)}
               disabled={saving || !canEditUrgent}
               onChange={(event) => void updateTaskSafely({ priority: event.target.checked ? "urgent" : "normal" })}
-              className="h-3.5 w-3.5 rounded border-neutral-300 accent-neutral-600"
+              className="h-3.5 w-3.5 rounded border-neutral-300 accent-[#bb2720]"
             />
             Urgent
           </label>
-          <label className={cn("flex h-10 shrink-0 items-center gap-1.5 rounded-xl bg-white/80 px-2 text-xs font-semibold transition sm:px-3 sm:text-sm", taskTone.actionText)}>
+          <label className={cn("flex h-10 shrink-0 items-center gap-1.5 rounded-xl bg-white px-2 text-xs font-semibold transition sm:px-3 sm:text-sm", taskTone.actionText)}>
             <input
               type="checkbox"
               checked={done}
@@ -11718,7 +11736,7 @@ function AdminTaskDetailPanel({
             type="button"
             disabled={saving || !canEditContent}
             onClick={() => setDueDatePickerOpen(true)}
-            className={cn("h-10 w-full rounded-xl bg-white/85 px-3 text-left text-base font-semibold outline-none transition hover:bg-white disabled:text-neutral-300", taskTone.actionText)}
+            className={cn("h-10 w-full rounded-xl bg-white px-3 text-left text-base font-semibold outline-none transition hover:bg-neutral-50 disabled:text-neutral-300", taskTone.actionText)}
           >
             {task.dueDate ? formatFullDate(task.dueDate) : "Choisir une date"}
           </button>
@@ -11736,13 +11754,13 @@ function AdminTaskDetailPanel({
             onBlur={() => {
               if (notes.trim() !== (task.notes ?? "")) void updateTaskSafely({ notes });
             }}
-            className={cn("min-h-24 w-full resize-none rounded-xl bg-white/85 px-3 py-2 text-base font-medium leading-relaxed outline-none transition placeholder:text-neutral-300 focus:bg-white", taskTone.body)}
+            className={cn("min-h-24 w-full resize-none rounded-xl bg-white px-3 py-2 text-base font-medium leading-relaxed outline-none transition placeholder:text-neutral-300 focus:bg-white", taskTone.body)}
             placeholder="Notes"
           />
         </label>
       </div>
 
-      <div className="mt-2 rounded-xl bg-white/70 px-3 py-2">
+      <div className="mt-2 rounded-xl bg-white px-3 py-2">
         <div className="mb-1 flex items-center justify-between gap-2">
           <span className={cn("text-xs font-semibold uppercase tracking-[0.08em]", taskTone.meta)}>Événement lié</span>
           {linkedEvent && canEditEventLink && (
@@ -11775,7 +11793,7 @@ function AdminTaskDetailPanel({
               disabled={saving}
               onFocus={(event) => onNativeFieldFocus?.(event.currentTarget)}
               onChange={(event) => setEventQuery(event.target.value)}
-              className="h-9 w-full rounded-xl bg-white/85 px-3 text-base font-semibold text-neutral-700 outline-none transition placeholder:text-neutral-300 focus:bg-white"
+              className="h-9 w-full rounded-xl bg-white px-3 text-base font-semibold text-neutral-700 outline-none transition placeholder:text-neutral-300 focus:bg-white"
               placeholder="Rechercher un événement"
             />
             {eventCandidates.length > 0 && (
@@ -11791,7 +11809,7 @@ function AdminTaskDetailPanel({
                         setEventQuery("");
                         void updateTaskSafely({ eventId: event.id });
                       }}
-                      className="grid min-w-0 gap-0.5 rounded-lg bg-white/65 px-2 py-1.5 text-left transition hover:bg-white disabled:text-neutral-300"
+                      className="grid min-w-0 gap-0.5 rounded-lg bg-white px-2 py-1.5 text-left transition hover:bg-neutral-50 disabled:text-neutral-300"
                     >
                       <span className="truncate text-sm font-semibold text-neutral-700">{display.title}</span>
                       <span className="truncate text-xs font-semibold text-neutral-400">{formatShortDate(event.date)}</span>
@@ -12291,8 +12309,10 @@ function YearOverviewMiniMonth({
     >
       <span
         className={cn(
-          "flex w-full min-w-0 flex-1 flex-col overflow-visible rounded-[1.15rem] px-1 pb-1.5 pt-1.5 transition-colors hover:bg-white/[0.28] sm:rounded-[1.2rem] sm:px-2 sm:pb-2 sm:pt-2 lg:px-2.5 lg:pb-2.5 lg:pt-2.5",
-          isVisibleMonth && "bg-white/[0.58]",
+          "flex w-full min-w-0 flex-1 flex-col overflow-visible rounded-[1.15rem] transition-colors hover:bg-white/[0.28] sm:rounded-[1.2rem]",
+          isVisibleMonth
+            ? "bg-white/[0.58] px-2 pb-2 pt-2 ring-1 ring-[#bb2720]/20 ring-inset sm:px-3 sm:pb-3 sm:pt-3 lg:px-3.5 lg:pb-3.5 lg:pt-3.5"
+            : "px-1 pb-1.5 pt-1.5 sm:px-2 sm:pb-2 sm:pt-2 lg:px-2.5 lg:pb-2.5 lg:pt-2.5",
         )}
       >
       <span className={cn("mb-1.5 block truncate text-xs font-semibold leading-none sm:mb-2 sm:text-sm lg:mb-2", isVisibleMonth ? "text-[#bb2720]" : "text-neutral-950")}>
@@ -13385,7 +13405,7 @@ function ProductionDetail({
   goNext: () => void;
   showHeaderControls: boolean;
   onEditEvent: () => void;
-  onAssignOptionTask: (option: EventOption, assignedProfileId: string | null) => Promise<void>;
+  onAssignOptionTask: (option: EventOption, assignment: OptionTaskAssignment) => Promise<void>;
   onUpdateOptionTaskDueDate: (option: EventOption, dueDate: string | null) => Promise<void>;
   onCreateOption: (eventId: string, label: string) => Promise<EventOption>;
   onDeleteOption: (option: EventOption) => Promise<void>;
@@ -13797,8 +13817,8 @@ function ProductionDetail({
                 const Icon = getOptionIcon(option.label);
                 const optionStatus = getOptionEffectiveStatus(option, tasks);
                 const optionTone = getOptionTone(optionStatus);
-                const optionCompletedName = optionStatus === "completed" ? getOptionAssigneeLabel(option, tasks, profiles) : null;
-                const showOptionMeta = Boolean(optionCompletedName);
+                const optionAssigneeName = getOptionAssigneeLabel(option, tasks, profiles);
+                const showOptionMeta = Boolean(optionAssigneeName);
                 const isSelectedOption = contextSelection?.type === "option" && contextSelection.optionId === option.id;
                 const isConfirmingDelete = confirmDelete?.type === "option" && confirmDelete.optionId === option.id;
                 const canManageOptionStructure = canManageCreatedEntity(permissions, profile, option);
@@ -13833,9 +13853,9 @@ function ProductionDetail({
                       {showOptionMeta ? (
                         <>
                           <span className="flex max-w-full shrink-0 items-center gap-1 overflow-hidden">
-                            {optionCompletedName && (
+                            {optionAssigneeName && (
                               <span className="inline-flex h-5 min-w-0 items-center rounded-full bg-neutral-50 px-2 text-[0.7rem] font-bold leading-none text-neutral-500 sm:text-xs">
-                                <span className="truncate">{optionCompletedName}</span>
+                                <span className="truncate">{optionAssigneeName}</span>
                               </span>
                             )}
                           </span>
@@ -14144,7 +14164,7 @@ function getTaskSurfaceTone(task: AppTask, priorityIndex: number | null) {
 
 function getTaskTone(task: AppTask) {
   return {
-    panel: "bg-[#E5E5E5]",
+    panel: "bg-[#F2F2F2]",
     title: task.status === "done" ? "text-neutral-500 line-through" : "text-neutral-950",
     body: "text-neutral-700",
     meta: "text-neutral-400",
@@ -14483,7 +14503,7 @@ function ContextDetailBlock({
   selection: ContextSelection;
   tasks: AppTask[];
   profiles: UserProfile[];
-  onAssignOptionTask: (option: EventOption, assignedProfileId: string | null) => Promise<void>;
+  onAssignOptionTask: (option: EventOption, assignment: OptionTaskAssignment) => Promise<void>;
   onUpdateOptionTaskDueDate: (option: EventOption, dueDate: string | null) => Promise<void>;
   onRenameOption: (option: EventOption, label: string) => Promise<EventOption>;
   onCreateOptionItem: (option: EventOption, label: string) => Promise<EventOptionItem>;
@@ -14528,6 +14548,7 @@ function ContextDetailBlock({
   const [completedByOverrideError, setCompletedByOverrideError] = useState<string | null>(null);
   const [optionDueDatePickerOpen, setOptionDueDatePickerOpen] = useState(false);
   const [optionTaskNotesInput, setOptionTaskNotesInput] = useState(selectedLinkedOptionTask?.notes ?? "");
+  const [externalAssigneeInput, setExternalAssigneeInput] = useState(selectedOption?.externalAssigneeName ?? "");
   const [titleRenameError, setTitleRenameError] = useState<string | null>(null);
   const [draggingDocumentFiles, setDraggingDocumentFiles] = useState(false);
   const [uploadingDocumentFiles, setUploadingDocumentFiles] = useState(false);
@@ -14568,11 +14589,12 @@ function ContextDetailBlock({
     setCompletedByOverrideError(null);
     setOptionDueDatePickerOpen(false);
     setOptionTaskNotesInput(selectedLinkedOptionTask?.notes ?? "");
+    setExternalAssigneeInput(selectedOption?.externalAssigneeName ?? "");
     setTitleRenameError(null);
     setDraggingDocumentFiles(false);
     setUploadingDocumentFiles(false);
     setDocumentOpenError(null);
-  }, [selectedDocumentGroupId, selectedLinkId, selectedOptionId, selectedLinkedOptionTask?.id, selectedLinkedOptionTask?.notes]);
+  }, [selectedDocumentGroupId, selectedLinkId, selectedOptionId, selectedLinkedOptionTask?.id, selectedLinkedOptionTask?.notes, selectedOption?.externalAssigneeName]);
 
   async function copyLinkValue(value: string | null | undefined, field: string) {
     const valueToCopy = value?.trim();
@@ -14781,18 +14803,25 @@ function ContextDetailBlock({
     }
   }
 
-  async function changeSelectedOptionAssignee(assignedProfileId: string | null) {
+  async function changeSelectedOptionAssignee(assignment: OptionTaskAssignment) {
     if (!selectedOption) return;
     setSavingCompletedByOverride(true);
     setCompletedByOverrideError(null);
 
     try {
-      await onAssignOptionTask(selectedOption, assignedProfileId);
+      await onAssignOptionTask(selectedOption, assignment);
     } catch (overrideError) {
       setCompletedByOverrideError(getUserFacingErrorMessage(overrideError, "Impossible de modifier l'assignation."));
     } finally {
       setSavingCompletedByOverride(false);
     }
+  }
+
+  async function commitExternalOptionAssignee() {
+    if (!selectedOption) return;
+    const nextName = externalAssigneeInput.trim();
+    if (nextName === (selectedOption.externalAssigneeName ?? "")) return;
+    await changeSelectedOptionAssignee({ type: "external", name: nextName || null });
   }
 
   async function renameSelectedLink(label: string) {
@@ -15012,7 +15041,11 @@ function ContextDetailBlock({
   const linkedOptionTask = selectedLinkedOptionTask;
   const effectiveOptionStatus = getOptionEffectiveStatus(selectedOption, tasks);
   const optionTone = getOptionTone(effectiveOptionStatus);
-  const optionAssigneeValue = linkedOptionTask?.assignedProfileId ?? "";
+  const optionAssigneeValue = linkedOptionTask?.assignedProfileId
+    ? `profile:${linkedOptionTask.assignedProfileId}`
+    : selectedOption.externalAssigneeName
+      ? "external"
+      : "";
   const canAssignOptionTask = permissions.canManageEvents;
   const linkedTaskAssignedToCurrentProfile = Boolean(linkedOptionTask && profile?.id && linkedOptionTask.assignedProfileId === profile.id);
   const linkedTaskCreatedByCurrentProfile = Boolean(linkedOptionTask && profile?.id && linkedOptionTask.createdBy === profile.id);
@@ -15063,7 +15096,7 @@ function ContextDetailBlock({
       </div>
       {titleRenameError && <div className="mt-2 text-base font-medium text-rose-700">{titleRenameError}</div>}
       {canAssignOptionTask && (
-        <div className="mt-3 grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)] items-end gap-2 rounded-xl bg-emerald-50/70 px-3 py-2">
+        <div className="mt-3 grid grid-cols-2 items-end gap-2 rounded-xl bg-emerald-50/70 px-3 py-2">
           <label className="grid min-w-0 gap-1">
             <span className="text-xs font-semibold uppercase tracking-[0.08em] text-emerald-700/70">Assigné à</span>
             <select
@@ -15071,17 +15104,49 @@ function ContextDetailBlock({
               value={optionAssigneeValue}
               disabled={savingCompletedByOverride}
               onFocus={(event) => onNativeFieldFocus(event.currentTarget)}
-              onChange={(event) => void changeSelectedOptionAssignee(event.target.value || null)}
+              onChange={(event) => {
+                const nextValue = event.target.value;
+                if (!nextValue) {
+                  void changeSelectedOptionAssignee({ type: "none" });
+                  return;
+                }
+                if (nextValue === "external") {
+                  const nextExternalName = externalAssigneeInput.trim() || selectedOption.externalAssigneeName || "Externe";
+                  setExternalAssigneeInput(nextExternalName);
+                  void changeSelectedOptionAssignee({ type: "external", name: nextExternalName });
+                  return;
+                }
+                if (nextValue.startsWith("profile:")) {
+                  void changeSelectedOptionAssignee({ type: "profile", profileId: nextValue.slice("profile:".length) });
+                }
+              }}
               className="h-8 w-full min-w-0 rounded-full border border-transparent bg-white/80 px-2 text-sm font-semibold text-emerald-800 outline-none transition focus:border-emerald-300 focus:bg-white disabled:text-emerald-400 sm:px-3 sm:text-base"
               aria-label="Assigner l'option"
             >
               <option value="">Non assignée</option>
+              <option value="external">Externe</option>
               {profiles.map((userProfile) => (
-                <option key={userProfile.id} value={userProfile.id}>
+                <option key={userProfile.id} value={`profile:${userProfile.id}`}>
                   {getProfileFirstNameLabel(userProfile)}
                 </option>
               ))}
             </select>
+            {optionAssigneeValue === "external" && (
+              <input
+                {...iosKeyboardGuardProps}
+                value={externalAssigneeInput}
+                disabled={savingCompletedByOverride}
+                onFocus={(event) => onNativeFieldFocus(event.currentTarget)}
+                onChange={(event) => setExternalAssigneeInput(event.target.value)}
+                onBlur={() => void commitExternalOptionAssignee()}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") event.currentTarget.blur();
+                }}
+                className="h-8 w-full min-w-0 rounded-full border border-transparent bg-white/80 px-2 text-sm font-semibold text-emerald-800 outline-none transition placeholder:text-emerald-700/35 focus:border-emerald-300 focus:bg-white disabled:text-emerald-400 sm:px-3 sm:text-base"
+                placeholder="Prénom"
+                aria-label="Prénom externe"
+              />
+            )}
           </label>
           {canAssignOptionTask && (
             <label className="grid min-w-0 gap-1">
@@ -16585,6 +16650,12 @@ function getTaskAssigneeLabel(task: AppTask, profiles: UserProfile[]) {
   return assignee ? getProfileFirstNameLabel(assignee) : "Non assignée";
 }
 
+function getOptionExternalAssigneeFirstName(option: EventOption) {
+  const name = option.externalAssigneeName?.trim();
+  if (!name) return null;
+  return name.split(/\s+/)[0] ?? name;
+}
+
 function getLinkedTaskForOption(option: EventOption, tasks: AppTask[]) {
   if (!option.taskId) return null;
   return tasks.find((task) => task.id === option.taskId) ?? null;
@@ -16598,8 +16669,10 @@ function getOptionEffectiveStatus(option: EventOption, tasks: AppTask[]): Comple
 
 function getOptionAssigneeLabel(option: EventOption, tasks: AppTask[], profiles: UserProfile[]) {
   const linkedTask = getLinkedTaskForOption(option, tasks);
-  if (linkedTask) return getTaskAssigneeLabel(linkedTask, profiles);
-  return getCompletedByNameForDisplay(option);
+  if (linkedTask?.assignedProfileId) return getTaskAssigneeLabel(linkedTask, profiles);
+  const externalAssigneeName = getOptionExternalAssigneeFirstName(option);
+  if (externalAssigneeName) return externalAssigneeName;
+  return null;
 }
 
 const CalendarSettingsListRow = forwardRef<HTMLDivElement, {
