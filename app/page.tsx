@@ -2786,6 +2786,10 @@ function getProfileOptionLabel(profile: UserProfile) {
   return getProfileDisplayName(profile) ?? profile.email ?? "Utilisateur";
 }
 
+function getProfileFirstNameLabel(profile: UserProfile) {
+  return profile.firstName?.trim() || getProfileDisplayName(profile)?.split(/\s+/)[0] || profile.email?.split("@")[0] || "Utilisateur";
+}
+
 function getTaskDiagnosticProfile(profile: UserProfile | null): TaskDiagnosticProfile | null {
   if (!profile) return null;
   return {
@@ -11574,14 +11578,16 @@ function TeamTasksSheet({
         className={cn(modalPanelClassName, "flex max-h-[86vh] w-full flex-col overflow-hidden p-4 sm:max-w-3xl sm:p-5")}
         onPointerDown={(pointerEvent) => pointerEvent.stopPropagation()}
       >
-        <div className="mb-3 flex items-center justify-between gap-3">
-          <div className="flex min-w-0 items-center gap-2">
-            <h2 className="truncate text-lg font-semibold text-stone-950">Tâches</h2>
+        {!selectedTask && (
+          <div className="mb-3 flex items-center justify-between gap-3">
+            <div className="flex min-w-0 items-center gap-2">
+              <h2 className="truncate text-lg font-semibold text-stone-950">Tâches</h2>
+            </div>
+            <button type="button" onClick={onClose} className="rounded-xl bg-stone-50 px-3 py-1.5 text-base font-semibold text-stone-600 transition hover:bg-stone-100">
+              Fermer
+            </button>
           </div>
-          <button type="button" onClick={onClose} className="rounded-xl bg-stone-50 px-3 py-1.5 text-base font-semibold text-stone-600 transition hover:bg-stone-100">
-            Fermer
-          </button>
-        </div>
+        )}
 
         <div
           ref={nativeKeyboard.scrollContainerRef}
@@ -11592,7 +11598,7 @@ function TeamTasksSheet({
           {localError && <p className="text-sm font-semibold text-rose-700">{localError}</p>}
           {loading && <p className="rounded-2xl bg-stone-50 px-3 py-4 text-center text-sm font-semibold text-stone-400">Chargement...</p>}
 
-          {taskPeople.length > 0 && (
+          {!selectedTask && taskPeople.length > 0 && (
             <div className="no-scrollbar flex gap-1.5 overflow-x-auto pb-1">
               {taskPeople.map((person, index) => {
                 const firstName = person.firstName?.trim() || getProfileDisplayName(person)?.split(/\s+/)[0] || "Équipe";
@@ -11777,7 +11783,13 @@ const TaskQueueRow = forwardRef<HTMLDivElement, {
       className={cn(
         "group flex min-h-11 select-none items-center gap-2 rounded-xl px-3 py-2 transition",
         draggable ? "cursor-grab active:cursor-grabbing" : "cursor-pointer",
-        completed ? "bg-stone-50/70 opacity-60" : selected ? "bg-stone-100" : "bg-stone-50 hover:bg-stone-100/70",
+        task.priority === "urgent"
+          ? "bg-rose-50/85 hover:bg-rose-100/70"
+          : completed
+            ? "bg-emerald-50/55 opacity-65"
+            : selected
+              ? "bg-emerald-100/80"
+              : "bg-emerald-50/80 hover:bg-emerald-100/55",
         dragging && "bg-white opacity-90 shadow-sm shadow-black/5",
       )}
       {...draggableProps}
@@ -11785,7 +11797,11 @@ const TaskQueueRow = forwardRef<HTMLDivElement, {
       <span
         className={cn(
           "min-w-0 flex-1 truncate text-left text-base font-semibold leading-snug transition",
-          completed ? "text-stone-400 line-through" : "text-stone-800 group-hover:text-stone-950",
+          task.priority === "urgent"
+            ? "text-rose-950 group-hover:text-rose-900"
+            : completed
+              ? "text-emerald-700/60 line-through"
+              : "text-stone-700 group-hover:text-emerald-950",
         )}
       >
         {task.title}
@@ -11832,10 +11848,12 @@ function AdminTaskDetailPanel({
 }) {
   const [title, setTitle] = useState(task.title);
   const [notes, setNotes] = useState(task.notes ?? "");
+  const [dueDatePickerOpen, setDueDatePickerOpen] = useState(false);
   const [localError, setLocalError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const done = task.status === "done";
   const urgent = task.priority === "urgent";
+  const taskTone = getTaskTone(task);
   const canEdit = permissions.canManageEvents || task.assignedProfileId === currentProfile?.id;
   const canDelete = permissions.canManageEvents;
 
@@ -11843,6 +11861,7 @@ function AdminTaskDetailPanel({
     setTitle(task.title);
     setNotes(task.notes ?? "");
     setLocalError(null);
+    setDueDatePickerOpen(false);
   }, [task.id, task.title, task.notes]);
 
   async function updateTaskSafely(patch: TaskUpdatePatch) {
@@ -11873,9 +11892,10 @@ function AdminTaskDetailPanel({
   }
 
   return (
-    <div className="rounded-2xl bg-stone-50 p-3">
+    <>
+    <div className={cn("rounded-2xl p-3", taskTone.panel)}>
       <div className="mb-3 flex items-center justify-between gap-2">
-        <button type="button" onClick={onClose} className="rounded-xl bg-white px-3 py-1.5 text-sm font-semibold text-stone-500 transition hover:text-stone-900">
+        <button type="button" onClick={onClose} className={cn("rounded-xl bg-white/80 px-3 py-1.5 text-sm font-semibold transition hover:bg-white", taskTone.actionText)}>
           Retour
         </button>
         {canDelete && (
@@ -11891,56 +11911,54 @@ function AdminTaskDetailPanel({
       </div>
 
       <div className="space-y-2">
-        <input
-          {...iosKeyboardGuardProps}
-          value={title}
-          disabled={saving || !canEdit}
-          onFocus={(event) => onNativeFieldFocus?.(event.currentTarget)}
-          onChange={(event) => setTitle(event.target.value)}
-          onBlur={() => {
-            if (title.trim() !== task.title) void updateTaskSafely({ title });
-          }}
-          className={cn("h-10 min-w-0 flex-1 rounded-xl bg-white px-3 text-base font-semibold outline-none", done ? "text-stone-500 line-through" : "text-stone-950")}
-        />
-
-        <div className="grid gap-2 sm:grid-cols-2">
-          <label className="flex h-10 items-center gap-2 rounded-xl bg-white px-3 text-sm font-semibold text-stone-600">
+        <div className="grid grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-2">
+          <input
+            {...iosKeyboardGuardProps}
+            value={title}
+            disabled={saving || !canEdit}
+            onFocus={(event) => onNativeFieldFocus?.(event.currentTarget)}
+            onChange={(event) => setTitle(event.target.value)}
+            onBlur={() => {
+              if (title.trim() !== task.title) void updateTaskSafely({ title });
+            }}
+            className={cn("h-10 min-w-0 rounded-xl bg-white/85 px-3 text-base font-semibold outline-none transition focus:bg-white", done ? "text-stone-500 line-through" : taskTone.title)}
+          />
+          <label className={cn("flex h-10 shrink-0 items-center gap-1.5 rounded-xl bg-white/80 px-2 text-xs font-semibold transition sm:px-3 sm:text-sm", taskTone.actionText)}>
             <input
               type="checkbox"
               checked={urgent}
               disabled={saving || !permissions.canManageEvents}
               onChange={(event) => void updateTaskSafely({ priority: event.target.checked ? "urgent" : "normal" })}
-              className="h-4 w-4 rounded border-stone-300 accent-[#bb2720]"
+              className="h-3.5 w-3.5 rounded border-stone-300 accent-[#bb2720]"
             />
             Urgent
           </label>
-          <label className="flex h-10 items-center gap-2 rounded-xl bg-white px-3 text-sm font-semibold text-stone-600">
+          <label className={cn("flex h-10 shrink-0 items-center gap-1.5 rounded-xl bg-white/80 px-2 text-xs font-semibold transition sm:px-3 sm:text-sm", taskTone.actionText)}>
             <input
               type="checkbox"
               checked={done}
               disabled={saving || !canEdit}
               onChange={(event) => void updateTaskSafely({ status: event.target.checked ? "done" : "todo" })}
-              className="h-4 w-4 rounded border-stone-300 accent-emerald-600"
+              className="h-3.5 w-3.5 rounded border-stone-300 accent-emerald-600"
             />
-            Terminée
+            Terminé
           </label>
         </div>
 
         <label className="block">
-          <span className="mb-1 block px-1 text-xs font-semibold uppercase tracking-[0.08em] text-stone-400">Échéance</span>
-          <input
-            {...iosKeyboardGuardProps}
-            type="date"
-            value={task.dueDate ?? ""}
+          <span className={cn("mb-1 block px-1 text-xs font-semibold uppercase tracking-[0.08em]", taskTone.meta)}>Échéance</span>
+          <button
+            type="button"
             disabled={saving || !canEdit}
-            onFocus={(event) => onNativeFieldFocus?.(event.currentTarget)}
-            onChange={(event) => void updateTaskSafely({ dueDate: event.target.value || null })}
-            className="h-10 w-full rounded-xl bg-white px-3 text-sm font-semibold text-stone-600 outline-none"
-          />
+            onClick={() => setDueDatePickerOpen(true)}
+            className={cn("h-10 w-full rounded-xl bg-white/85 px-3 text-left text-sm font-semibold outline-none transition hover:bg-white disabled:text-stone-300", taskTone.actionText)}
+          >
+            {task.dueDate ? formatFullDate(task.dueDate) : "Choisir une date"}
+          </button>
         </label>
 
         <label className="block">
-          <span className="mb-1 block px-1 text-xs font-semibold uppercase tracking-[0.08em] text-stone-400">Notes</span>
+          <span className={cn("mb-1 block px-1 text-xs font-semibold uppercase tracking-[0.08em]", taskTone.meta)}>Notes</span>
           <textarea
             {...iosKeyboardGuardProps}
             value={notes}
@@ -11951,7 +11969,7 @@ function AdminTaskDetailPanel({
             onBlur={() => {
               if (notes.trim() !== (task.notes ?? "")) void updateTaskSafely({ notes });
             }}
-            className="min-h-24 w-full resize-none rounded-xl bg-white px-3 py-2 text-sm font-medium leading-relaxed text-stone-700 outline-none placeholder:text-stone-300"
+            className={cn("min-h-24 w-full resize-none rounded-xl bg-white/85 px-3 py-2 text-sm font-medium leading-relaxed outline-none transition placeholder:text-stone-300 focus:bg-white", taskTone.body)}
             placeholder="Notes"
           />
         </label>
@@ -11964,6 +11982,18 @@ function AdminTaskDetailPanel({
       )}
       {localError && <p className="mt-2 text-xs font-semibold text-rose-700">{localError}</p>}
     </div>
+    {dueDatePickerOpen && (
+      <SharedDatePicker
+        selectedDate={task.dueDate ?? linkedEvent?.date ?? formatDateKey(new Date())}
+        allowSelectingCurrentDate={!task.dueDate}
+        onClose={() => setDueDatePickerOpen(false)}
+        onSelectDate={async (dateKey) => {
+          await updateTaskSafely({ dueDate: dateKey });
+          setDueDatePickerOpen(false);
+        }}
+      />
+    )}
+    </>
   );
 }
 
@@ -14243,6 +14273,26 @@ function getOptionTone(state: CompletionStatus) {
       };
 }
 
+function getTaskTone(task: AppTask) {
+  if (task.priority === "urgent") {
+    return {
+      panel: "bg-rose-50/85",
+      title: "text-rose-950",
+      body: "text-rose-950",
+      meta: "text-rose-700/70",
+      actionText: "text-rose-800",
+    };
+  }
+
+  return {
+    panel: task.status === "done" ? "bg-emerald-100/70" : "bg-emerald-50/80",
+    title: task.status === "done" ? "text-emerald-900 line-through" : "text-emerald-950",
+    body: "text-stone-700",
+    meta: "text-emerald-700/70",
+    actionText: "text-emerald-800",
+  };
+}
+
 function getLinkTone(state: LinkStatus) {
   return state === "available"
     ? {
@@ -15144,7 +15194,7 @@ function ContextDetailBlock({
       </div>
       {titleRenameError && <div className="mt-2 text-base font-medium text-rose-700">{titleRenameError}</div>}
       {canAssignOptionTask && (
-        <div className="mt-3 grid gap-2 rounded-xl bg-emerald-50/70 px-3 py-2">
+        <div className={cn("mt-3 grid gap-2 rounded-xl bg-emerald-50/70 px-3 py-2", linkedOptionTask ? "grid-cols-[minmax(0,1fr)_minmax(0,1fr)]" : "grid-cols-1")}>
           <label className="grid min-w-0 gap-1">
             <span className="text-xs font-semibold uppercase tracking-[0.08em] text-emerald-700/70">Assigné à</span>
             <select
@@ -15159,15 +15209,14 @@ function ContextDetailBlock({
               <option value="">Non assignée</option>
               {profiles.map((userProfile) => (
                 <option key={userProfile.id} value={userProfile.id}>
-                  {getProfileOptionLabel(userProfile)}
+                  {getProfileFirstNameLabel(userProfile)}
                 </option>
               ))}
             </select>
           </label>
           {linkedOptionTask && (
-            <div className="grid gap-1">
-              <label className="grid min-w-0 gap-1 sm:max-w-sm">
-                <span className="text-right text-xs font-semibold uppercase tracking-[0.08em] text-emerald-700/70">Échéance</span>
+            <label className="grid min-w-0 gap-1">
+              <span className="text-right text-xs font-semibold uppercase tracking-[0.08em] text-emerald-700/70">Échéance</span>
                 <button
                   type="button"
                   disabled={savingCompletedByOverride}
@@ -15177,8 +15226,7 @@ function ContextDetailBlock({
                 >
                   {linkedOptionTask.dueDate ? formatFullDate(linkedOptionTask.dueDate) : "Choisir une date"}
                 </button>
-              </label>
-            </div>
+            </label>
           )}
         </div>
       )}
@@ -16632,7 +16680,7 @@ function formatShortDate(dateKey: string | null) {
 
 function getTaskAssigneeLabel(task: AppTask, profiles: UserProfile[]) {
   const assignee = profiles.find((userProfile) => userProfile.id === task.assignedProfileId) ?? null;
-  return assignee ? getProfileOptionLabel(assignee) : "Non assignée";
+  return assignee ? getProfileFirstNameLabel(assignee) : "Non assignée";
 }
 
 function getLinkedTaskForOption(option: EventOption, tasks: AppTask[]) {
