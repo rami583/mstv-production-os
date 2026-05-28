@@ -293,6 +293,7 @@ export type Database = {
           assigned_profile_id: string | null;
           status: "todo" | "done";
           priority: "urgent" | "normal" | "low";
+          sort_order: number | null;
           due_date: string | null;
           created_by: string | null;
           created_at: string;
@@ -306,6 +307,7 @@ export type Database = {
           assigned_profile_id?: string | null;
           status?: "todo" | "done";
           priority?: "urgent" | "normal" | "low";
+          sort_order?: number | null;
           due_date?: string | null;
           created_by?: string | null;
           created_at?: string;

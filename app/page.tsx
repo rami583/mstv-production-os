@@ -49,7 +49,6 @@ import {
   useMemo,
   useRef,
   useState,
-  type CSSProperties,
   type Dispatch,
   type PointerEvent as ReactPointerEvent,
   type ReactNode,
@@ -382,6 +381,7 @@ type AppTask = {
   assignedProfileId: string | null;
   status: TaskStatus;
   priority: TaskPriority;
+  sortOrder: number | null;
   dueDate: string | null;
   createdBy: string | null;
   createdAt: string;
@@ -395,9 +395,10 @@ type TaskCreateInput = {
   assignedProfileId?: string | null;
   dueDate?: string | null;
   priority?: TaskPriority;
+  sortOrder?: number | null;
 };
 
-type TaskUpdatePatch = Partial<Pick<AppTask, "title" | "assignedProfileId" | "dueDate" | "status" | "priority">>;
+type TaskUpdatePatch = Partial<Pick<AppTask, "title" | "assignedProfileId" | "dueDate" | "status" | "priority" | "sortOrder">>;
 
 type TaskDiagnosticProfile = {
   id: string;
@@ -2744,6 +2745,7 @@ function mapTask(row: TaskRow): AppTask {
     assignedProfileId: row.assigned_profile_id ?? null,
     status: row.status,
     priority: row.priority ?? "normal",
+    sortOrder: row.sort_order ?? null,
     dueDate: row.due_date ?? null,
     createdBy: row.created_by ?? null,
     createdAt: row.created_at,
@@ -3675,6 +3677,7 @@ async function fetchTasks() {
       .from("tasks")
       .select("*")
       .order("status", { ascending: false })
+      .order("sort_order", { ascending: true, nullsFirst: false })
       .order("due_date", { ascending: true, nullsFirst: false })
       .order("created_at", { ascending: false })
       .range(from, from + supabaseFetchPageSize - 1);
@@ -6276,12 +6279,14 @@ export default function Home() {
     const title = input.title.trim();
     if (!title) throw new Error("Le titre de la tâche est obligatoire.");
     const assignedProfile = taskProfiles.find((userProfile) => userProfile.id === input.assignedProfileId) ?? null;
+    const nextSortOrder = input.sortOrder ?? getNextTaskSortOrder(tasks, input.assignedProfileId ?? null);
     const payload: Database["public"]["Tables"]["tasks"]["Insert"] = {
       title,
       event_id: input.eventId ?? null,
       assigned_profile_id: input.assignedProfileId ?? null,
       status: "todo",
       priority: input.priority ?? "normal",
+      sort_order: nextSortOrder,
       due_date: input.dueDate || null,
       created_by: authSession?.user.id ?? profile?.id ?? null,
     };
@@ -6334,6 +6339,7 @@ export default function Home() {
     if (patch.dueDate !== undefined) payload.due_date = patch.dueDate || null;
     if (patch.status !== undefined) payload.status = patch.status;
     if (patch.priority !== undefined && permissions.canManageEvents) payload.priority = patch.priority;
+    if (patch.sortOrder !== undefined && permissions.canManageEvents) payload.sort_order = patch.sortOrder;
 
     const { data, error: updateError } = await supabase
       .from("tasks")
@@ -6344,6 +6350,42 @@ export default function Home() {
 
     if (updateError) throw updateError;
     upsertTaskInState(mapTask(data));
+  }
+
+  async function reorderTasksForAssignee(orderedTasks: AppTask[], assignedProfileId: string | null) {
+    assertCanManageEvents();
+    if (!supabase) throw new Error("Configuration Supabase manquante.");
+    const supabaseClient = supabase;
+    if (orderedTasks.some((task) => task.assignedProfileId !== assignedProfileId || task.status !== "todo")) return;
+
+    const updates = orderedTasks.map((task, index) => ({
+      id: task.id,
+      sortOrder: index + 1,
+    }));
+    const updateById = new Map(updates.map((item) => [item.id, item.sortOrder]));
+    const previousTasks = tasks;
+
+    setTasks((current) =>
+      current.map((task) => (
+        updateById.has(task.id)
+          ? { ...task, sortOrder: updateById.get(task.id) ?? task.sortOrder }
+          : task
+      )),
+    );
+
+    const results = await Promise.all(
+      updates.map((item) =>
+        supabaseClient
+          .from("tasks")
+          .update({ sort_order: item.sortOrder })
+          .eq("id", item.id),
+      ),
+    );
+    const updateError = results.find((result) => result.error)?.error;
+    if (updateError) {
+      setTasks(previousTasks);
+      throw updateError;
+    }
   }
 
   async function deleteTask(task: AppTask) {
@@ -8538,12 +8580,13 @@ export default function Home() {
     }
 
     if (currentLinkedTask) {
+      const nextSortOrder = getNextTaskSortOrder(tasks, assignedProfileId);
       await updateTask(currentLinkedTask, {
         title: option.label,
         assignedProfileId,
-        priority: currentLinkedTask.priority ?? "normal",
+        sortOrder: nextSortOrder,
       });
-      await updateOptionLink({ ...currentLinkedTask, title: option.label, assignedProfileId });
+      await updateOptionLink({ ...currentLinkedTask, title: option.label, assignedProfileId, sortOrder: nextSortOrder });
       return;
     }
 
@@ -10769,8 +10812,10 @@ export default function Home() {
           loading={tasksLoading}
           error={tasksError}
           onClose={() => setAdminTasksOpen(false)}
+          onCreateTask={createTask}
           onUpdateTask={updateTask}
           onDeleteTask={deleteTask}
+          onReorderTasks={reorderTasksForAssignee}
           onOpenEvent={(eventId) => {
             openEvent(eventId);
             setAdminTasksOpen(false);
@@ -11350,7 +11395,6 @@ function TasksSheet({
   const nativeKeyboard = useNativeKeyboardVisibility<HTMLDivElement>();
   const [draftTitle, setDraftTitle] = useState("");
   const [draftAssigneeId, setDraftAssigneeId] = useState(currentProfile?.id ?? "");
-  const [draftPriority, setDraftPriority] = useState<TaskPriority>("normal");
   const [draftDueDate, setDraftDueDate] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [localError, setLocalError] = useState<string | null>(null);
@@ -11376,12 +11420,10 @@ function TasksSheet({
         title: draftTitle,
         eventId: null,
         assignedProfileId: draftAssigneeId || null,
-        priority: draftPriority,
         dueDate: draftDueDate || null,
       });
       setDraftTitle("");
       setDraftAssigneeId(currentProfile?.id ?? "");
-      setDraftPriority("normal");
       setDraftDueDate("");
     } catch (createError) {
       setLocalError(getTaskCreateUserMessage(createError));
@@ -11449,7 +11491,7 @@ function TasksSheet({
                 placeholder="Titre de la tâche"
                 className="h-10 rounded-xl bg-white px-3 text-base font-semibold text-stone-950 outline-none"
               />
-              <div className="grid gap-2 sm:grid-cols-[1fr_auto_auto_auto]">
+              <div className="grid gap-2 sm:grid-cols-[1fr_auto_auto]">
                 <select
                   {...iosKeyboardGuardProps}
                   value={draftAssigneeId}
@@ -11461,20 +11503,6 @@ function TasksSheet({
                   {profiles.map((userProfile) => (
                     <option key={userProfile.id} value={userProfile.id}>
                       {getProfileOptionLabel(userProfile)}
-                    </option>
-                  ))}
-                </select>
-                <select
-                  {...iosKeyboardGuardProps}
-                  value={draftPriority}
-                  onFocus={(event) => nativeKeyboard.handleFieldFocus(event.currentTarget)}
-                  onChange={(event) => setDraftPriority(event.target.value as TaskPriority)}
-                  className="h-10 min-w-0 rounded-xl px-3 text-sm font-semibold outline-none"
-                  style={getTaskPriorityTone(draftPriority).inputStyle}
-                >
-                  {Object.entries(taskPriorityLabels).map(([value, label]) => (
-                    <option key={value} value={value}>
-                      {label}
                     </option>
                   ))}
                 </select>
@@ -11529,8 +11557,10 @@ function AdminTasksSheet({
   loading,
   error,
   onClose,
+  onCreateTask,
   onUpdateTask,
   onDeleteTask,
+  onReorderTasks,
   onOpenEvent,
 }: {
   tasks: AppTask[];
@@ -11541,44 +11571,213 @@ function AdminTasksSheet({
   loading: boolean;
   error: string | null;
   onClose: () => void;
+  onCreateTask: (input: TaskCreateInput) => Promise<AppTask>;
   onUpdateTask: (task: AppTask, patch: TaskUpdatePatch) => Promise<void>;
   onDeleteTask: (task: AppTask) => Promise<void>;
+  onReorderTasks: (orderedTasks: AppTask[], assignedProfileId: string | null) => Promise<void>;
   onOpenEvent: (eventId: string) => void;
 }) {
   const nativeKeyboard = useNativeKeyboardVisibility<HTMLDivElement>();
+  const rowRefs = useRef(new Map<string, HTMLDivElement>());
+  const latestOrderIdsRef = useRef<string[]>([]);
+  const swipeStartRef = useRef<{ pointerId: number; x: number; y: number } | null>(null);
+  const [activeProfileIndex, setActiveProfileIndex] = useState(0);
+  const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
+  const [orderIds, setOrderIds] = useState<string[]>([]);
+  const [draggingId, setDraggingId] = useState<string | null>(null);
+  const [creating, setCreating] = useState(false);
+  const [localError, setLocalError] = useState<string | null>(null);
+  const [dragError, setDragError] = useState<string | null>(null);
   const eventsById = useMemo(() => new Map(events.map((event) => [event.id, event])), [events]);
-  const orderedTasks = sortTasksForDisplay(tasks);
-  const todoTasks = orderedTasks.filter((task) => task.status === "todo");
-  const doneTasks = orderedTasks
-    .filter((task) => task.status === "done")
-    .sort((left, right) => (right.completedAt ?? right.updatedAt).localeCompare(left.completedAt ?? left.updatedAt))
-    .slice(0, 20);
+  const taskPeople = useMemo(() => (profiles.length > 0 ? profiles : currentProfile ? [currentProfile] : []), [currentProfile, profiles]);
+  const activeProfile = taskPeople[Math.min(activeProfileIndex, Math.max(taskPeople.length - 1, 0))] ?? null;
+  const activeProfileId = activeProfile?.id ?? null;
+  const activeFirstName = activeProfile?.firstName?.trim() || getProfileDisplayName(activeProfile)?.split(/\s+/)[0] || "Équipe";
+  const personTasks = useMemo(() => tasks.filter((task) => task.assignedProfileId === activeProfileId), [activeProfileId, tasks]);
+  const todoTasks = useMemo(() => sortTaskQueue(personTasks.filter((task) => task.status === "todo")), [personTasks]);
+  const doneTasks = useMemo(() => (
+    [...personTasks]
+      .filter((task) => task.status === "done")
+      .sort((left, right) => (right.completedAt ?? right.updatedAt).localeCompare(left.completedAt ?? left.updatedAt))
+      .slice(0, 12)
+  ), [personTasks]);
+  const todoTasksById = useMemo(() => new Map(todoTasks.map((task) => [task.id, task])), [todoTasks]);
+  const orderedTodoTasks = useMemo(() => {
+    const knownTasks = orderIds.map((id) => todoTasksById.get(id)).filter((task): task is AppTask => Boolean(task));
+    const knownIds = new Set(knownTasks.map((task) => task.id));
+    return [...knownTasks, ...todoTasks.filter((task) => !knownIds.has(task.id))];
+  }, [orderIds, todoTasks, todoTasksById]);
+  const selectedTask = selectedTaskId ? tasks.find((task) => task.id === selectedTaskId) ?? null : null;
 
   useEscapeToClose(onClose);
 
-  function renderTask(task: AppTask) {
-    const linkedEvent = task.eventId ? eventsById.get(task.eventId) ?? null : null;
+  useEffect(() => {
+    if (activeProfileIndex <= taskPeople.length - 1) return;
+    setActiveProfileIndex(Math.max(taskPeople.length - 1, 0));
+  }, [activeProfileIndex, taskPeople.length]);
+
+  useEffect(() => {
+    if (draggingId) return;
+    const nextIds = todoTasks.map((task) => task.id);
+    setOrderIds((currentIds) => (currentIds.join("|") === nextIds.join("|") ? currentIds : nextIds));
+  }, [draggingId, todoTasks]);
+
+  useEffect(() => {
+    latestOrderIdsRef.current = orderedTodoTasks.map((task) => task.id);
+  }, [orderedTodoTasks]);
+
+  function changePerson(delta: -1 | 1) {
+    if (taskPeople.length < 2) return;
+    setSelectedTaskId(null);
+    setLocalError(null);
+    setActiveProfileIndex((current) => (current + delta + taskPeople.length) % taskPeople.length);
+  }
+
+  function setRowRef(id: string, node: HTMLDivElement | null) {
+    if (node) {
+      rowRefs.current.set(id, node);
+    } else {
+      rowRefs.current.delete(id);
+    }
+  }
+
+  function updateDragOrder(pointerY: number, activeId: string) {
+    setOrderIds((currentIds) => {
+      const currentIndex = currentIds.indexOf(activeId);
+      if (currentIndex === -1) return currentIds;
+
+      let targetIndex = currentIds.length - 1;
+      for (let index = 0; index < currentIds.length; index += 1) {
+        const node = rowRefs.current.get(currentIds[index]);
+        if (!node) continue;
+        const rect = node.getBoundingClientRect();
+        if (pointerY < rect.top + rect.height / 2) {
+          targetIndex = index;
+          break;
+        }
+      }
+
+      if (targetIndex === currentIndex) return currentIds;
+      const nextIds = moveArrayItem(currentIds, currentIndex, targetIndex);
+      latestOrderIdsRef.current = nextIds;
+      return nextIds;
+    });
+  }
+
+  async function persistDragOrder(previousIds: string[]) {
+    const nextTasks = latestOrderIdsRef.current
+      .map((id) => todoTasksById.get(id))
+      .filter((task): task is AppTask => Boolean(task));
+    const nextIds = nextTasks.map((task) => task.id);
+    if (nextIds.join("|") === previousIds.join("|")) return;
+
+    try {
+      await onReorderTasks(nextTasks, activeProfileId);
+    } catch (reorderError) {
+      setOrderIds(previousIds);
+      setDragError(getUserFacingErrorMessage(reorderError, "Impossible d'enregistrer l'ordre des tâches."));
+    }
+  }
+
+  function startDrag(task: AppTask, event: ReactPointerEvent<HTMLButtonElement>) {
+    if (orderedTodoTasks.length < 2) return;
+    event.preventDefault();
+    event.stopPropagation();
+    setDragError(null);
+    const previousIds = orderedTodoTasks.map((item) => item.id);
+    latestOrderIdsRef.current = previousIds;
+    setDraggingId(task.id);
+    event.currentTarget.setPointerCapture(event.pointerId);
+
+    function handlePointerMove(pointerEvent: PointerEvent) {
+      pointerEvent.preventDefault();
+      updateDragOrder(pointerEvent.clientY, task.id);
+    }
+
+    function handlePointerEnd() {
+      window.removeEventListener("pointermove", handlePointerMove);
+      window.removeEventListener("pointerup", handlePointerEnd);
+      window.removeEventListener("pointercancel", handlePointerEnd);
+      setDraggingId(null);
+      void persistDragOrder(previousIds);
+    }
+
+    window.addEventListener("pointermove", handlePointerMove, { passive: false });
+    window.addEventListener("pointerup", handlePointerEnd, { once: true });
+    window.addEventListener("pointercancel", handlePointerEnd, { once: true });
+  }
+
+  function handleSwipePointerDown(pointerEvent: ReactPointerEvent<HTMLDivElement>) {
+    if (pointerEvent.pointerType === "mouse" || taskPeople.length < 2) return;
+    const target = pointerEvent.target as HTMLElement;
+    if (target.closest("button,input,textarea,select,[data-task-drag-handle]")) return;
+    swipeStartRef.current = {
+      pointerId: pointerEvent.pointerId,
+      x: pointerEvent.clientX,
+      y: pointerEvent.clientY,
+    };
+    pointerEvent.currentTarget.setPointerCapture(pointerEvent.pointerId);
+  }
+
+  function handleSwipePointerUp(pointerEvent: ReactPointerEvent<HTMLDivElement>) {
+    const swipeStart = swipeStartRef.current;
+    swipeStartRef.current = null;
+    if (!swipeStart || swipeStart.pointerId !== pointerEvent.pointerId) return;
+    const deltaX = pointerEvent.clientX - swipeStart.x;
+    const deltaY = pointerEvent.clientY - swipeStart.y;
+    if (Math.abs(deltaX) < 48 || Math.abs(deltaX) < Math.abs(deltaY) * 1.25) return;
+    changePerson(deltaX < 0 ? 1 : -1);
+  }
+
+  async function createTaskForActiveProfile() {
+    if (!activeProfileId) return;
+    setCreating(true);
+    setLocalError(null);
+    try {
+      const createdTask = await onCreateTask({
+        title: "Nouvelle tâche",
+        eventId: null,
+        assignedProfileId: activeProfileId,
+        sortOrder: getNextTaskSortOrder(tasks, activeProfileId),
+      });
+      setSelectedTaskId(createdTask.id);
+    } catch (createError) {
+      setLocalError(getTaskCreateUserMessage(createError));
+    } finally {
+      setCreating(false);
+    }
+  }
+
+  function renderQueueTask(task: AppTask, completed = false) {
     return (
-      <div key={task.id} className="rounded-2xl bg-stone-50 p-2.5">
-        <TaskRow
-          task={task}
-          profiles={profiles}
-          currentProfile={currentProfile}
-          permissions={permissions}
-          onUpdateTask={onUpdateTask}
-          onDeleteTask={onDeleteTask}
-          onNativeFieldFocus={nativeKeyboard.handleFieldFocus}
-          compact
-        />
-        {linkedEvent && (
+      <div key={task.id} ref={(node) => setRowRef(task.id, node)}>
+        <div
+          className={cn(
+            "group flex min-h-10 items-center gap-2 rounded-xl px-2.5 py-1.5 transition",
+            selectedTaskId === task.id ? "bg-stone-100" : "bg-stone-50 hover:bg-stone-100/70",
+            completed && "opacity-55",
+            draggingId === task.id && "opacity-70",
+          )}
+        >
+          {!completed && (
+            <button
+              type="button"
+              data-task-drag-handle
+              onPointerDown={(event) => startDrag(task, event)}
+              className="flex h-7 w-5 shrink-0 touch-none items-center justify-center rounded-full text-stone-300 transition hover:text-stone-500"
+              aria-label={`Réordonner ${task.title}`}
+            >
+              <GripVertical className="h-3.5 w-3.5" strokeWidth={2} />
+            </button>
+          )}
           <button
             type="button"
-            onClick={() => onOpenEvent(linkedEvent.id)}
-            className="mt-1.5 w-full rounded-xl px-2 py-1 text-left text-xs font-semibold text-stone-500 transition hover:bg-white hover:text-stone-800"
+            onClick={() => setSelectedTaskId(task.id)}
+            className={cn("min-w-0 flex-1 truncate text-left text-base font-semibold", completed ? "text-stone-400 line-through" : "text-stone-900")}
           >
-            {getProductionEventDisplay(linkedEvent).title} · {formatFullDate(linkedEvent.date)}
+            {task.title}
           </button>
-        )}
+        </div>
       </div>
     );
   }
@@ -11589,35 +11788,206 @@ function AdminTasksSheet({
         className={cn(modalPanelClassName, "flex max-h-[86vh] w-full flex-col overflow-hidden p-4 sm:max-w-3xl sm:p-5")}
         onPointerDown={(pointerEvent) => pointerEvent.stopPropagation()}
       >
-        <div className="mb-3 flex items-start justify-end">
+        <div className="mb-3 flex items-center justify-between gap-3">
+          <div className="flex min-w-0 items-center gap-2">
+            {taskPeople.length > 1 && (
+              <button type="button" onClick={() => changePerson(-1)} className="hidden h-8 w-8 items-center justify-center rounded-full bg-stone-50 text-stone-500 transition hover:bg-stone-100 sm:flex" aria-label="Personne précédente">
+                <ChevronLeft className="h-4 w-4" />
+              </button>
+            )}
+            <h2 className="truncate text-lg font-semibold text-stone-950">{activeFirstName}</h2>
+            {taskPeople.length > 1 && (
+              <button type="button" onClick={() => changePerson(1)} className="hidden h-8 w-8 items-center justify-center rounded-full bg-stone-50 text-stone-500 transition hover:bg-stone-100 sm:flex" aria-label="Personne suivante">
+                <ChevronRight className="h-4 w-4" />
+              </button>
+            )}
+          </div>
           <button type="button" onClick={onClose} className="rounded-xl bg-stone-50 px-3 py-1.5 text-base font-semibold text-stone-600 transition hover:bg-stone-100">
             Fermer
           </button>
         </div>
 
-        <div ref={nativeKeyboard.scrollContainerRef} className="no-scrollbar min-h-0 flex-1 space-y-4 overflow-y-auto overscroll-contain" style={nativeKeyboard.scrollContainerStyle}>
+        <div
+          ref={nativeKeyboard.scrollContainerRef}
+          className="no-scrollbar min-h-0 flex-1 space-y-3 overflow-y-auto overscroll-contain"
+          style={nativeKeyboard.scrollContainerStyle}
+          onPointerDown={handleSwipePointerDown}
+          onPointerUp={handleSwipePointerUp}
+          onPointerCancel={() => {
+            swipeStartRef.current = null;
+          }}
+        >
           {(error) && <p className="text-sm font-semibold text-rose-700">{error}</p>}
+          {localError && <p className="text-sm font-semibold text-rose-700">{localError}</p>}
           {loading && <p className="rounded-2xl bg-stone-50 px-3 py-4 text-center text-sm font-semibold text-stone-400">Chargement...</p>}
 
-          <section className="space-y-2">
-            <h3 className="px-1 text-xs font-semibold uppercase tracking-[0.08em] text-stone-400">À faire</h3>
-            {todoTasks.length === 0 ? (
-              <p className="rounded-2xl bg-stone-50 px-3 py-4 text-center text-sm font-medium text-stone-400">Aucune tâche à faire.</p>
-            ) : (
-              <div className="grid gap-2">{todoTasks.map(renderTask)}</div>
-            )}
+          <div className="flex justify-end">
+            <button
+              type="button"
+              onClick={() => void createTaskForActiveProfile()}
+              disabled={!activeProfileId || creating}
+              className="flex h-8 w-8 items-center justify-center rounded-full bg-stone-50 text-xl font-semibold leading-none text-stone-500 transition hover:bg-stone-100 disabled:text-stone-300"
+              aria-label="Ajouter une tâche"
+            >
+              +
+            </button>
+          </div>
+
+          {taskPeople.length === 0 ? (
+            <p className="rounded-2xl bg-stone-50 px-3 py-4 text-center text-sm font-medium text-stone-400">Aucun membre disponible.</p>
+          ) : (
+            <div className="grid gap-1.5">
+              {orderedTodoTasks.length === 0 ? (
+                <p className="rounded-2xl bg-stone-50 px-3 py-4 text-center text-sm font-medium text-stone-400">Aucune tâche.</p>
+              ) : (
+                orderedTodoTasks.map((task) => renderQueueTask(task))
+              )}
+            </div>
+          )}
+          {dragError && <p className="px-1 text-xs font-semibold text-rose-600">{dragError}</p>}
+
+          {selectedTask && (
+            <AdminTaskDetailPanel
+              task={selectedTask}
+              linkedEvent={selectedTask.eventId ? eventsById.get(selectedTask.eventId) ?? null : null}
+              permissions={permissions}
+              onUpdateTask={onUpdateTask}
+              onDeleteTask={onDeleteTask}
+              onOpenEvent={onOpenEvent}
+              onNativeFieldFocus={nativeKeyboard.handleFieldFocus}
+              onClose={() => setSelectedTaskId(null)}
+            />
+          )}
+
+          <section className="space-y-1 pt-2">
+            <details>
+              <summary className="cursor-pointer px-1 text-xs font-semibold uppercase tracking-[0.08em] text-stone-300">Terminées</summary>
+              {doneTasks.length === 0 ? (
+                <p className="mt-2 rounded-2xl bg-stone-50 px-3 py-3 text-center text-sm font-medium text-stone-300">Aucune tâche terminée.</p>
+              ) : (
+                <div className="mt-2 grid gap-1">{doneTasks.map((task) => renderQueueTask(task, true))}</div>
+              )}
+            </details>
           </section>
 
-          <section className="space-y-2">
-            <h3 className="px-1 text-xs font-semibold uppercase tracking-[0.08em] text-stone-400">Terminées récemment</h3>
-            {doneTasks.length === 0 ? (
-              <p className="rounded-2xl bg-stone-50 px-3 py-4 text-center text-sm font-medium text-stone-400">Aucune tâche terminée récemment.</p>
-            ) : (
-              <div className="grid gap-2">{doneTasks.map(renderTask)}</div>
-            )}
-          </section>
+          {taskPeople.length > 1 && (
+            <div className="flex justify-center gap-1 pt-1">
+              {taskPeople.map((person, index) => (
+                <button
+                  key={person.id}
+                  type="button"
+                  onClick={() => {
+                    setSelectedTaskId(null);
+                    setActiveProfileIndex(index);
+                  }}
+                  className={cn("h-1.5 rounded-full transition", index === activeProfileIndex ? "w-5 bg-stone-500" : "w-1.5 bg-stone-200")}
+                  aria-label={`Voir les tâches de ${getProfileDisplayName(person)}`}
+                />
+              ))}
+            </div>
+          )}
         </div>
       </div>
+    </div>
+  );
+}
+
+function AdminTaskDetailPanel({
+  task,
+  linkedEvent,
+  permissions,
+  onUpdateTask,
+  onDeleteTask,
+  onOpenEvent,
+  onNativeFieldFocus,
+  onClose,
+}: {
+  task: AppTask;
+  linkedEvent: ProductionEvent | null;
+  permissions: AppPermissions;
+  onUpdateTask: (task: AppTask, patch: TaskUpdatePatch) => Promise<void>;
+  onDeleteTask: (task: AppTask) => Promise<void>;
+  onOpenEvent: (eventId: string) => void;
+  onNativeFieldFocus?: (target: HTMLElement) => boolean;
+  onClose: () => void;
+}) {
+  const [title, setTitle] = useState(task.title);
+  const [localError, setLocalError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  const done = task.status === "done";
+
+  useEffect(() => {
+    setTitle(task.title);
+    setLocalError(null);
+  }, [task.id, task.title]);
+
+  async function updateTaskSafely(patch: TaskUpdatePatch) {
+    if (!permissions.canManageEvents) return;
+    setSaving(true);
+    setLocalError(null);
+    try {
+      await onUpdateTask(task, patch);
+    } catch (updateError) {
+      setLocalError(getUserFacingErrorMessage(updateError, "Impossible de modifier la tâche."));
+      setTitle(task.title);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="rounded-2xl bg-stone-50 p-3">
+      <div className="flex items-start justify-between gap-2">
+        <input
+          {...iosKeyboardGuardProps}
+          value={title}
+          disabled={saving}
+          onFocus={(event) => onNativeFieldFocus?.(event.currentTarget)}
+          onChange={(event) => setTitle(event.target.value)}
+          onBlur={() => {
+            if (title.trim() !== task.title) void updateTaskSafely({ title });
+          }}
+          className={cn("h-10 min-w-0 flex-1 rounded-xl bg-white px-3 text-base font-semibold outline-none", done ? "text-stone-500 line-through" : "text-stone-950")}
+        />
+        <button type="button" onClick={onClose} className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-stone-400 transition hover:bg-white hover:text-stone-700" aria-label="Fermer le détail">
+          <X className="h-4 w-4" />
+        </button>
+      </div>
+      <div className="mt-2 grid gap-2 sm:grid-cols-2">
+        <input
+          {...iosKeyboardGuardProps}
+          type="date"
+          value={task.dueDate ?? ""}
+          disabled={saving}
+          onFocus={(event) => onNativeFieldFocus?.(event.currentTarget)}
+          onChange={(event) => void updateTaskSafely({ dueDate: event.target.value || null })}
+          className="h-10 rounded-xl bg-white px-3 text-sm font-semibold text-stone-600 outline-none"
+        />
+        <button
+          type="button"
+          disabled={saving}
+          onClick={() => void updateTaskSafely({ status: done ? "todo" : "done" })}
+          className={cn("h-10 rounded-xl px-3 text-sm font-semibold transition disabled:bg-stone-200 disabled:text-stone-400", done ? "bg-stone-200 text-stone-600 hover:bg-stone-300" : "bg-emerald-600 text-white hover:bg-emerald-700")}
+        >
+          {done ? "Remettre à faire" : "Marquer terminée"}
+        </button>
+      </div>
+      {linkedEvent && (
+        <button type="button" onClick={() => onOpenEvent(linkedEvent.id)} className="mt-2 w-full rounded-xl bg-white px-3 py-2 text-left text-sm font-semibold text-stone-500 transition hover:text-stone-900">
+          {getProductionEventDisplay(linkedEvent).title} · {formatFullDate(linkedEvent.date)}
+        </button>
+      )}
+      <div className="mt-2 flex justify-end">
+        <button
+          type="button"
+          onClick={() => void onDeleteTask(task).then(onClose).catch((deleteError) => setLocalError(getUserFacingErrorMessage(deleteError, "Impossible de supprimer la tâche.")))}
+          disabled={saving}
+          className="h-9 rounded-xl bg-rose-50 px-3 text-sm font-semibold text-rose-700 transition hover:bg-rose-100 disabled:text-stone-300"
+        >
+          Supprimer
+        </button>
+      </div>
+      {localError && <p className="mt-2 text-xs font-semibold text-rose-700">{localError}</p>}
     </div>
   );
 }
@@ -14826,27 +15196,8 @@ function ContextDetailBlock({
             </select>
           </label>
           {linkedOptionTask && (
-            <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,2fr)] items-end gap-2">
-              <label className="grid min-w-0 gap-1">
-                <span className="text-xs font-semibold uppercase tracking-[0.08em] text-emerald-700/70">Priorité</span>
-                <select
-                  {...iosKeyboardGuardProps}
-                  value={linkedOptionTask.priority}
-                  disabled={savingCompletedByOverride}
-                  onFocus={(event) => onNativeFieldFocus(event.currentTarget)}
-                  onChange={(event) => void updateLinkedOptionTask({ priority: event.target.value as TaskPriority })}
-                  className="h-8 rounded-full border border-transparent px-3 text-base font-semibold outline-none transition focus:border-emerald-300 disabled:text-emerald-400"
-                  style={getTaskPriorityTone(linkedOptionTask.priority).inputStyle}
-                  aria-label="Priorité de la tâche liée"
-                >
-                  {Object.entries(taskPriorityLabels).map(([value, label]) => (
-                    <option key={value} value={value}>
-                      {label}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label className="grid min-w-0 gap-1">
+            <div className="grid gap-1">
+              <label className="grid min-w-0 gap-1 sm:max-w-sm">
                 <span className="text-right text-xs font-semibold uppercase tracking-[0.08em] text-emerald-700/70">Échéance</span>
                 <button
                   type="button"
@@ -16272,63 +16623,34 @@ function EventCalendarBadge({ event }: { event: ProductionEvent }) {
   );
 }
 
-const taskPriorityLabels: Record<TaskPriority, string> = {
-  urgent: "Urgent",
-  normal: "Normal",
-  low: "Faible",
-};
-
-const taskPriorityRank: Record<TaskPriority, number> = {
-  urgent: 0,
-  normal: 1,
-  low: 2,
-};
-
-const taskPriorityTones: Record<TaskPriority, { pillStyle: CSSProperties; inputStyle: CSSProperties }> = {
-  low: {
-    pillStyle: {
-      backgroundColor: "rgba(250, 204, 21, 0.18)",
-      color: "#a16207",
-    },
-    inputStyle: {
-      backgroundColor: "rgba(254, 249, 195, 0.82)",
-      color: "#a16207",
-    },
-  },
-  normal: {
-    pillStyle: {
-      backgroundColor: "rgba(251, 146, 60, 0.16)",
-      color: "#c2410c",
-    },
-    inputStyle: {
-      backgroundColor: "rgba(255, 237, 213, 0.82)",
-      color: "#c2410c",
-    },
-  },
-  urgent: {
-    pillStyle: {
-      backgroundColor: "rgba(187, 39, 32, 0.1)",
-      color: "#bb2720",
-    },
-    inputStyle: {
-      backgroundColor: "rgba(187, 39, 32, 0.07)",
-      color: "#bb2720",
-    },
-  },
-};
-
-function getTaskPriorityTone(priority: TaskPriority) {
-  return taskPriorityTones[priority] ?? taskPriorityTones.normal;
-}
-
 function sortTasksForDisplay(tasks: AppTask[]) {
   return [...tasks].sort((left, right) => {
     if (left.status !== right.status) return left.status === "todo" ? -1 : 1;
-    if (left.priority !== right.priority) return taskPriorityRank[left.priority] - taskPriorityRank[right.priority];
+    const leftOrder = left.sortOrder ?? Number.MAX_SAFE_INTEGER;
+    const rightOrder = right.sortOrder ?? Number.MAX_SAFE_INTEGER;
+    if (leftOrder !== rightOrder) return leftOrder - rightOrder;
     const leftDue = left.dueDate ?? "9999-12-31";
     const rightDue = right.dueDate ?? "9999-12-31";
     if (leftDue !== rightDue) return leftDue.localeCompare(rightDue);
     return right.createdAt.localeCompare(left.createdAt);
+  });
+}
+
+function getNextTaskSortOrder(tasks: AppTask[], assignedProfileId: string | null) {
+  const siblingOrders = tasks
+    .filter((task) => task.status === "todo" && task.assignedProfileId === assignedProfileId)
+    .map((task) => task.sortOrder)
+    .filter((sortOrder): sortOrder is number => typeof sortOrder === "number");
+  if (siblingOrders.length === 0) return 1;
+  return Math.max(...siblingOrders) + 1;
+}
+
+function sortTaskQueue(tasks: AppTask[]) {
+  return [...tasks].sort((left, right) => {
+    const leftOrder = left.sortOrder ?? Number.MAX_SAFE_INTEGER;
+    const rightOrder = right.sortOrder ?? Number.MAX_SAFE_INTEGER;
+    if (leftOrder !== rightOrder) return leftOrder - rightOrder;
+    return left.createdAt.localeCompare(right.createdAt);
   });
 }
 
@@ -16359,14 +16681,6 @@ function getOptionAssigneeLabel(option: EventOption, tasks: AppTask[], profiles:
   const linkedTask = getLinkedTaskForOption(option, tasks);
   if (linkedTask) return getTaskAssigneeLabel(linkedTask, profiles);
   return getCompletedByNameForDisplay(option);
-}
-
-function TaskPriorityBadge({ priority }: { priority: TaskPriority }) {
-  return (
-    <span className="inline-flex items-center rounded-full px-2 py-0.5 text-[0.68rem] font-semibold" style={getTaskPriorityTone(priority).pillStyle}>
-      {taskPriorityLabels[priority]}
-    </span>
-  );
 }
 
 function TaskCreateDiagnosticBlock({ diagnostic }: { diagnostic: TaskCreateDiagnostic | null }) {
@@ -16506,7 +16820,6 @@ function TaskRow({
             <p className={cn("truncate text-base font-semibold", done ? "text-stone-500 line-through" : "text-stone-950")}>{task.title}</p>
           )}
           <div className={cn("mt-1 flex flex-wrap items-center gap-2 text-xs font-semibold text-stone-400", compact && "text-[0.7rem]")}>
-            <TaskPriorityBadge priority={task.priority} />
             <span>{getTaskAssigneeLabel(task, profiles)}</span>
             {task.dueDate && <span>Échéance {formatShortDate(task.dueDate)}</span>}
           </div>
@@ -16524,7 +16837,7 @@ function TaskRow({
         )}
       </div>
       {canManage && (
-        <div className="mt-2 grid gap-2 pl-7 sm:grid-cols-3">
+        <div className="mt-2 grid gap-2 pl-7 sm:grid-cols-2">
           <select
             {...iosKeyboardGuardProps}
             value={task.assignedProfileId ?? ""}
@@ -16537,21 +16850,6 @@ function TaskRow({
             {profiles.map((userProfile) => (
               <option key={userProfile.id} value={userProfile.id}>
                 {getProfileOptionLabel(userProfile)}
-              </option>
-            ))}
-          </select>
-          <select
-            {...iosKeyboardGuardProps}
-            value={task.priority}
-            disabled={saving}
-            onFocus={(event) => onNativeFieldFocus?.(event.currentTarget)}
-            onChange={(event) => void updateTaskSafely({ priority: event.target.value as TaskPriority })}
-            className="h-9 min-w-0 rounded-xl px-2 text-sm font-semibold outline-none"
-            style={getTaskPriorityTone(task.priority).inputStyle}
-          >
-            {Object.entries(taskPriorityLabels).map(([value, label]) => (
-              <option key={value} value={value}>
-                {label}
               </option>
             ))}
           </select>
