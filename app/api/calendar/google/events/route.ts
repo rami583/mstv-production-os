@@ -1,6 +1,5 @@
 import {
   getFreshGoogleAccessToken,
-  getOwnedGoogleAccount,
   getServiceSupabaseClient,
   googleCalendarApiBaseUrl,
   googleCorsHeaders,
@@ -14,6 +13,7 @@ export const runtime = "nodejs";
 type ProductionEventRow = Database["public"]["Tables"]["events"]["Row"];
 type ExternalCalendarRow = Database["public"]["Tables"]["external_calendars"]["Row"];
 type ExternalEventLinkRow = Database["public"]["Tables"]["external_event_links"]["Row"];
+type ProfileRow = Database["public"]["Tables"]["profiles"]["Row"];
 
 export function OPTIONS() {
   return new Response(null, {
@@ -99,19 +99,38 @@ async function fetchJson<T>(url: string, init: RequestInit) {
   return payload as T;
 }
 
-async function getOwnedGoogleCalendar(supabase: ReturnType<typeof getServiceSupabaseClient>, calendarId: string, userId: string) {
+async function getRequesterProfile(supabase: ReturnType<typeof getServiceSupabaseClient>, userId: string) {
+  const { data: profile, error } = await supabase
+    .from("profiles")
+    .select("*")
+    .eq("id", userId)
+    .maybeSingle();
+
+  if (error) throw error;
+  if (!profile) throw new Error("Profil utilisateur introuvable.");
+  return profile;
+}
+
+function canUseGoogleCalendar(calendar: ExternalCalendarRow, profile: ProfileRow, userId: string) {
+  return profile.role === "admin" || calendar.created_by_profile_id === userId;
+}
+
+async function getWritableGoogleCalendar(supabase: ReturnType<typeof getServiceSupabaseClient>, calendarId: string, userId: string) {
   const { data: calendar, error } = await supabase
     .from("external_calendars")
     .select("*")
     .eq("id", calendarId)
-    .eq("created_by_profile_id", userId)
     .eq("provider_type", "google")
     .eq("sync_capability", "bidirectional")
     .maybeSingle();
 
   if (error) throw error;
-  if (!calendar?.provider_account_id || !calendar.provider_calendar_id) {
-    throw new Error("Calendrier Google introuvable.");
+  const profile = await getRequesterProfile(supabase, userId);
+  if (!calendar || !canUseGoogleCalendar(calendar, profile, userId)) {
+    throw new Error("Calendrier Google introuvable ou non autorisé.");
+  }
+  if (!calendar?.provider_account_id || !calendar.provider_calendar_id || !calendar.sync_enabled) {
+    throw new Error("Calendrier Google introuvable ou désactivé.");
   }
   return calendar;
 }
@@ -139,24 +158,32 @@ async function getGoogleLinks(supabase: ReturnType<typeof getServiceSupabaseClie
   const ownedLinks: Array<{ link: ExternalEventLinkRow; calendar: ExternalCalendarRow }> = [];
 
   for (const link of links ?? []) {
-    const calendar = await getOwnedGoogleCalendar(supabase, link.external_calendar_id, userId);
+    const calendar = await getWritableGoogleCalendar(supabase, link.external_calendar_id, userId);
     ownedLinks.push({ link, calendar });
   }
 
   return ownedLinks;
 }
 
-async function getGoogleAccessForCalendar(supabase: ReturnType<typeof getServiceSupabaseClient>, calendar: ExternalCalendarRow, userId: string) {
+async function getGoogleAccessForCalendar(supabase: ReturnType<typeof getServiceSupabaseClient>, calendar: ExternalCalendarRow) {
   if (!calendar.provider_account_id || !calendar.provider_calendar_id) {
     throw new Error("Calendrier Google incomplet.");
   }
-  const account = await getOwnedGoogleAccount(supabase, calendar.provider_account_id, userId);
+  const { data: account, error } = await supabase
+    .from("external_calendar_accounts")
+    .select("*")
+    .eq("id", calendar.provider_account_id)
+    .eq("provider_type", "google")
+    .maybeSingle();
+
+  if (error) throw error;
+  if (!account) throw new Error("Compte Google introuvable.");
   const accessToken = await getFreshGoogleAccessToken(supabase, account);
   return { accessToken, providerCalendarId: calendar.provider_calendar_id };
 }
 
-async function createGoogleEvent(supabase: ReturnType<typeof getServiceSupabaseClient>, event: ProductionEventRow, calendar: ExternalCalendarRow, userId: string) {
-  const { accessToken, providerCalendarId } = await getGoogleAccessForCalendar(supabase, calendar, userId);
+async function createGoogleEvent(supabase: ReturnType<typeof getServiceSupabaseClient>, event: ProductionEventRow, calendar: ExternalCalendarRow) {
+  const { accessToken, providerCalendarId } = await getGoogleAccessForCalendar(supabase, calendar);
   console.info("Google event create started", {
     eventId: event.id,
     externalCalendarId: calendar.id,
@@ -230,8 +257,8 @@ async function createGoogleEvent(supabase: ReturnType<typeof getServiceSupabaseC
   return googleEvent;
 }
 
-async function updateGoogleEvent(supabase: ReturnType<typeof getServiceSupabaseClient>, event: ProductionEventRow, link: ExternalEventLinkRow, calendar: ExternalCalendarRow, userId: string) {
-  const { accessToken, providerCalendarId } = await getGoogleAccessForCalendar(supabase, calendar, userId);
+async function updateGoogleEvent(supabase: ReturnType<typeof getServiceSupabaseClient>, event: ProductionEventRow, link: ExternalEventLinkRow, calendar: ExternalCalendarRow) {
+  const { accessToken, providerCalendarId } = await getGoogleAccessForCalendar(supabase, calendar);
   console.info("Google event update started", {
     eventId: event.id,
     linkId: link.id,
@@ -285,8 +312,8 @@ async function updateGoogleEvent(supabase: ReturnType<typeof getServiceSupabaseC
   return googleEvent;
 }
 
-async function deleteGoogleEvent(supabase: ReturnType<typeof getServiceSupabaseClient>, link: ExternalEventLinkRow, calendar: ExternalCalendarRow, userId: string) {
-  const { accessToken, providerCalendarId } = await getGoogleAccessForCalendar(supabase, calendar, userId);
+async function deleteGoogleEvent(supabase: ReturnType<typeof getServiceSupabaseClient>, link: ExternalEventLinkRow, calendar: ExternalCalendarRow) {
+  const { accessToken, providerCalendarId } = await getGoogleAccessForCalendar(supabase, calendar);
   console.info("Google event delete started", {
     linkId: link.id,
     eventId: link.event_id,
@@ -371,7 +398,7 @@ export async function POST(request: Request) {
       if (!externalCalendarId) {
         return googleJsonResponse({ error: "Calendrier Google manquant." }, { status: 400 });
       }
-      const calendar = await getOwnedGoogleCalendar(supabase, externalCalendarId, authResult.user.id);
+      const calendar = await getWritableGoogleCalendar(supabase, externalCalendarId, authResult.user.id);
       console.info("Google event sync selected calendar loaded", {
         eventId,
         externalCalendarId: calendar.id,
@@ -380,7 +407,7 @@ export async function POST(request: Request) {
         syncEnabled: calendar.sync_enabled,
         providerCalendarIdPresent: Boolean(calendar.provider_calendar_id),
       });
-      const googleEvent = await createGoogleEvent(supabase, event, calendar, authResult.user.id);
+      const googleEvent = await createGoogleEvent(supabase, event, calendar);
       return googleJsonResponse({ ok: true, externalEventId: googleEvent.id });
     }
 
@@ -397,14 +424,14 @@ export async function POST(request: Request) {
 
     if (action === "update") {
       for (const { link, calendar } of links) {
-        await updateGoogleEvent(supabase, event, link, calendar, authResult.user.id);
+        await updateGoogleEvent(supabase, event, link, calendar);
       }
       return googleJsonResponse({ ok: true, synced: links.length });
     }
 
     if (action === "delete") {
       for (const { link, calendar } of links) {
-        await deleteGoogleEvent(supabase, link, calendar, authResult.user.id);
+        await deleteGoogleEvent(supabase, link, calendar);
       }
       return googleJsonResponse({ ok: true, synced: links.length });
     }

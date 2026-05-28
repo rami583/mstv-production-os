@@ -4,7 +4,6 @@ import {
   appleJsonResponse,
   decryptAppleCredentials,
   getBasicAuthHeader,
-  getOwnedAppleAccount,
   getServiceSupabaseClient,
   joinCalDavUrl,
   requireAuthenticatedUser,
@@ -16,6 +15,7 @@ type ProductionEventRow = Database["public"]["Tables"]["events"]["Row"];
 type ExternalCalendarRow = Database["public"]["Tables"]["external_calendars"]["Row"];
 type ExternalEventLinkRow = Database["public"]["Tables"]["external_event_links"]["Row"];
 type ExternalEventLinkInsert = Database["public"]["Tables"]["external_event_links"]["Insert"];
+type ProfileRow = Database["public"]["Tables"]["profiles"]["Row"];
 type AppleMoveErrorDetails = {
   stage: string;
   message: string;
@@ -192,16 +192,35 @@ function getAppleEventPayload(event: ProductionEventRow, uid: string) {
   return `${lines.map(foldIcsLine).join("\r\n")}\r\n`;
 }
 
-async function getOwnedAppleCalendar(supabase: ReturnType<typeof getServiceSupabaseClient>, calendarId: string, userId: string) {
+async function getRequesterProfile(supabase: ReturnType<typeof getServiceSupabaseClient>, userId: string) {
+  const { data: profile, error } = await supabase
+    .from("profiles")
+    .select("*")
+    .eq("id", userId)
+    .maybeSingle();
+
+  if (error) throw error;
+  if (!profile) throw new Error("Profil utilisateur introuvable.");
+  return profile;
+}
+
+function canUseAppleCalendar(calendar: ExternalCalendarRow, profile: ProfileRow, userId: string) {
+  return profile.role === "admin" || calendar.created_by_profile_id === userId;
+}
+
+async function getWritableAppleCalendar(supabase: ReturnType<typeof getServiceSupabaseClient>, calendarId: string, userId: string) {
   const { data: calendar, error } = await supabase
     .from("external_calendars")
     .select("*")
     .eq("id", calendarId)
-    .eq("created_by_profile_id", userId)
     .eq("provider_type", "apple_caldav")
     .maybeSingle();
 
   if (error) throw error;
+  const profile = await getRequesterProfile(supabase, userId);
+  if (!calendar || !canUseAppleCalendar(calendar, profile, userId)) {
+    throw new Error("Calendrier Apple introuvable ou non autorisé.");
+  }
   if (!calendar?.provider_account_id || !calendar.provider_calendar_id || !calendar.sync_enabled) {
     throw new Error("Calendrier Apple introuvable ou désactivé.");
   }
@@ -232,18 +251,26 @@ async function getAppleLinks(supabase: ReturnType<typeof getServiceSupabaseClien
   const ownedLinks: Array<{ link: ExternalEventLinkRow; calendar: ExternalCalendarRow }> = [];
 
   for (const link of links ?? []) {
-    const calendar = await getOwnedAppleCalendar(supabase, link.external_calendar_id, userId);
+    const calendar = await getWritableAppleCalendar(supabase, link.external_calendar_id, userId);
     ownedLinks.push({ link, calendar });
   }
 
   return ownedLinks;
 }
 
-async function getAppleCredentialsForCalendar(supabase: ReturnType<typeof getServiceSupabaseClient>, calendar: ExternalCalendarRow, userId: string) {
+async function getAppleCredentialsForCalendar(supabase: ReturnType<typeof getServiceSupabaseClient>, calendar: ExternalCalendarRow) {
   if (!calendar.provider_account_id || !calendar.provider_calendar_id) {
     throw new Error("Calendrier Apple incomplet.");
   }
-  const account = await getOwnedAppleAccount(supabase, calendar.provider_account_id, userId);
+  const { data: account, error } = await supabase
+    .from("external_calendar_accounts")
+    .select("*")
+    .eq("id", calendar.provider_account_id)
+    .eq("provider_type", "apple_caldav")
+    .maybeSingle();
+
+  if (error) throw error;
+  if (!account) throw new Error("Compte Apple Calendar introuvable.");
   return decryptAppleCredentials(account);
 }
 
@@ -319,10 +346,10 @@ async function deleteRemoteAppleEventQuietly(params: {
   }
 }
 
-async function createAppleEvent(supabase: ReturnType<typeof getServiceSupabaseClient>, event: ProductionEventRow, calendar: ExternalCalendarRow, userId: string) {
+async function createAppleEvent(supabase: ReturnType<typeof getServiceSupabaseClient>, event: ProductionEventRow, calendar: ExternalCalendarRow) {
   const providerCalendarId = calendar.provider_calendar_id;
   if (!providerCalendarId) throw new Error("Calendrier Apple incomplet.");
-  const credentials = await getAppleCredentialsForCalendar(supabase, calendar, userId);
+  const credentials = await getAppleCredentialsForCalendar(supabase, calendar);
   const uid = getAppleUid(event);
   const href = getAppleHref({ credentialsServerUrl: credentials.serverUrl, calendar, uid });
   const icsText = getAppleEventPayload(event, uid);
@@ -393,8 +420,8 @@ async function createAppleEvent(supabase: ReturnType<typeof getServiceSupabaseCl
   return { id: uid, href, etag: putResult.etag };
 }
 
-async function updateAppleEvent(supabase: ReturnType<typeof getServiceSupabaseClient>, event: ProductionEventRow, link: ExternalEventLinkRow, calendar: ExternalCalendarRow, userId: string) {
-  const credentials = await getAppleCredentialsForCalendar(supabase, calendar, userId);
+async function updateAppleEvent(supabase: ReturnType<typeof getServiceSupabaseClient>, event: ProductionEventRow, link: ExternalEventLinkRow, calendar: ExternalCalendarRow) {
+  const credentials = await getAppleCredentialsForCalendar(supabase, calendar);
   const uid = getAppleUid(event, link);
   const href = getAppleHref({ credentialsServerUrl: credentials.serverUrl, calendar, uid, link });
   const icsText = getAppleEventPayload(event, uid);
@@ -430,8 +457,8 @@ async function updateAppleEvent(supabase: ReturnType<typeof getServiceSupabaseCl
   }
 }
 
-async function deleteAppleLinkedEvent(supabase: ReturnType<typeof getServiceSupabaseClient>, link: ExternalEventLinkRow, calendar: ExternalCalendarRow, userId: string) {
-  const credentials = await getAppleCredentialsForCalendar(supabase, calendar, userId);
+async function deleteAppleLinkedEvent(supabase: ReturnType<typeof getServiceSupabaseClient>, link: ExternalEventLinkRow, calendar: ExternalCalendarRow) {
+  const credentials = await getAppleCredentialsForCalendar(supabase, calendar);
   const uid = link.external_event_uid || link.external_event_id;
   const href = getAppleHref({ credentialsServerUrl: credentials.serverUrl, calendar, uid, link });
   await deleteAppleEvent({ credentials, href });
@@ -468,7 +495,7 @@ async function moveAppleLinkedEvent(
 
   let previousCredentials: ReturnType<typeof decryptAppleCredentials>;
   try {
-    previousCredentials = await getAppleCredentialsForCalendar(supabase, previousCalendar, userId);
+    previousCredentials = await getAppleCredentialsForCalendar(supabase, previousCalendar);
   } catch (error) {
     throw makeAppleMoveError("old_credentials_lookup", "Impossible de charger les identifiants de l’ancien calendrier Apple.", {
       status: 500,
@@ -477,7 +504,7 @@ async function moveAppleLinkedEvent(
 
   let nextCredentials: ReturnType<typeof decryptAppleCredentials>;
   try {
-    nextCredentials = await getAppleCredentialsForCalendar(supabase, nextCalendar, userId);
+    nextCredentials = await getAppleCredentialsForCalendar(supabase, nextCalendar);
   } catch (error) {
     throw makeAppleMoveError("new_credentials_lookup", "Impossible de charger les identifiants du calendrier Apple cible.", {
       status: 500,
@@ -613,8 +640,8 @@ export async function POST(request: Request) {
         return appleJsonResponse({ error: "Calendrier Apple manquant." }, { status: 400 });
       }
       const event = await getEvent(supabase, eventId);
-      const calendar = await getOwnedAppleCalendar(supabase, externalCalendarId, authResult.user.id);
-      const appleEvent = await createAppleEvent(supabase, event, calendar, authResult.user.id);
+      const calendar = await getWritableAppleCalendar(supabase, externalCalendarId, authResult.user.id);
+      const appleEvent = await createAppleEvent(supabase, event, calendar);
       return appleJsonResponse({ ok: true, externalEventId: appleEvent.id });
     }
 
@@ -637,7 +664,7 @@ export async function POST(request: Request) {
 
       let nextCalendar: ExternalCalendarRow;
       try {
-        nextCalendar = await getOwnedAppleCalendar(supabase, externalCalendarId, authResult.user.id);
+        nextCalendar = await getWritableAppleCalendar(supabase, externalCalendarId, authResult.user.id);
       } catch (error) {
         throw makeAppleMoveError("new_calendar_lookup", "Calendrier Apple cible introuvable ou désactivé.", {
           status: 404,
@@ -682,14 +709,14 @@ export async function POST(request: Request) {
     if (action === "update") {
       const event = await getEvent(supabase, eventId);
       for (const { link, calendar } of links) {
-        await updateAppleEvent(supabase, event, link, calendar, authResult.user.id);
+        await updateAppleEvent(supabase, event, link, calendar);
       }
       return appleJsonResponse({ ok: true, synced: links.length });
     }
 
     if (action === "delete") {
       for (const { link, calendar } of links) {
-        await deleteAppleLinkedEvent(supabase, link, calendar, authResult.user.id);
+        await deleteAppleLinkedEvent(supabase, link, calendar);
       }
       return appleJsonResponse({ ok: true, synced: links.length });
     }
