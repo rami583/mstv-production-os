@@ -1,6 +1,22 @@
 "use client";
 
 import {
+  DndContext,
+  PointerSensor,
+  closestCenter,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+  type DragStartEvent,
+} from "@dnd-kit/core";
+import {
+  SortableContext,
+  arrayMove,
+  useSortable,
+  verticalListSortingStrategy,
+} from "@dnd-kit/sortable";
+import { CSS } from "@dnd-kit/utilities";
+import {
   AlertCircle,
   Bell,
   Brush,
@@ -48,6 +64,7 @@ import {
   useMemo,
   useRef,
   useState,
+  type CSSProperties,
   type Dispatch,
   type PointerEvent as ReactPointerEvent,
   type ReactNode,
@@ -11361,8 +11378,6 @@ function TeamTasksSheet({
   onOpenEvent: (eventId: string) => void;
 }) {
   const nativeKeyboard = useNativeKeyboardVisibility<HTMLDivElement>();
-  const rowRefs = useRef(new Map<string, HTMLDivElement>());
-  const latestOrderIdsRef = useRef<string[]>([]);
   const swipeStartRef = useRef<{ pointerId: number; x: number; y: number } | null>(null);
   const [activeProfileIndex, setActiveProfileIndex] = useState(0);
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
@@ -11371,6 +11386,13 @@ function TeamTasksSheet({
   const [creating, setCreating] = useState(false);
   const [localError, setLocalError] = useState<string | null>(null);
   const [dragError, setDragError] = useState<string | null>(null);
+  const sensors = useSensors(
+    useSensor(PointerSensor, {
+      activationConstraint: {
+        distance: 6,
+      },
+    }),
+  );
   const eventsById = useMemo(() => new Map(events.map((event) => [event.id, event])), [events]);
   const taskPeople = useMemo(() => (profiles.length > 0 ? profiles : currentProfile ? [currentProfile] : []), [currentProfile, profiles]);
   const activeProfile = taskPeople[Math.min(activeProfileIndex, Math.max(taskPeople.length - 1, 0))] ?? null;
@@ -11407,10 +11429,6 @@ function TeamTasksSheet({
     setOrderIds((currentIds) => (currentIds.join("|") === nextIds.join("|") ? currentIds : nextIds));
   }, [draggingId, todoTasks]);
 
-  useEffect(() => {
-    latestOrderIdsRef.current = orderedTodoTasks.map((task) => task.id);
-  }, [orderedTodoTasks]);
-
   function changePerson(delta: -1 | 1) {
     if (taskPeople.length < 2) return;
     setSelectedTaskId(null);
@@ -11418,43 +11436,10 @@ function TeamTasksSheet({
     setActiveProfileIndex((current) => (current + delta + taskPeople.length) % taskPeople.length);
   }
 
-  function setRowRef(id: string, node: HTMLDivElement | null) {
-    if (node) {
-      rowRefs.current.set(id, node);
-    } else {
-      rowRefs.current.delete(id);
-    }
-  }
-
-  function updateDragOrder(pointerY: number, activeId: string) {
-    setOrderIds((currentIds) => {
-      const currentIndex = currentIds.indexOf(activeId);
-      if (currentIndex === -1) return currentIds;
-
-      let targetIndex = currentIds.length - 1;
-      for (let index = 0; index < currentIds.length; index += 1) {
-        const node = rowRefs.current.get(currentIds[index]);
-        if (!node) continue;
-        const rect = node.getBoundingClientRect();
-        if (pointerY < rect.top + rect.height / 2) {
-          targetIndex = index;
-          break;
-        }
-      }
-
-      if (targetIndex === currentIndex) return currentIds;
-      const nextIds = moveArrayItem(currentIds, currentIndex, targetIndex);
-      latestOrderIdsRef.current = nextIds;
-      return nextIds;
-    });
-  }
-
-  async function persistDragOrder(previousIds: string[]) {
-    const nextTasks = latestOrderIdsRef.current
+  async function persistDragOrder(nextIds: string[], previousIds: string[]) {
+    const nextTasks = nextIds
       .map((id) => todoTasksById.get(id))
       .filter((task): task is AppTask => Boolean(task));
-    const nextIds = nextTasks.map((task) => task.id);
-    if (nextIds.join("|") === previousIds.join("|")) return;
 
     try {
       await onReorderTasks(nextTasks, activeProfileId);
@@ -11464,33 +11449,29 @@ function TeamTasksSheet({
     }
   }
 
-  function startDrag(task: AppTask, event: ReactPointerEvent<HTMLButtonElement>) {
-    if (!canManageActiveProfileTasks) return;
-    if (orderedTodoTasks.length < 2) return;
-    event.preventDefault();
-    event.stopPropagation();
+  function handleTaskDragStart(event: DragStartEvent) {
+    setDraggingId(String(event.active.id));
     setDragError(null);
-    const previousIds = orderedTodoTasks.map((item) => item.id);
-    latestOrderIdsRef.current = previousIds;
-    setDraggingId(task.id);
-    event.currentTarget.setPointerCapture(event.pointerId);
+  }
 
-    function handlePointerMove(pointerEvent: PointerEvent) {
-      pointerEvent.preventDefault();
-      updateDragOrder(pointerEvent.clientY, task.id);
-    }
+  function handleTaskDragEnd(event: DragEndEvent) {
+    setDraggingId(null);
+    const activeId = String(event.active.id);
+    const overId = event.over?.id ? String(event.over.id) : null;
+    if (!overId || activeId === overId) return;
 
-    function handlePointerEnd() {
-      window.removeEventListener("pointermove", handlePointerMove);
-      window.removeEventListener("pointerup", handlePointerEnd);
-      window.removeEventListener("pointercancel", handlePointerEnd);
-      setDraggingId(null);
-      void persistDragOrder(previousIds);
-    }
+    const previousIds = orderedTodoTasks.map((task) => task.id);
+    const oldIndex = previousIds.indexOf(activeId);
+    const newIndex = previousIds.indexOf(overId);
+    if (oldIndex === -1 || newIndex === -1) return;
 
-    window.addEventListener("pointermove", handlePointerMove, { passive: false });
-    window.addEventListener("pointerup", handlePointerEnd, { once: true });
-    window.addEventListener("pointercancel", handlePointerEnd, { once: true });
+    const nextIds = arrayMove(previousIds, oldIndex, newIndex);
+    setOrderIds(nextIds);
+    void persistDragOrder(nextIds, previousIds);
+  }
+
+  function handleTaskDragCancel() {
+    setDraggingId(null);
   }
 
   function handleSwipePointerDown(pointerEvent: ReactPointerEvent<HTMLDivElement>) {
@@ -11535,36 +11516,27 @@ function TeamTasksSheet({
   }
 
   function renderQueueTask(task: AppTask, completed = false) {
+    if (completed) {
+      return (
+        <TaskQueueRow
+          key={task.id}
+          task={task}
+          selected={selectedTaskId === task.id}
+          completed
+          onOpen={() => setSelectedTaskId(task.id)}
+        />
+      );
+    }
+
     return (
-      <div key={task.id} ref={(node) => setRowRef(task.id, node)}>
-        <div
-          className={cn(
-            "group flex min-h-10 items-center gap-2 rounded-xl px-2.5 py-1.5 transition",
-            selectedTaskId === task.id ? "bg-stone-100" : "bg-stone-50 hover:bg-stone-100/70",
-            completed && "opacity-55",
-            draggingId === task.id && "opacity-70",
-          )}
-        >
-          {!completed && canManageActiveProfileTasks && (
-            <button
-              type="button"
-              data-task-drag-handle
-              onPointerDown={(event) => startDrag(task, event)}
-              className="flex h-7 w-5 shrink-0 touch-none items-center justify-center rounded-full text-stone-300 transition hover:text-stone-500"
-              aria-label={`Réordonner ${task.title}`}
-            >
-              <GripVertical className="h-3.5 w-3.5" strokeWidth={2} />
-            </button>
-          )}
-          <button
-            type="button"
-            onClick={() => setSelectedTaskId(task.id)}
-            className={cn("min-w-0 flex-1 truncate text-left text-base font-semibold", completed ? "text-stone-400 line-through" : "text-stone-900")}
-          >
-            {task.title}
-          </button>
-        </div>
-      </div>
+      <SortableTaskRow
+        key={task.id}
+        task={task}
+        selected={selectedTaskId === task.id}
+        dragging={draggingId === task.id}
+        canDrag={!completed && canManageActiveProfileTasks && orderedTodoTasks.length > 1}
+        onOpen={() => setSelectedTaskId(task.id)}
+      />
     );
   }
 
@@ -11626,7 +11598,19 @@ function TeamTasksSheet({
               {orderedTodoTasks.length === 0 ? (
                 <p className="rounded-2xl bg-stone-50 px-3 py-4 text-center text-sm font-medium text-stone-400">Aucune tâche.</p>
               ) : (
-                orderedTodoTasks.map((task) => renderQueueTask(task))
+                <DndContext
+                  sensors={sensors}
+                  collisionDetection={closestCenter}
+                  onDragStart={handleTaskDragStart}
+                  onDragEnd={handleTaskDragEnd}
+                  onDragCancel={handleTaskDragCancel}
+                >
+                  <SortableContext items={orderedTodoTasks.map((task) => task.id)} strategy={verticalListSortingStrategy}>
+                    <div className="grid gap-1.5">
+                      {orderedTodoTasks.map((task) => renderQueueTask(task))}
+                    </div>
+                  </SortableContext>
+                </DndContext>
               )}
             </div>
           )}
@@ -11675,6 +11659,105 @@ function TeamTasksSheet({
           )}
         </div>
       </div>
+    </div>
+  );
+}
+
+function SortableTaskRow({
+  task,
+  selected,
+  dragging = false,
+  canDrag,
+  onOpen,
+}: {
+  task: AppTask;
+  selected: boolean;
+  dragging?: boolean;
+  canDrag: boolean;
+  onOpen: () => void;
+}) {
+  const {
+    attributes,
+    listeners,
+    setActivatorNodeRef,
+    setNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({
+    id: task.id,
+    disabled: !canDrag,
+  });
+  const rowIsDragging = dragging || isDragging;
+  const style: CSSProperties = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    zIndex: rowIsDragging ? 10 : undefined,
+    position: rowIsDragging ? "relative" : undefined,
+  };
+
+  return (
+    <div ref={setNodeRef} style={style}>
+      <TaskQueueRow
+        task={task}
+        selected={selected}
+        dragging={rowIsDragging}
+        dragHandle={
+          canDrag ? (
+            <button
+              ref={setActivatorNodeRef}
+              type="button"
+              data-task-drag-handle
+              className="-ml-1 flex h-7 w-5 shrink-0 touch-none items-center justify-center rounded-full text-stone-300 transition hover:text-stone-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-stone-300"
+              aria-label={`Réordonner ${task.title}`}
+              title="Déplacer"
+              {...attributes}
+              {...listeners}
+            >
+              <GripVertical className="h-3.5 w-3.5" strokeWidth={2} />
+            </button>
+          ) : null
+        }
+        onOpen={onOpen}
+      />
+    </div>
+  );
+}
+
+function TaskQueueRow({
+  task,
+  selected,
+  completed = false,
+  dragging = false,
+  dragHandle = null,
+  onOpen,
+}: {
+  task: AppTask;
+  selected: boolean;
+  completed?: boolean;
+  dragging?: boolean;
+  dragHandle?: ReactNode;
+  onOpen: () => void;
+}) {
+  return (
+    <div
+      className={cn(
+        "group flex min-h-10 items-center gap-2 rounded-xl px-2.5 py-1.5 transition",
+        completed ? "bg-stone-50/70 opacity-60" : selected ? "bg-stone-100" : "bg-stone-50 hover:bg-stone-100/70",
+        dragging && "bg-white opacity-90 shadow-sm shadow-black/5",
+      )}
+    >
+      {dragHandle}
+      <button
+        type="button"
+        onClick={onOpen}
+        className={cn(
+          "min-w-0 flex-1 truncate text-left text-base font-semibold outline-none transition focus-visible:text-stone-950",
+          completed ? "text-stone-400 line-through" : "text-stone-800 hover:text-stone-950",
+        )}
+      >
+        {task.title}
+      </button>
     </div>
   );
 }
