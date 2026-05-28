@@ -11731,8 +11731,8 @@ function TeamTasksSheet({
           ) : taskPeople.length === 0 ? (
             <p className="rounded-2xl bg-stone-50 px-3 py-4 text-center text-sm font-medium text-stone-400">Aucun membre disponible.</p>
           ) : (
-            <div className="rounded-b-2xl bg-white px-2 py-2">
-              <div className="grid gap-1.5">
+            <div className="overflow-visible rounded-b-2xl bg-white px-3 py-3">
+              <div className="grid gap-2 overflow-visible">
                 {orderedTodoTasks.length === 0 ? (
                   <p className="rounded-2xl bg-white px-3 py-4 text-center text-sm font-medium text-stone-300">Aucune tâche.</p>
                 ) : (
@@ -11744,7 +11744,7 @@ function TeamTasksSheet({
                     onDragCancel={handleTaskDragCancel}
                   >
                     <SortableContext items={orderedTodoTasks.map((task) => task.id)} strategy={verticalListSortingStrategy}>
-                      <div className="grid gap-1.5">
+                      <div className="grid gap-2 overflow-visible">
                         {orderedTodoTasks.map((task, index) => renderQueueTask(task, false, index))}
                       </div>
                     </SortableContext>
@@ -11756,7 +11756,7 @@ function TeamTasksSheet({
               {doneTasks.length > 0 && (
                 <section className="space-y-1 pt-2">
                   <p className="px-1 text-xs font-semibold uppercase tracking-[0.08em] text-stone-300">Terminé</p>
-                  <div className="grid gap-1">{doneTasks.map((task) => renderQueueTask(task, true))}</div>
+                  <div className="grid gap-1.5 overflow-visible">{doneTasks.map((task) => renderQueueTask(task, true))}</div>
                 </section>
               )}
             </div>
@@ -11810,7 +11810,7 @@ function SortableTaskRow({
   };
 
   return (
-    <div style={style}>
+    <div className="overflow-visible" style={style}>
       <TaskQueueRow
         ref={setTaskRowRef}
         task={task}
@@ -11862,20 +11862,20 @@ const TaskQueueRow = forwardRef<HTMLDivElement, {
         onOpen();
       }}
       className={cn(
-        "group flex min-h-11 select-none items-center gap-2 rounded-xl px-3 py-2 transition",
+        "group mx-0.5 flex min-h-11 select-none items-center gap-2 rounded-xl px-3 py-2 transition",
         draggable ? "cursor-grab active:cursor-grabbing" : "cursor-pointer",
         completed
           ? "bg-white/80 opacity-65 hover:bg-stone-50/80"
           : selected || priorityIndex === 0
-            ? "bg-sky-100/85 hover:bg-sky-100"
+            ? "bg-sky-100/95 hover:bg-sky-100"
             : priorityIndex === 1
-              ? "bg-sky-50 hover:bg-sky-100/60"
+              ? "bg-sky-100/65 hover:bg-sky-100/75"
               : priorityIndex === 2
-                ? "bg-sky-50/75 hover:bg-sky-100/45"
-                : "bg-sky-50/80 hover:bg-sky-100/55",
-        !completed && priorityIndex === 0 && "ring-1 ring-stone-300/55",
-        !completed && priorityIndex === 1 && "ring-1 ring-stone-300/35",
-        !completed && priorityIndex === 2 && "ring-1 ring-stone-300/20",
+                ? "bg-sky-50/90 hover:bg-sky-100/55"
+                : "bg-sky-50/55 hover:bg-sky-100/45",
+        !completed && priorityIndex === 0 && "ring-1 ring-sky-300/45",
+        !completed && priorityIndex === 1 && "ring-1 ring-sky-300/30",
+        !completed && priorityIndex === 2 && "ring-1 ring-sky-300/20",
         dragging && "bg-white opacity-90 shadow-sm shadow-black/5",
       )}
       {...draggableProps}
