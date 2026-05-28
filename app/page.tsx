@@ -2,7 +2,8 @@
 
 import {
   DndContext,
-  PointerSensor,
+  MouseSensor,
+  TouchSensor,
   closestCenter,
   useSensor,
   useSensors,
@@ -60,12 +61,14 @@ import { Network } from "@capacitor/network";
 import {
   useCallback,
   useEffect,
+  forwardRef,
   useLayoutEffect,
   useMemo,
   useRef,
   useState,
   type CSSProperties,
   type Dispatch,
+  type HTMLAttributes,
   type PointerEvent as ReactPointerEvent,
   type ReactNode,
   type SetStateAction,
@@ -11379,6 +11382,7 @@ function TeamTasksSheet({
 }) {
   const nativeKeyboard = useNativeKeyboardVisibility<HTMLDivElement>();
   const swipeStartRef = useRef<{ pointerId: number; x: number; y: number } | null>(null);
+  const suppressTaskOpenRef = useRef(false);
   const [activeProfileIndex, setActiveProfileIndex] = useState(0);
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const [orderIds, setOrderIds] = useState<string[]>([]);
@@ -11387,9 +11391,15 @@ function TeamTasksSheet({
   const [localError, setLocalError] = useState<string | null>(null);
   const [dragError, setDragError] = useState<string | null>(null);
   const sensors = useSensors(
-    useSensor(PointerSensor, {
+    useSensor(MouseSensor, {
       activationConstraint: {
-        distance: 6,
+        distance: 5,
+      },
+    }),
+    useSensor(TouchSensor, {
+      activationConstraint: {
+        delay: 180,
+        tolerance: 8,
       },
     }),
   );
@@ -11450,12 +11460,16 @@ function TeamTasksSheet({
   }
 
   function handleTaskDragStart(event: DragStartEvent) {
+    suppressTaskOpenRef.current = true;
     setDraggingId(String(event.active.id));
     setDragError(null);
   }
 
   function handleTaskDragEnd(event: DragEndEvent) {
     setDraggingId(null);
+    window.setTimeout(() => {
+      suppressTaskOpenRef.current = false;
+    }, 250);
     const activeId = String(event.active.id);
     const overId = event.over?.id ? String(event.over.id) : null;
     if (!overId || activeId === overId) return;
@@ -11472,6 +11486,9 @@ function TeamTasksSheet({
 
   function handleTaskDragCancel() {
     setDraggingId(null);
+    window.setTimeout(() => {
+      suppressTaskOpenRef.current = false;
+    }, 250);
   }
 
   function handleSwipePointerDown(pointerEvent: ReactPointerEvent<HTMLDivElement>) {
@@ -11515,6 +11532,14 @@ function TeamTasksSheet({
     }
   }
 
+  function openTaskDetail(taskId: string) {
+    if (suppressTaskOpenRef.current) {
+      suppressTaskOpenRef.current = false;
+      return;
+    }
+    setSelectedTaskId(taskId);
+  }
+
   function renderQueueTask(task: AppTask, completed = false) {
     if (completed) {
       return (
@@ -11523,7 +11548,7 @@ function TeamTasksSheet({
           task={task}
           selected={selectedTaskId === task.id}
           completed
-          onOpen={() => setSelectedTaskId(task.id)}
+          onOpen={() => openTaskDetail(task.id)}
         />
       );
     }
@@ -11535,7 +11560,7 @@ function TeamTasksSheet({
         selected={selectedTaskId === task.id}
         dragging={draggingId === task.id}
         canDrag={!completed && canManageActiveProfileTasks && orderedTodoTasks.length > 1}
-        onOpen={() => setSelectedTaskId(task.id)}
+        onOpen={() => openTaskDetail(task.id)}
       />
     );
   }
@@ -11695,72 +11720,73 @@ function SortableTaskRow({
     zIndex: rowIsDragging ? 10 : undefined,
     position: rowIsDragging ? "relative" : undefined,
   };
+  const setTaskRowRef = (node: HTMLDivElement | null) => {
+    setNodeRef(node);
+    setActivatorNodeRef(node);
+  };
 
   return (
-    <div ref={setNodeRef} style={style}>
+    <div style={style}>
       <TaskQueueRow
+        ref={setTaskRowRef}
         task={task}
         selected={selected}
         dragging={rowIsDragging}
-        dragHandle={
-          canDrag ? (
-            <button
-              ref={setActivatorNodeRef}
-              type="button"
-              data-task-drag-handle
-              className="-ml-1 flex h-7 w-5 shrink-0 touch-none items-center justify-center rounded-full text-stone-300 transition hover:text-stone-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-stone-300"
-              aria-label={`Réordonner ${task.title}`}
-              title="Déplacer"
-              {...attributes}
-              {...listeners}
-            >
-              <GripVertical className="h-3.5 w-3.5" strokeWidth={2} />
-            </button>
-          ) : null
-        }
+        draggable={canDrag}
+        draggableProps={canDrag ? ({ ...attributes, ...listeners } as HTMLAttributes<HTMLDivElement>) : undefined}
         onOpen={onOpen}
       />
     </div>
   );
 }
 
-function TaskQueueRow({
-  task,
-  selected,
-  completed = false,
-  dragging = false,
-  dragHandle = null,
-  onOpen,
-}: {
+const TaskQueueRow = forwardRef<HTMLDivElement, {
   task: AppTask;
   selected: boolean;
   completed?: boolean;
   dragging?: boolean;
-  dragHandle?: ReactNode;
+  draggable?: boolean;
+  draggableProps?: HTMLAttributes<HTMLDivElement>;
   onOpen: () => void;
-}) {
+}>(function TaskQueueRow({
+  task,
+  selected,
+  completed = false,
+  dragging = false,
+  draggable = false,
+  draggableProps,
+  onOpen,
+}, ref) {
   return (
     <div
+      ref={ref}
+      role="button"
+      tabIndex={0}
+      onClick={onOpen}
+      onKeyDown={(event) => {
+        if (event.key !== "Enter" && event.key !== " ") return;
+        event.preventDefault();
+        onOpen();
+      }}
       className={cn(
-        "group flex min-h-10 items-center gap-2 rounded-xl px-2.5 py-1.5 transition",
+        "group flex min-h-11 select-none items-center gap-2 rounded-xl px-3 py-2 transition",
+        draggable ? "cursor-grab active:cursor-grabbing" : "cursor-pointer",
         completed ? "bg-stone-50/70 opacity-60" : selected ? "bg-stone-100" : "bg-stone-50 hover:bg-stone-100/70",
         dragging && "bg-white opacity-90 shadow-sm shadow-black/5",
       )}
+      {...draggableProps}
     >
-      {dragHandle}
-      <button
-        type="button"
-        onClick={onOpen}
+      <span
         className={cn(
-          "min-w-0 flex-1 truncate text-left text-base font-semibold outline-none transition focus-visible:text-stone-950",
-          completed ? "text-stone-400 line-through" : "text-stone-800 hover:text-stone-950",
+          "min-w-0 flex-1 truncate text-left text-base font-semibold leading-snug transition",
+          completed ? "text-stone-400 line-through" : "text-stone-800 group-hover:text-stone-950",
         )}
       >
         {task.title}
-      </button>
+      </span>
     </div>
   );
-}
+});
 
 function AdminTaskDetailPanel({
   task,
