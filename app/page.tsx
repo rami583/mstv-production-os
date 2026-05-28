@@ -574,6 +574,16 @@ function compareExternalCalendarDisplayOrder(left: ExternalCalendar, right: Exte
   return left.name.localeCompare(right.name, "fr", { sensitivity: "base" });
 }
 
+function isCreatableExternalCalendar(calendar: ExternalCalendar) {
+  return (
+    (calendar.providerType === "google" || calendar.providerType === "apple_caldav") &&
+    calendar.syncCapability === "bidirectional" &&
+    calendar.syncEnabled &&
+    Boolean(calendar.providerAccountId) &&
+    Boolean(calendar.providerCalendarId)
+  );
+}
+
 function sortExternalCalendarsForDisplay<T extends { storedCalendar: ExternalCalendar | null; calendar: { name?: string; summary?: string } }>(rows: T[]) {
   return [...rows].sort((left, right) => {
     if (left.storedCalendar && right.storedCalendar) {
@@ -1429,6 +1439,8 @@ const pendingSyncStoreName = "pending_actions";
 const relatedDataFetchBatchSize = 200;
 const nativeMstvIcsImportBatchSize = 100;
 const supabaseFetchPageSize = 1000;
+const noCreatableCalendarMessage = "Aucun calendrier synchronisé actif n’est disponible pour créer cet événement.";
+const legacyLocalCalendarImportDisabledMessage = "L’import vers le calendrier local MSTV n’est plus disponible. Choisissez un calendrier Apple ou Google synchronisé.";
 const cachedAuthSessionKey = "mstv.cachedAuthSession";
 const cachedProfileKeyPrefix = "mstv.cachedProfile.";
 const cachedProfileMetaKeyPrefix = "mstv.cachedProfileMeta.";
@@ -4066,26 +4078,12 @@ export default function Home() {
   const nextDetailEvent = hasNextEvent ? chronologicalEvents[selectedEventIndex + 1] : null;
   const writableGoogleCalendars = useMemo(
     () =>
-      externalCalendars.filter(
-        (calendar) =>
-          calendar.providerType === "google" &&
-          calendar.syncCapability === "bidirectional" &&
-          calendar.syncEnabled &&
-          Boolean(calendar.providerAccountId) &&
-          Boolean(calendar.providerCalendarId),
-      ),
+      externalCalendars.filter((calendar) => calendar.providerType === "google" && isCreatableExternalCalendar(calendar)),
     [externalCalendars],
   );
   const writableAppleCalendars = useMemo(
     () =>
-      externalCalendars.filter(
-        (calendar) =>
-          calendar.providerType === "apple_caldav" &&
-          calendar.syncCapability === "bidirectional" &&
-          calendar.syncEnabled &&
-          Boolean(calendar.providerAccountId) &&
-          Boolean(calendar.providerCalendarId),
-      ),
+      externalCalendars.filter((calendar) => calendar.providerType === "apple_caldav" && isCreatableExternalCalendar(calendar)),
     [externalCalendars],
   );
   const writableExternalCalendars = useMemo(
@@ -6585,11 +6583,7 @@ export default function Home() {
     }
 
     if (action.actionType === "event_insert") {
-      const values = action.payload.values as Database["public"]["Tables"]["events"]["Insert"];
-      const { error: insertError } = await supabase.from("events").insert(values);
-      if (insertError) throw insertError;
-      await writeQueuedActivity(activity);
-      return;
+      throw new Error(noCreatableCalendarMessage);
     }
 
     if (action.actionType === "event_update") {
@@ -7055,7 +7049,7 @@ export default function Home() {
 
   function openNativeMstvIcsImport() {
     if (!permissions.canManageEvents) return;
-    setNativeMstvIcsImportOpen(true);
+    setError(legacyLocalCalendarImportDisabledMessage);
     setCreateMenuOpen(false);
   }
 
@@ -7068,12 +7062,27 @@ export default function Home() {
     const normalizedInput = normalizeEventTimeInput(input);
     const eventId = createLocalId();
     const selectedCreateCalendar = normalizedInput.syncExternalCalendarId
-      ? externalCalendars.find((calendar) => calendar.id === normalizedInput.syncExternalCalendarId) ?? null
+      ? writableExternalCalendars.find((calendar) => calendar.id === normalizedInput.syncExternalCalendarId) ?? null
       : null;
     const createDiagnosticBase = {
       selectedCalendarId: normalizedInput.syncExternalCalendarId ?? null,
       selectedProvider: selectedCreateCalendar?.providerType ?? null,
     } satisfies EventEditorDiagnostic;
+    if (!selectedCreateCalendar) {
+      throw createEventEditorDiagnosticError(new Error(noCreatableCalendarMessage), {
+        ...createDiagnosticBase,
+        stage: "calendar_selection",
+        routeCalled: "createEvent",
+        responseStatus: null,
+        responseJson: {
+          availableCreatableCalendars: writableExternalCalendars.map((calendar) => ({
+            id: calendar.id,
+            name: calendar.name,
+            providerType: calendar.providerType,
+          })),
+        },
+      });
+    }
     const eventInsertPayload: Database["public"]["Tables"]["events"]["Insert"] = {
       id: eventId,
       client_name: normalizedInput.clientName,
@@ -7100,120 +7109,8 @@ export default function Home() {
         details: defaultOption?.details ?? "",
       };
     });
-    const createdAt = new Date().toISOString();
-    const activity: PendingActivityPayload = {
-      eventId,
-      actionType: "event_created",
-      entityType: "event",
-      entityId: eventId,
-      description: "Événement créé",
-      newValue: {
-        clientName: normalizedInput.clientName,
-        eventName: normalizedInput.eventName,
-        date: normalizedInput.date,
-      },
-    };
-
-    async function queueOfflineEventCreate() {
-      const offlineOptions: EventOption[] = optionDefinitions.map((option) => ({
-        id: createLocalId(),
-        eventId,
-        label: option.label,
-        status: "incomplete",
-        details: option.details,
-        taskId: null,
-        completedByProfileId: null,
-        completedByLabel: null,
-        completedByInitials: null,
-        completedAt: null,
-        createdAt,
-        ...mapCreatorMetadata({
-          created_by_profile_id: profile?.id ?? null,
-          created_by_role: profile?.role ?? null,
-          created_by_name: actorName,
-        }),
-        items: [],
-      }));
-      const offlineEvent: ProductionEvent = {
-        id: eventId,
-        clientName: normalizedInput.clientName,
-        eventName: normalizedInput.eventName,
-        date: normalizedInput.date,
-        isAllDay: normalizedInput.isAllDay,
-        clientArrivalTime: normalizedInput.clientArrivalTime || null,
-        startTime: normalizedInput.startTime || null,
-        endTime: normalizedInput.endTime || null,
-        endOfDayTime: normalizedInput.endOfDayTime || null,
-        location: normalizedInput.location.trim() || null,
-        notes: normalizedInput.notes.trim() || null,
-        status: "Brouillon",
-        deletedAt: null,
-        deletedBy: null,
-        quoteReference: normalizedInput.quoteReference ?? null,
-        quoteVersion: normalizedInput.quoteVersion ?? null,
-        sourceQuoteText: normalizedInput.sourceQuoteText ?? null,
-        lastQuoteImportedAt: eventInsertPayload.last_quote_imported_at ?? null,
-        importedFrom: null,
-        externalImportId: null,
-        eventRole: "production",
-        createdAt,
-        updatedAt: createdAt,
-        ...mapCreatorMetadata({
-          created_by_profile_id: eventInsertPayload.created_by_profile_id ?? null,
-          created_by_role: eventInsertPayload.created_by_role ?? null,
-          created_by_name: eventInsertPayload.created_by_name ?? null,
-        }),
-        options: offlineOptions,
-        links: [],
-        documentGroups: [],
-        externalLinks: [],
-      };
-
-      setEvents((current) => [...current, offlineEvent].sort((a, b) => eventSortValue(a) - eventSortValue(b)));
-      setSelectedId(eventId);
-      setSelectedDateKey(normalizedInput.date);
-      setVisibleMonth(new Date(`${normalizedInput.date}T12:00:00`));
-      setScreen("detail");
-
-      await enqueuePendingSyncAction({
-        actionType: "event_insert",
-        entityType: "event",
-        entityId: eventId,
-        payload: { values: eventInsertPayload, activity },
-      });
-      await createNotification(
-        {
-          type: "event_created",
-          title: "Événement créé",
-          body: `${normalizedInput.clientName} - ${normalizedInput.eventName}`,
-          relatedEventId: eventId,
-        },
-        { dedupe: true },
-      );
-      for (const option of offlineOptions) {
-        await enqueuePendingSyncAction({
-          actionType: "option_insert",
-          entityType: "option",
-          entityId: option.id,
-          payload: {
-            values: {
-              id: option.id,
-              event_id: eventId,
-              label: option.label,
-              status: option.status,
-              details: option.details,
-              created_by_profile_id: option.createdByProfileId,
-              created_by_role: option.createdByRole,
-              created_by_name: option.createdByName,
-            } satisfies Database["public"]["Tables"]["event_options"]["Insert"],
-          },
-        });
-      }
-    }
-
     if (!online) {
-      await queueOfflineEventCreate();
-      return;
+      throw new Error("Connexion Internet requise pour créer un événement dans un calendrier synchronisé.");
     }
 
     const { data: event, error: eventError } = await supabase
@@ -7225,8 +7122,18 @@ export default function Home() {
     if (eventError) {
       console.error("MSTV event insert failed before Google sync", getDebugError(eventError));
       if (isNetworkOrUnavailableError(eventError)) {
-        await queueOfflineEventCreate();
-        return;
+        throw createEventEditorDiagnosticError(new Error("Connexion Internet requise pour créer un événement dans un calendrier synchronisé."), {
+          ...createDiagnosticBase,
+          stage: "supabase_event_insert",
+          routeCalled: "supabase.events.insert",
+          responseStatus: null,
+          responseJson: {
+            message: eventError.message,
+            code: eventError.code,
+            details: eventError.details,
+            hint: eventError.hint,
+          },
+        });
       }
       throw createEventEditorDiagnosticError(eventError, {
         ...createDiagnosticBase,
@@ -7380,165 +7287,10 @@ export default function Home() {
     reviewEvents: NativeMstvIcsReviewEvent[],
     onProgress?: (progress: NativeMstvIcsImportProgress) => void,
   ): Promise<NativeMstvIcsImportResult> {
+    void reviewEvents;
+    void onProgress;
     assertCanManageEvents();
-    if (!supabase) {
-      throw new Error("Configuration Supabase manquante.");
-    }
-    const nativeImportSupabase = supabase;
-
-    const importableEvents = reviewEvents.filter((event) => !event.skipped);
-    if (importableEvents.length === 0) {
-      return {
-        importedCount: 0,
-        skippedCount: reviewEvents.length,
-        duplicateCount: 0,
-        failedCount: 0,
-        remainingCount: 0,
-        failures: [],
-      };
-    }
-
-    let firstImportedEvent: EventRow | null = null;
-    let importedCount = 0;
-    let duplicateCount = 0;
-    let processedCount = 0;
-    const failures: NativeMstvIcsImportFailure[] = [];
-    const insertedEvents: Array<{ row: EventRow; source: NativeMstvIcsReviewEvent }> = [];
-
-    onProgress?.({ processed: 0, total: importableEvents.length });
-
-    async function insertOneEvent(event: NativeMstvIcsReviewEvent) {
-      const insertPayload = {
-        client_name: event.clientName,
-        event_name: event.eventName,
-        date: event.date,
-        is_all_day: event.allDay,
-        client_arrival_time: event.startTime || null,
-        start_time: null,
-        end_time: null,
-        end_of_day_time: event.endTime || null,
-        location: event.location,
-        notes: event.description,
-        imported_from: nativeMstvIcsImportSource,
-        external_import_id: event.externalImportId,
-      } satisfies Database["public"]["Tables"]["events"]["Insert"];
-
-      const { data, error: eventError } = await nativeImportSupabase
-        .from("events")
-        .insert(insertPayload)
-        .select()
-        .single();
-
-      if (eventError) {
-        if (eventError.code === "23505") {
-          duplicateCount += 1;
-          return;
-        }
-        console.error("Native MSTV ICS event insert failed", {
-          externalImportId: event.externalImportId,
-          sourceTitle: event.sourceTitle,
-          errorMessage: eventError.message,
-          errorCode: eventError.code,
-          errorDetails: eventError.details,
-          errorHint: eventError.hint,
-        });
-        failures.push({
-          externalImportId: event.externalImportId,
-          sourceTitle: event.sourceTitle,
-          reason: eventError.message || "Erreur Supabase inconnue.",
-        });
-        return;
-      }
-
-      importedCount += 1;
-      firstImportedEvent = firstImportedEvent ?? data;
-      insertedEvents.push({ row: data, source: event });
-    }
-
-    for (const [batchIndex, eventBatch] of chunkArray(importableEvents, nativeMstvIcsImportBatchSize).entries()) {
-      const rowsToInsert = eventBatch.map((event) => ({
-        client_name: event.clientName,
-        event_name: event.eventName,
-        date: event.date,
-        is_all_day: event.allDay,
-        client_arrival_time: event.startTime || null,
-        start_time: null,
-        end_time: null,
-        end_of_day_time: event.endTime || null,
-        location: event.location,
-        notes: event.description,
-        imported_from: nativeMstvIcsImportSource,
-        external_import_id: event.externalImportId,
-      })) satisfies Database["public"]["Tables"]["events"]["Insert"][];
-
-      const { data: insertedBatch, error: batchError } = await nativeImportSupabase.from("events").insert(rowsToInsert).select();
-
-      if (batchError) {
-        console.error("Native MSTV ICS batch insert failed; retrying row by row", {
-          batchIndex: batchIndex + 1,
-          batchSize: eventBatch.length,
-          errorMessage: batchError.message,
-          errorCode: batchError.code,
-          errorDetails: batchError.details,
-          errorHint: batchError.hint,
-        });
-
-        for (const event of eventBatch) {
-          await insertOneEvent(event);
-          processedCount += 1;
-          onProgress?.({ processed: processedCount, total: importableEvents.length });
-        }
-        continue;
-      }
-
-      const insertedRows = insertedBatch ?? [];
-      importedCount += insertedRows.length;
-      firstImportedEvent = firstImportedEvent ?? insertedRows[0] ?? null;
-      insertedRows.forEach((row, rowIndex) => {
-        const source = eventBatch[rowIndex];
-        if (source) {
-          insertedEvents.push({ row, source });
-        }
-      });
-      processedCount += eventBatch.length;
-      onProgress?.({ processed: processedCount, total: importableEvents.length });
-    }
-
-    for (const { row, source } of insertedEvents) {
-      await logEventActivity({
-        eventId: row.id,
-        actionType: "event_imported_from_apple_ics",
-        entityType: "event",
-        entityId: row.id,
-        description: "Événement importé depuis calendrier Apple",
-        newValue: {
-          source: nativeMstvIcsImportSource,
-          externalImportId: source.externalImportId,
-          sourceTitle: source.sourceTitle,
-          location: source.location,
-          description: source.description,
-        },
-      });
-    }
-
-    await reloadData(firstImportedEvent?.id ?? undefined, { source: "native-mstv-import" });
-    if (firstImportedEvent) {
-      setSelectedDateKey(firstImportedEvent.date);
-      setVisibleMonth(new Date(`${firstImportedEvent.date}T12:00:00`));
-      setScreen("detail");
-    }
-
-    const refreshedImportIds = await fetchNativeMstvIcsImportIds();
-    const remainingCount = reviewEvents.filter((event) => !refreshedImportIds.has(event.externalImportId)).length;
-
-    return {
-      importedCount,
-      skippedCount: reviewEvents.filter((event) => event.skipped).length + duplicateCount,
-      duplicateCount,
-      failedCount: failures.length,
-      remainingCount,
-      failures,
-    };
+    throw new Error(legacyLocalCalendarImportDisabledMessage);
   }
 
   async function updateEvent(event: ProductionEvent, input: CreateEventInput, nextScreen: Screen = "calendar") {
@@ -7870,159 +7622,10 @@ export default function Home() {
   }
 
   async function duplicateEventToDate(sourceEvent: ProductionEvent, nextDate: string) {
+    void sourceEvent;
+    void nextDate;
     assertCanManageEvents();
-    if (!supabase) {
-      throw new Error("Configuration Supabase manquante.");
-    }
-
-    if (sourceEvent.deletedAt) {
-      throw new Error("Impossible de dupliquer un événement supprimé.");
-    }
-
-    const normalizedDate = nextDate.trim();
-    if (!normalizedDate) {
-      throw new Error("La nouvelle date est obligatoire.");
-    }
-
-    const { data: duplicatedEvent, error: eventError } = await supabase
-      .from("events")
-      .insert({
-        client_name: sourceEvent.clientName,
-        event_name: sourceEvent.eventName,
-        date: normalizedDate,
-        is_all_day: sourceEvent.isAllDay,
-        client_arrival_time: sourceEvent.clientArrivalTime || null,
-        start_time: sourceEvent.startTime || null,
-        end_time: sourceEvent.endTime || null,
-        end_of_day_time: sourceEvent.endOfDayTime || null,
-        location: sourceEvent.location || null,
-        notes: sourceEvent.notes || null,
-        status: sourceEvent.status,
-      })
-      .select()
-      .single();
-
-    if (eventError) throw eventError;
-
-    for (const option of sourceEvent.options) {
-      const { data: duplicatedOption, error: optionError } = await supabase
-        .from("event_options")
-        .insert({
-          event_id: duplicatedEvent.id,
-          label: option.label,
-          status: option.status,
-          details: option.details,
-          completed_by_profile_id: option.completedByProfileId,
-          completed_by_label: option.completedByLabel,
-          completed_by_initials: option.completedByInitials,
-          completed_at: option.completedAt,
-          ...getCreatorInsertPayload(profile),
-        })
-        .select()
-        .single();
-
-      if (optionError) throw optionError;
-
-      if (option.items.length > 0) {
-        const { error: optionItemsError } = await supabase.from("event_option_items").insert(
-          option.items.map((item) => ({
-            option_id: duplicatedOption.id,
-            label: item.label,
-            ...getCreatorInsertPayload(profile),
-          })),
-        );
-
-        if (optionItemsError) throw optionItemsError;
-      }
-    }
-
-    for (const link of sourceEvent.links) {
-      const { data: duplicatedLink, error: linkError } = await supabase
-        .from("event_links")
-        .insert({
-          event_id: duplicatedEvent.id,
-          label: link.label,
-          url: link.url,
-          stream_key: link.streamKey,
-          status: link.status,
-          ...getCreatorInsertPayload(profile),
-        })
-        .select()
-        .single();
-
-      if (linkError) throw linkError;
-
-      const entriesToDuplicate =
-        link.entries.length > 0
-          ? link.entries
-          : link.url || link.streamKey
-            ? [
-                {
-                  id: "",
-                  linkId: link.id,
-                  url: link.url,
-                  streamKey: link.streamKey,
-                  position: 0,
-                  createdAt: link.createdAt,
-                },
-              ]
-            : [];
-
-      if (entriesToDuplicate.length > 0) {
-        const { error: linkEntriesError } = await supabase.from("event_link_entries").insert(
-          entriesToDuplicate.map((entry, position) => ({
-            link_id: duplicatedLink.id,
-            url: entry.url,
-            stream_key: entry.streamKey,
-            position: entry.position ?? position,
-            ...getCreatorInsertPayload(profile),
-          })),
-        );
-
-        if (linkEntriesError) throw linkEntriesError;
-      }
-    }
-
-    if (sourceEvent.documentGroups.length > 0) {
-      const { error: documentGroupsError } = await supabase.from("event_document_groups").insert(
-        sourceEvent.documentGroups.map((group) => ({
-          event_id: duplicatedEvent.id,
-          label: group.label,
-          ...getCreatorInsertPayload(profile),
-        })),
-      );
-
-      if (documentGroupsError) throw documentGroupsError;
-    }
-
-    await logEventActivity({
-      eventId: duplicatedEvent.id,
-      actionType: "event_duplicated",
-      entityType: "event",
-      entityId: duplicatedEvent.id,
-      description: `Événement dupliqué depuis ${formatFullDate(sourceEvent.date)}`,
-      previousValue: {
-        eventId: sourceEvent.id,
-        date: sourceEvent.date,
-      },
-      newValue: {
-        date: normalizedDate,
-      },
-    });
-    await createNotification(
-      {
-        type: "event_created",
-        title: "Événement créé",
-        body: `${sourceEvent.clientName} - ${sourceEvent.eventName}`,
-        relatedEventId: duplicatedEvent.id,
-      },
-      { dedupe: true },
-    );
-
-    await reloadData(duplicatedEvent.id, { source: "duplicate-event" });
-    setSelectedDateKey(normalizedDate);
-    setVisibleMonth(new Date(`${normalizedDate}T12:00:00`));
-    setScreen("detail");
+    throw new Error(noCreatableCalendarMessage);
   }
 
   async function updateEventTime(event: ProductionEvent, field: EventTimeField, value: string, activityDescription = "Horaire modifié") {
@@ -10686,8 +10289,8 @@ export default function Home() {
           }}
           canCreateEvent={headerPermissions.canManageEvents}
           canImportQuote={headerPermissions.canManageEvents}
-          canImportNativeMstvCalendar={headerPermissions.canManageEvents}
-          canDuplicateEvent={headerPermissions.canManageEvents && screen === "detail" && Boolean(selectedEvent)}
+          canImportNativeMstvCalendar={false}
+          canDuplicateEvent={false}
           onDuplicateEvent={() => {
             if (selectedEvent && !selectedEvent.deletedAt) {
               setDuplicateDatePickerEvent(selectedEvent);
@@ -10731,7 +10334,7 @@ export default function Home() {
                 }
               }}
               canDeleteEvents={permissions.canSoftDeleteEvents}
-              canDuplicateEvents={permissions.canManageEvents}
+              canDuplicateEvents={false}
               setSelectedDateKey={setSelectedDateKey}
               changeMonth={changeMonth}
             />
@@ -10839,7 +10442,7 @@ export default function Home() {
           }}
           canCreateEvent={permissions.canManageEvents}
           canImportQuote={permissions.canManageEvents}
-          canImportNativeMstvCalendar={permissions.canManageEvents}
+          canImportNativeMstvCalendar={false}
           canOpenTrash={permissions.canRestoreEvents || permissions.canPermanentDeleteEvents}
           onSelectMonth={selectYearOverviewMonth}
         />
@@ -15818,12 +15421,13 @@ function QuoteImportModal({
   const [datePickerOpen, setDatePickerOpen] = useState(false);
   const [dropActive, setDropActive] = useState(false);
   const initialFileProcessedRef = useRef<File | null>(null);
+  const selectedSyncCalendarAvailable = Boolean(form.syncExternalCalendarId && syncCalendars.some((calendar) => calendar.id === form.syncExternalCalendarId));
 
   useEffect(() => {
-    if (form.syncExternalCalendarId || syncCalendars.length === 0) return;
+    if (form.syncExternalCalendarId && syncCalendars.some((calendar) => calendar.id === form.syncExternalCalendarId)) return;
     setForm((current) => ({
       ...current,
-      syncExternalCalendarId: current.syncExternalCalendarId ?? syncCalendars[0]?.id ?? null,
+      syncExternalCalendarId: syncCalendars[0]?.id ?? null,
     }));
   }, [form.syncExternalCalendarId, syncCalendars]);
 
@@ -15899,7 +15503,9 @@ function QuoteImportModal({
         endOfDayTime: extracted.endTime,
         location: "",
         notes: "",
-        syncExternalCalendarId: current.syncExternalCalendarId ?? syncCalendars[0]?.id ?? null,
+        syncExternalCalendarId: current.syncExternalCalendarId && syncCalendars.some((calendar) => calendar.id === current.syncExternalCalendarId)
+          ? current.syncExternalCalendarId
+          : syncCalendars[0]?.id ?? null,
         optionLabels: extracted.services,
         quoteReference: extracted.quoteReference || null,
         quoteVersion: extracted.quoteVersion || null,
@@ -15938,6 +15544,9 @@ function QuoteImportModal({
     setError(null);
 
     try {
+      if (!form.syncExternalCalendarId || !selectedSyncCalendarAvailable) {
+        throw new Error(noCreatableCalendarMessage);
+      }
       const normalizedForm = normalizeEventTimeInput({
         ...form,
         optionLabels: uniqueLabels(serviceText.split(/\n|,/).map((service) => service.trim()).filter(Boolean)),
@@ -15967,6 +15576,9 @@ function QuoteImportModal({
     setError(null);
 
     try {
+      if (!resolution.input.syncExternalCalendarId || !syncCalendars.some((calendar) => calendar.id === resolution.input.syncExternalCalendarId)) {
+        throw new Error(noCreatableCalendarMessage);
+      }
       await onCreateEvent(resolution.input);
     } catch (submitError) {
       setError(getUserFacingErrorMessage(submitError, "Impossible de créer l'événement depuis ce devis."));
@@ -16011,22 +15623,26 @@ function QuoteImportModal({
           </button>
         </div>
 
-        {step !== "upload" && syncCalendars.length > 0 && (
+        {step !== "upload" && (
           <div className="mb-4">
             <Field label="Calendrier">
-              <select
-                {...iosKeyboardGuardProps}
-                value={form.syncExternalCalendarId ?? syncCalendars[0]?.id ?? ""}
-                onFocus={(event) => nativeKeyboard.handleFieldFocus(event.currentTarget)}
-                onChange={(selectEvent) => updateField("syncExternalCalendarId", selectEvent.target.value || null)}
-                className={formInputClassName}
-              >
-                {syncCalendars.map((calendar) => (
-                  <option key={calendar.id} value={calendar.id}>
-                    {calendar.name}
-                  </option>
-                ))}
-              </select>
+              {syncCalendars.length > 0 ? (
+                <select
+                  {...iosKeyboardGuardProps}
+                  value={selectedSyncCalendarAvailable ? form.syncExternalCalendarId ?? "" : ""}
+                  onFocus={(event) => nativeKeyboard.handleFieldFocus(event.currentTarget)}
+                  onChange={(selectEvent) => updateField("syncExternalCalendarId", selectEvent.target.value || null)}
+                  className={formInputClassName}
+                >
+                  {syncCalendars.map((calendar) => (
+                    <option key={calendar.id} value={calendar.id}>
+                      {calendar.name}
+                    </option>
+                  ))}
+                </select>
+              ) : (
+                <p className="rounded-xl bg-stone-50 px-3 py-2 text-base font-semibold text-stone-500">{noCreatableCalendarMessage}</p>
+              )}
             </Field>
           </div>
         )}

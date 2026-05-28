@@ -166,10 +166,11 @@ export function EventEditorModal({
   });
 
   useEffect(() => {
-    if (isEditing || form.syncExternalCalendarId || selectableSyncCalendars.length === 0) return;
+    if (isEditing || selectableSyncCalendars.length === 0) return;
+    if (form.syncExternalCalendarId && selectableSyncCalendars.some((calendar) => calendar.id === form.syncExternalCalendarId)) return;
     setForm((current) => ({
       ...current,
-      syncExternalCalendarId: current.syncExternalCalendarId ?? selectableSyncCalendars[0]?.id ?? null,
+      syncExternalCalendarId: selectableSyncCalendars[0]?.id ?? null,
     }));
   }, [form.syncExternalCalendarId, isEditing, selectableSyncCalendars]);
 
@@ -237,32 +238,34 @@ export function EventEditorModal({
           )}
           style={nativeKeyboard.scrollContainerStyle}
         >
-          {((!isEditing && selectableSyncCalendars.length > 0) || Boolean(currentExternalCalendarId)) && (
+          {(!isEditing || Boolean(currentExternalCalendarId)) && (
             <Field label="Calendrier">
               <div className="space-y-1.5">
-                <select
-                  {...iosKeyboardGuardProps}
-                  value={form.syncExternalCalendarId ?? selectableSyncCalendars[0]?.id ?? ""}
-                  onFocus={(selectEvent) => nativeKeyboard.handleFieldFocus(selectEvent.currentTarget)}
-                  onChange={(selectEvent) => {
-                    const nextValue = selectEvent.target.value || null;
-                    setForm((current) => ({
-                      ...current,
-                      syncExternalCalendarId: nextValue,
-                    }));
-                  }}
-                  disabled={!isEditing && selectableSyncCalendars.length === 0}
-                  className={cn(formInputClassName, selectableSyncCalendars.length === 0 && "bg-stone-50 text-stone-400")}
-                >
-                  {selectableSyncCalendars.map((calendar) => (
-                    <option key={calendar.id} value={calendar.id}>
-                      {calendar.name}
-                    </option>
-                  ))}
-                </select>
-                {!isEditing && selectableSyncCalendars.length === 0 ? (
-                  <p className="text-sm font-semibold text-stone-400">Aucun calendrier disponible.</p>
-                ) : null}
+                {selectableSyncCalendars.length > 0 ? (
+                  <select
+                    {...iosKeyboardGuardProps}
+                    value={form.syncExternalCalendarId ?? selectableSyncCalendars[0]?.id ?? ""}
+                    onFocus={(selectEvent) => nativeKeyboard.handleFieldFocus(selectEvent.currentTarget)}
+                    onChange={(selectEvent) => {
+                      const nextValue = selectEvent.target.value || null;
+                      setForm((current) => ({
+                        ...current,
+                        syncExternalCalendarId: nextValue,
+                      }));
+                    }}
+                    className={formInputClassName}
+                  >
+                    {selectableSyncCalendars.map((calendar) => (
+                      <option key={calendar.id} value={calendar.id}>
+                        {calendar.name}
+                      </option>
+                    ))}
+                  </select>
+                ) : (
+                  <p className="rounded-xl bg-stone-50 px-3 py-2 text-sm font-semibold text-stone-500">
+                    Aucun calendrier synchronisé actif n’est disponible pour créer cet événement.
+                  </p>
+                )}
               </div>
             </Field>
           )}
