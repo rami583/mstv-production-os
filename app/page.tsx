@@ -11165,7 +11165,6 @@ function TeamTasksSheet({
   }, [orderIds, todoTasks, todoTasksById]);
   const selectedTask = selectedTaskId ? tasks.find((task) => task.id === selectedTaskId) ?? null : null;
   const visualIndexByTaskId = useMemo(() => new Map(orderedTodoTasks.map((task, index) => [task.id, index])), [orderedTodoTasks]);
-  const selectedTaskPriorityIndex = selectedTask?.status === "todo" ? visualIndexByTaskId.get(selectedTask.id) ?? null : null;
 
   useEscapeToClose(onClose);
 
@@ -11395,7 +11394,6 @@ function TeamTasksSheet({
             >
               <AdminTaskDetailPanel
                 task={selectedTask}
-                priorityIndex={selectedTaskPriorityIndex}
                 events={events}
                 linkedEvent={selectedTask.eventId ? eventsById.get(selectedTask.eventId) ?? null : null}
                 currentProfile={currentProfile}
@@ -11586,7 +11584,6 @@ const TaskQueueRow = forwardRef<HTMLDivElement, {
 
 function AdminTaskDetailPanel({
   task,
-  priorityIndex,
   events,
   linkedEvent,
   currentProfile,
@@ -11598,7 +11595,6 @@ function AdminTaskDetailPanel({
   onClose,
 }: {
   task: AppTask;
-  priorityIndex: number | null;
   events: ProductionEvent[];
   linkedEvent: ProductionEvent | null;
   currentProfile: UserProfile | null;
@@ -11616,7 +11612,7 @@ function AdminTaskDetailPanel({
   const [localError, setLocalError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const done = task.status === "done";
-  const taskTone = getTaskTone(task, priorityIndex);
+  const taskTone = getTaskTone(task);
   const assignedToCurrentProfile = Boolean(currentProfile?.id && task.assignedProfileId === currentProfile.id);
   const createdByCurrentProfile = Boolean(currentProfile?.id && task.createdBy === currentProfile.id);
   const canEditContent = permissions.canManageEvents || (assignedToCurrentProfile && createdByCurrentProfile);
@@ -11708,7 +11704,7 @@ function AdminTaskDetailPanel({
             className={cn("h-10 min-w-0 rounded-xl bg-white/85 px-3 text-base font-semibold outline-none transition focus:bg-white", done ? "text-stone-500 line-through" : taskTone.title)}
           />
           <label className={cn(
-            "flex h-10 shrink-0 items-center gap-1.5 rounded-xl bg-white/80 px-2 text-xs font-semibold text-rose-600 transition sm:px-3 sm:text-sm",
+            "flex h-10 shrink-0 items-center gap-1.5 rounded-xl bg-white/80 px-2 text-xs font-semibold text-stone-600 transition sm:px-3 sm:text-sm",
             !canEditUrgent && "opacity-70",
           )}>
             <input
@@ -11716,7 +11712,7 @@ function AdminTaskDetailPanel({
               checked={isTaskUrgent(task)}
               disabled={saving || !canEditUrgent}
               onChange={(event) => void updateTaskSafely({ priority: event.target.checked ? "urgent" : "normal" })}
-              className="h-3.5 w-3.5 rounded border-rose-200 accent-rose-600"
+              className="h-3.5 w-3.5 rounded border-stone-300 accent-stone-600"
             />
             Urgent
           </label>
@@ -11726,7 +11722,7 @@ function AdminTaskDetailPanel({
               checked={done}
               disabled={saving || !canToggleStatus}
               onChange={(event) => void updateTaskSafely({ status: event.target.checked ? "done" : "todo" })}
-              className="h-3.5 w-3.5 rounded border-stone-300 accent-emerald-600"
+              className="h-3.5 w-3.5 rounded border-stone-300 accent-stone-600"
             />
             Terminé
           </label>
@@ -13900,7 +13896,7 @@ function ProductionDetail({
                       "group relative flex h-[4.75rem] items-center gap-1.5 overflow-hidden rounded-xl border border-transparent transition sm:h-20 sm:gap-2",
                       linkTone.surface,
                       linkTone.hover,
-                      isSelectedLink && "border-blue-700",
+                      isSelectedLink && "border-slate-600",
                     )}
                   >
                     {isConfirmingDelete ? (
@@ -13916,14 +13912,14 @@ function ProductionDetail({
                           <Icon className={cn("h-4 w-4 shrink-0 sm:h-5 sm:w-5", linkTone.icon)} />
                           <span className={cn("min-w-0 flex-1 truncate pr-5 text-base font-semibold", linkTone.text)}>{link.label}</span>
                         </button>
-                        <ExternalLink className="mr-8 hidden h-4 w-4 shrink-0 text-blue-500 sm:block" />
+                        <ExternalLink className="mr-8 hidden h-4 w-4 shrink-0 text-slate-500 sm:block" />
                         {canDeleteLink && (
                           <button
                             onClick={(event) => {
                               event.stopPropagation();
                               setConfirmDelete({ type: "link", linkId: link.id });
                             }}
-                            className="absolute right-1.5 top-1.5 flex h-6 w-6 items-center justify-center rounded-full text-blue-600 opacity-100 transition hover:bg-white/70 hover:text-blue-800 focus:opacity-100 [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover:opacity-100"
+                            className="absolute right-1.5 top-1.5 flex h-6 w-6 items-center justify-center rounded-full text-slate-500 opacity-100 transition hover:bg-white/70 hover:text-slate-700 focus:opacity-100 [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover:opacity-100"
                             aria-label="Supprimer ce lien"
                           >
                             <X className="h-3.5 w-3.5" />
@@ -14121,54 +14117,48 @@ function getTaskSurfaceTone(task: AppTask, priorityIndex: number | null) {
   if (task.status === "done") {
     return {
       row: "bg-white/80 opacity-65 hover:bg-stone-50/80",
-      panel: "bg-white/85",
     };
   }
 
   if (priorityIndex === 0) {
     return {
       row: "bg-rose-100/90 hover:bg-rose-100",
-      panel: "bg-rose-100/90",
     };
   }
 
   if (priorityIndex === 1) {
     return {
       row: "bg-[#FEF4BD] hover:bg-[#FEF3B2]",
-      panel: "bg-[#FEF4BD]",
     };
   }
 
   if (priorityIndex === 2) {
     return {
       row: "bg-[#FEF4BD] hover:bg-[#FEF3B2]",
-      panel: "bg-[#FEF4BD]",
     };
   }
 
   return {
     row: "bg-emerald-100/95 hover:bg-emerald-100",
-    panel: "bg-emerald-100/95",
   };
 }
 
-function getTaskTone(task: AppTask, priorityIndex: number | null) {
-  const surface = getTaskSurfaceTone(task, priorityIndex);
+function getTaskTone(task: AppTask) {
   return {
-    panel: surface.panel,
-    title: task.status === "done" ? "text-stone-500 line-through" : "text-emerald-950",
+    panel: "bg-stone-50/85",
+    title: task.status === "done" ? "text-stone-500 line-through" : "text-stone-950",
     body: "text-stone-700",
-    meta: task.status === "done" ? "text-stone-400" : "text-emerald-700/70",
-    actionText: task.status === "done" ? "text-stone-600" : "text-emerald-800",
+    meta: "text-stone-400",
+    actionText: "text-stone-600",
   };
 }
 
 function getLinkTone(_state: LinkStatus) {
   return {
-    surface: "bg-[#DBEAFE]",
-    border: "border-blue-100",
-    hover: "hover:bg-blue-100",
-    icon: "text-blue-700",
+    surface: "bg-[#E6EEF8]",
+    border: "border-slate-200/70",
+    hover: "hover:bg-[#DCE7F4]",
+    icon: "text-slate-600",
     text: "text-stone-700",
   };
 }
@@ -14379,7 +14369,7 @@ function LinkValueRow({
 
   return (
     <div className="flex w-full min-w-0 items-center gap-2">
-      <div className={cn("inline-flex min-h-9 min-w-0 flex-1 items-center gap-2 rounded-full border border-transparent px-3 py-1.5 transition focus-within:border-blue-300", rowTone.surface)}>
+      <div className={cn("inline-flex min-h-9 min-w-0 flex-1 items-center gap-2 rounded-full border border-transparent px-3 py-1.5 transition focus-within:border-slate-300", rowTone.surface)}>
         <Icon className={cn("h-4 w-4 shrink-0", rowTone.icon)} />
         {editable ? (
           <input
@@ -14412,7 +14402,7 @@ function LinkValueRow({
               }
             }}
             placeholder={placeholder}
-            className={cn("min-w-0 flex-1 bg-transparent text-base font-semibold outline-none placeholder:text-blue-300 disabled:opacity-70", rowTone.text)}
+            className={cn("min-w-0 flex-1 bg-transparent text-base font-semibold outline-none placeholder:text-slate-300 disabled:opacity-70", rowTone.text)}
           />
         ) : canOpen ? (
           <button
@@ -14437,7 +14427,7 @@ function LinkValueRow({
           rowTone.surface,
           rowTone.icon,
           rowTone.hover,
-          copied && "bg-blue-200 text-blue-900",
+          copied && "bg-slate-200 text-slate-800",
         )}
         aria-label={copyLabel}
       >
@@ -14846,7 +14836,7 @@ function ContextDetailBlock({
             value={selectedLink.label}
             onSave={renameSelectedLink}
             className="truncate"
-            inputClassName="text-blue-950 focus:border-blue-300"
+            inputClassName="text-slate-800 focus:border-slate-300"
             editable={canRenameSelectedLink}
             onFocusTarget={onNativeFieldFocus}
           />
@@ -18851,7 +18841,7 @@ function InlineGridDeleteConfirmation({
     tone === "option"
       ? "bg-emerald-100/95"
       : tone === "link"
-        ? "bg-[#DBEAFE]"
+        ? "bg-[#E6EEF8]"
         : "bg-[#FEF4BD]";
 
   return (
