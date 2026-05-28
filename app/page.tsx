@@ -22,7 +22,6 @@ import {
   GripVertical,
   Import,
   KeyRound,
-  ListChecks,
   ListTodo,
   Link,
   MonitorPlay,
@@ -3806,7 +3805,6 @@ export default function Home() {
   const [quoteImportFile, setQuoteImportFile] = useState<File | null>(null);
   const [nativeMstvIcsImportOpen, setNativeMstvIcsImportOpen] = useState(false);
   const [tasksOpen, setTasksOpen] = useState(false);
-  const [adminTasksOpen, setAdminTasksOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
   const [yearOverviewOpen, setYearOverviewOpen] = useState(false);
   const [globalQuoteDragActive, setGlobalQuoteDragActive] = useState(false);
@@ -4445,12 +4443,6 @@ export default function Home() {
   }, [authSession?.user.id, profile?.id, online]);
 
   useEffect(() => {
-    if (!permissions.canManageEvents && adminTasksOpen) {
-      setAdminTasksOpen(false);
-    }
-  }, [adminTasksOpen, permissions.canManageEvents]);
-
-  useEffect(() => {
     if (!authSession || !profile) return;
     if (!online) {
       const cachedData = getCachedAppData(authSession.user.id);
@@ -4486,12 +4478,12 @@ export default function Home() {
   }, [trashOpen]);
 
   useEffect(() => {
-    if (!tasksOpen && !adminTasksOpen) return;
+    if (!tasksOpen) return;
     void refreshTasks({ silent: tasks.length > 0 });
     if (taskProfiles.length === 0) {
       void refreshTaskProfiles();
     }
-  }, [tasksOpen, adminTasksOpen]);
+  }, [tasksOpen]);
 
   useEffect(() => {
     if (!userManagementOpen || !permissions.canManageUsers) return;
@@ -6274,10 +6266,11 @@ export default function Home() {
   }
 
   async function createTask(input: TaskCreateInput) {
-    assertCanManageEvents();
     if (!supabase) throw new Error("Configuration Supabase manquante.");
     const title = input.title.trim();
     if (!title) throw new Error("Le titre de la tâche est obligatoire.");
+    const canCreateTask = permissions.canManageEvents || input.assignedProfileId === profile?.id;
+    if (!canCreateTask) throw new Error("Création de tâche non autorisée.");
     const assignedProfile = taskProfiles.find((userProfile) => userProfile.id === input.assignedProfileId) ?? null;
     const nextSortOrder = input.sortOrder ?? getNextTaskSortOrder(tasks, input.assignedProfileId ?? null);
     const payload: Database["public"]["Tables"]["tasks"]["Insert"] = {
@@ -6326,7 +6319,8 @@ export default function Home() {
 
   async function updateTask(task: AppTask, patch: TaskUpdatePatch) {
     if (!supabase) throw new Error("Configuration Supabase manquante.");
-    const canUpdateTask = permissions.canManageEvents || (task.assignedProfileId === profile?.id && Object.keys(patch).every((key) => key === "status"));
+    const ownAllowedFields = new Set(["title", "dueDate", "status", "sortOrder"]);
+    const canUpdateTask = permissions.canManageEvents || (task.assignedProfileId === profile?.id && Object.keys(patch).every((key) => ownAllowedFields.has(key)));
     if (!canUpdateTask) throw new Error("Modification de tâche non autorisée.");
 
     const payload: Database["public"]["Tables"]["tasks"]["Update"] = {};
@@ -6353,7 +6347,8 @@ export default function Home() {
   }
 
   async function reorderTasksForAssignee(orderedTasks: AppTask[], assignedProfileId: string | null) {
-    assertCanManageEvents();
+    const canReorderTasks = permissions.canManageEvents || assignedProfileId === profile?.id;
+    if (!canReorderTasks) throw new Error("Modification de tâche non autorisée.");
     if (!supabase) throw new Error("Configuration Supabase manquante.");
     const supabaseClient = supabase;
     if (orderedTasks.some((task) => task.assignedProfileId !== assignedProfileId || task.status !== "todo")) return;
@@ -10531,8 +10526,6 @@ export default function Home() {
           onOpenNotification={handleNotificationOpen}
           onDismissNotification={markNotificationRead}
           onOpenTasks={() => setTasksOpen(true)}
-          onOpenAllTasks={() => setAdminTasksOpen(true)}
-          canOpenAllTasks={headerPermissions.canManageEvents}
           onImportQuote={() => {
             if (!headerPermissions.canManageEvents) return;
             openQuoteImport();
@@ -10662,8 +10655,6 @@ export default function Home() {
           onOpenNotification={handleNotificationOpen}
           onDismissNotification={markNotificationRead}
           onOpenTasks={() => setTasksOpen(true)}
-          onOpenAllTasks={() => setAdminTasksOpen(true)}
-          canOpenAllTasks={permissions.canManageEvents}
           onGoToday={() => {
             goToday();
             setYearOverviewOpen(false);
@@ -10783,7 +10774,7 @@ export default function Home() {
       )}
 
       {tasksOpen && (
-        <TasksSheet
+        <TeamTasksSheet
           tasks={tasks}
           events={chronologicalEvents}
           profiles={taskProfiles}
@@ -10795,30 +10786,10 @@ export default function Home() {
           onCreateTask={createTask}
           onUpdateTask={updateTask}
           onDeleteTask={deleteTask}
-          onOpenEvent={(eventId) => {
-            openEvent(eventId);
-            setTasksOpen(false);
-          }}
-        />
-      )}
-
-      {adminTasksOpen && permissions.canManageEvents && (
-        <AdminTasksSheet
-          tasks={tasks}
-          events={chronologicalEvents}
-          profiles={taskProfiles}
-          currentProfile={profile}
-          permissions={permissions}
-          loading={tasksLoading}
-          error={tasksError}
-          onClose={() => setAdminTasksOpen(false)}
-          onCreateTask={createTask}
-          onUpdateTask={updateTask}
-          onDeleteTask={deleteTask}
           onReorderTasks={reorderTasksForAssignee}
           onOpenEvent={(eventId) => {
             openEvent(eventId);
-            setAdminTasksOpen(false);
+            setTasksOpen(false);
           }}
         />
       )}
@@ -10979,8 +10950,6 @@ function AppHeader({
   onOpenNotification,
   onDismissNotification,
   onOpenTasks,
-  onOpenAllTasks,
-  canOpenAllTasks,
   onImportQuote,
   onImportNativeMstvCalendar,
   onSearch,
@@ -11023,8 +10992,6 @@ function AppHeader({
   onOpenNotification: (notification: AppNotification) => void;
   onDismissNotification: (notification: AppNotification) => void;
   onOpenTasks: () => void;
-  onOpenAllTasks: () => void;
-  canOpenAllTasks: boolean;
   onImportQuote: () => void;
   onImportNativeMstvCalendar: () => void;
   onSearch: () => void;
@@ -11072,8 +11039,7 @@ function AppHeader({
           <img src="/brand/mon-studio-tv-icon.png" alt="Mon Studio TV" className="h-11 w-auto shrink-0" />
         </button>
         <div className="flex shrink-0 items-center gap-1.5 sm:gap-2">
-          <HeaderIcon label="Mes tâches" icon={ListTodo} onClick={onOpenTasks} />
-          {canOpenAllTasks && <HeaderIcon label="Toutes les tâches" icon={ListChecks} onClick={onOpenAllTasks} />}
+          <HeaderIcon label="Tâches" icon={ListTodo} onClick={onOpenTasks} />
           <HeaderIcon label="Rechercher" icon={Search} onClick={onSearch} />
           <NotificationMenu
             notifications={notifications}
@@ -11365,190 +11331,7 @@ function EventSearchOverlay({
   );
 }
 
-function TasksSheet({
-  tasks,
-  events,
-  profiles,
-  currentProfile,
-  permissions,
-  loading,
-  error,
-  onClose,
-  onCreateTask,
-  onUpdateTask,
-  onDeleteTask,
-  onOpenEvent,
-}: {
-  tasks: AppTask[];
-  events: ProductionEvent[];
-  profiles: UserProfile[];
-  currentProfile: UserProfile | null;
-  permissions: AppPermissions;
-  loading: boolean;
-  error: string | null;
-  onClose: () => void;
-  onCreateTask: (input: TaskCreateInput) => Promise<AppTask>;
-  onUpdateTask: (task: AppTask, patch: TaskUpdatePatch) => Promise<void>;
-  onDeleteTask: (task: AppTask) => Promise<void>;
-  onOpenEvent: (eventId: string) => void;
-}) {
-  const nativeKeyboard = useNativeKeyboardVisibility<HTMLDivElement>();
-  const [draftTitle, setDraftTitle] = useState("");
-  const [draftAssigneeId, setDraftAssigneeId] = useState(currentProfile?.id ?? "");
-  const [draftDueDate, setDraftDueDate] = useState("");
-  const [submitting, setSubmitting] = useState(false);
-  const [localError, setLocalError] = useState<string | null>(null);
-  const [diagnostic, setDiagnostic] = useState<TaskCreateDiagnostic | null>(null);
-  const eventsById = useMemo(() => new Map(events.map((event) => [event.id, event])), [events]);
-  const myTasks = sortTasksForDisplay(tasks.filter((task) => task.assignedProfileId === currentProfile?.id));
-  const todoTasks = myTasks.filter((task) => task.status === "todo");
-  const recentlyDoneTasks = [...myTasks]
-    .filter((task) => task.status === "done")
-    .sort((left, right) => (right.completedAt ?? right.updatedAt).localeCompare(left.completedAt ?? left.updatedAt))
-    .slice(0, 12);
-
-  useEscapeToClose(onClose);
-
-  async function submitFreeTask(formEvent: React.FormEvent<HTMLFormElement>) {
-    formEvent.preventDefault();
-    setSubmitting(true);
-    setLocalError(null);
-    setDiagnostic(null);
-
-    try {
-      await onCreateTask({
-        title: draftTitle,
-        eventId: null,
-        assignedProfileId: draftAssigneeId || null,
-        dueDate: draftDueDate || null,
-      });
-      setDraftTitle("");
-      setDraftAssigneeId(currentProfile?.id ?? "");
-      setDraftDueDate("");
-    } catch (createError) {
-      setLocalError(getTaskCreateUserMessage(createError));
-      setDiagnostic(getTaskCreateDiagnostic(createError));
-    } finally {
-      setSubmitting(false);
-    }
-  }
-
-  function renderTask(task: AppTask) {
-    const linkedEvent = task.eventId ? eventsById.get(task.eventId) ?? null : null;
-    return (
-      <div key={task.id} className="rounded-2xl bg-stone-50 p-2.5">
-        <TaskRow
-          task={task}
-          profiles={profiles}
-          currentProfile={currentProfile}
-          permissions={permissions}
-          onUpdateTask={onUpdateTask}
-          onDeleteTask={onDeleteTask}
-          onNativeFieldFocus={nativeKeyboard.handleFieldFocus}
-          compact
-        />
-        {linkedEvent && (
-          <button
-            type="button"
-            onClick={() => onOpenEvent(linkedEvent.id)}
-            className="mt-1.5 w-full rounded-xl px-2 py-1 text-left text-xs font-semibold text-stone-500 transition hover:bg-white hover:text-stone-800"
-          >
-            {getProductionEventDisplay(linkedEvent).title} · {formatFullDate(linkedEvent.date)}
-          </button>
-        )}
-      </div>
-    );
-  }
-
-  return (
-    <div className={cn(modalBackdropClassName, modalSheetPositionClassName)} onPointerDown={(pointerEvent) => handleModalBackdropPointerDown(pointerEvent, onClose)}>
-      <div
-        className={cn(modalPanelClassName, "flex max-h-[86vh] w-full flex-col overflow-hidden p-4 sm:max-w-2xl sm:p-5")}
-        onPointerDown={(pointerEvent) => pointerEvent.stopPropagation()}
-      >
-        <div className="mb-4 flex items-start justify-between gap-3">
-          <div className="min-w-0">
-            <h2 className="text-base font-semibold text-stone-950">Mes tâches</h2>
-            <p className="mt-1 text-base font-medium text-stone-500">
-              {todoTasks.length > 0 ? `${todoTasks.length} tâche${todoTasks.length > 1 ? "s" : ""} à faire` : "Tout est à jour"}
-            </p>
-          </div>
-          <button type="button" onClick={onClose} className="rounded-xl bg-stone-50 px-3 py-1.5 text-base font-semibold text-stone-600 transition hover:bg-stone-100">
-            Fermer
-          </button>
-        </div>
-
-        <div ref={nativeKeyboard.scrollContainerRef} className="no-scrollbar min-h-0 flex-1 space-y-4 overflow-y-auto overscroll-contain" style={nativeKeyboard.scrollContainerStyle}>
-          {permissions.canManageEvents && (
-            <form onSubmit={submitFreeTask} className="grid gap-2 rounded-2xl bg-stone-50 p-3">
-              <p className="text-sm font-semibold text-stone-500">Nouvelle tâche libre</p>
-              <input
-                {...iosKeyboardGuardProps}
-                required
-                value={draftTitle}
-                onFocus={(event) => nativeKeyboard.handleFieldFocus(event.currentTarget)}
-                onChange={(event) => setDraftTitle(event.target.value)}
-                placeholder="Titre de la tâche"
-                className="h-10 rounded-xl bg-white px-3 text-base font-semibold text-stone-950 outline-none"
-              />
-              <div className="grid gap-2 sm:grid-cols-[1fr_auto_auto]">
-                <select
-                  {...iosKeyboardGuardProps}
-                  value={draftAssigneeId}
-                  onFocus={(event) => nativeKeyboard.handleFieldFocus(event.currentTarget)}
-                  onChange={(event) => setDraftAssigneeId(event.target.value)}
-                  className="h-10 min-w-0 rounded-xl bg-white px-3 text-sm font-semibold text-stone-700 outline-none"
-                >
-                  <option value="">Non assignée</option>
-                  {profiles.map((userProfile) => (
-                    <option key={userProfile.id} value={userProfile.id}>
-                      {getProfileOptionLabel(userProfile)}
-                    </option>
-                  ))}
-                </select>
-                <input
-                  {...iosKeyboardGuardProps}
-                  type="date"
-                  value={draftDueDate}
-                  onFocus={(event) => nativeKeyboard.handleFieldFocus(event.currentTarget)}
-                  onChange={(event) => setDraftDueDate(event.target.value)}
-                  className="h-10 rounded-xl bg-white px-3 text-sm font-semibold text-stone-700 outline-none"
-                />
-                <button type="submit" disabled={submitting} className="h-10 rounded-full bg-[#bb2720] px-3 text-sm font-semibold text-white disabled:bg-stone-300">
-                  Ajouter
-                </button>
-              </div>
-            </form>
-          )}
-
-          {(error || localError) && <p className="text-sm font-semibold text-rose-700">{localError || error}</p>}
-          {diagnostic && <TaskCreateDiagnosticBlock diagnostic={diagnostic} />}
-          {loading && <p className="rounded-2xl bg-stone-50 px-3 py-4 text-center text-sm font-semibold text-stone-400">Chargement...</p>}
-
-          <section className="space-y-2">
-            <h3 className="px-1 text-xs font-semibold uppercase tracking-[0.08em] text-stone-400">À faire</h3>
-            {todoTasks.length === 0 ? (
-              <p className="rounded-2xl bg-stone-50 px-3 py-4 text-center text-sm font-medium text-stone-400">Aucune tâche à faire.</p>
-            ) : (
-              <div className="grid gap-2">{todoTasks.map(renderTask)}</div>
-            )}
-          </section>
-
-          <section className="space-y-2">
-            <h3 className="px-1 text-xs font-semibold uppercase tracking-[0.08em] text-stone-400">Terminées récemment</h3>
-            {recentlyDoneTasks.length === 0 ? (
-              <p className="rounded-2xl bg-stone-50 px-3 py-4 text-center text-sm font-medium text-stone-400">Aucune tâche terminée récemment.</p>
-            ) : (
-              <div className="grid gap-2">{recentlyDoneTasks.map(renderTask)}</div>
-            )}
-          </section>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function AdminTasksSheet({
+function TeamTasksSheet({
   tasks,
   events,
   profiles,
@@ -11593,6 +11376,8 @@ function AdminTasksSheet({
   const activeProfile = taskPeople[Math.min(activeProfileIndex, Math.max(taskPeople.length - 1, 0))] ?? null;
   const activeProfileId = activeProfile?.id ?? null;
   const activeFirstName = activeProfile?.firstName?.trim() || getProfileDisplayName(activeProfile)?.split(/\s+/)[0] || "Équipe";
+  const canManageActiveProfileTasks = Boolean(activeProfileId && (permissions.canManageEvents || activeProfileId === currentProfile?.id));
+  const canCreateForActiveProfile = canManageActiveProfileTasks;
   const personTasks = useMemo(() => tasks.filter((task) => task.assignedProfileId === activeProfileId), [activeProfileId, tasks]);
   const todoTasks = useMemo(() => sortTaskQueue(personTasks.filter((task) => task.status === "todo")), [personTasks]);
   const doneTasks = useMemo(() => (
@@ -11680,6 +11465,7 @@ function AdminTasksSheet({
   }
 
   function startDrag(task: AppTask, event: ReactPointerEvent<HTMLButtonElement>) {
+    if (!canManageActiveProfileTasks) return;
     if (orderedTodoTasks.length < 2) return;
     event.preventDefault();
     event.stopPropagation();
@@ -11730,7 +11516,7 @@ function AdminTasksSheet({
   }
 
   async function createTaskForActiveProfile() {
-    if (!activeProfileId) return;
+    if (!activeProfileId || !canCreateForActiveProfile) return;
     setCreating(true);
     setLocalError(null);
     try {
@@ -11759,7 +11545,7 @@ function AdminTasksSheet({
             draggingId === task.id && "opacity-70",
           )}
         >
-          {!completed && (
+          {!completed && canManageActiveProfileTasks && (
             <button
               type="button"
               data-task-drag-handle
@@ -11825,7 +11611,7 @@ function AdminTasksSheet({
             <button
               type="button"
               onClick={() => void createTaskForActiveProfile()}
-              disabled={!activeProfileId || creating}
+              disabled={!canCreateForActiveProfile || creating}
               className="flex h-8 w-8 items-center justify-center rounded-full bg-stone-50 text-xl font-semibold leading-none text-stone-500 transition hover:bg-stone-100 disabled:text-stone-300"
               aria-label="Ajouter une tâche"
             >
@@ -11850,6 +11636,7 @@ function AdminTasksSheet({
             <AdminTaskDetailPanel
               task={selectedTask}
               linkedEvent={selectedTask.eventId ? eventsById.get(selectedTask.eventId) ?? null : null}
+              currentProfile={currentProfile}
               permissions={permissions}
               onUpdateTask={onUpdateTask}
               onDeleteTask={onDeleteTask}
@@ -11895,6 +11682,7 @@ function AdminTasksSheet({
 function AdminTaskDetailPanel({
   task,
   linkedEvent,
+  currentProfile,
   permissions,
   onUpdateTask,
   onDeleteTask,
@@ -11904,6 +11692,7 @@ function AdminTaskDetailPanel({
 }: {
   task: AppTask;
   linkedEvent: ProductionEvent | null;
+  currentProfile: UserProfile | null;
   permissions: AppPermissions;
   onUpdateTask: (task: AppTask, patch: TaskUpdatePatch) => Promise<void>;
   onDeleteTask: (task: AppTask) => Promise<void>;
@@ -11915,6 +11704,8 @@ function AdminTaskDetailPanel({
   const [localError, setLocalError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const done = task.status === "done";
+  const canEdit = permissions.canManageEvents || task.assignedProfileId === currentProfile?.id;
+  const canDelete = permissions.canManageEvents;
 
   useEffect(() => {
     setTitle(task.title);
@@ -11922,7 +11713,7 @@ function AdminTaskDetailPanel({
   }, [task.id, task.title]);
 
   async function updateTaskSafely(patch: TaskUpdatePatch) {
-    if (!permissions.canManageEvents) return;
+    if (!canEdit) return;
     setSaving(true);
     setLocalError(null);
     try {
@@ -11941,7 +11732,7 @@ function AdminTaskDetailPanel({
         <input
           {...iosKeyboardGuardProps}
           value={title}
-          disabled={saving}
+          disabled={saving || !canEdit}
           onFocus={(event) => onNativeFieldFocus?.(event.currentTarget)}
           onChange={(event) => setTitle(event.target.value)}
           onBlur={() => {
@@ -11958,14 +11749,14 @@ function AdminTaskDetailPanel({
           {...iosKeyboardGuardProps}
           type="date"
           value={task.dueDate ?? ""}
-          disabled={saving}
+          disabled={saving || !canEdit}
           onFocus={(event) => onNativeFieldFocus?.(event.currentTarget)}
           onChange={(event) => void updateTaskSafely({ dueDate: event.target.value || null })}
           className="h-10 rounded-xl bg-white px-3 text-sm font-semibold text-stone-600 outline-none"
         />
         <button
           type="button"
-          disabled={saving}
+          disabled={saving || !canEdit}
           onClick={() => void updateTaskSafely({ status: done ? "todo" : "done" })}
           className={cn("h-10 rounded-xl px-3 text-sm font-semibold transition disabled:bg-stone-200 disabled:text-stone-400", done ? "bg-stone-200 text-stone-600 hover:bg-stone-300" : "bg-emerald-600 text-white hover:bg-emerald-700")}
         >
@@ -11977,16 +11768,18 @@ function AdminTaskDetailPanel({
           {getProductionEventDisplay(linkedEvent).title} · {formatFullDate(linkedEvent.date)}
         </button>
       )}
-      <div className="mt-2 flex justify-end">
-        <button
-          type="button"
-          onClick={() => void onDeleteTask(task).then(onClose).catch((deleteError) => setLocalError(getUserFacingErrorMessage(deleteError, "Impossible de supprimer la tâche.")))}
-          disabled={saving}
-          className="h-9 rounded-xl bg-rose-50 px-3 text-sm font-semibold text-rose-700 transition hover:bg-rose-100 disabled:text-stone-300"
-        >
-          Supprimer
-        </button>
-      </div>
+      {canDelete && (
+        <div className="mt-2 flex justify-end">
+          <button
+            type="button"
+            onClick={() => void onDeleteTask(task).then(onClose).catch((deleteError) => setLocalError(getUserFacingErrorMessage(deleteError, "Impossible de supprimer la tâche.")))}
+            disabled={saving}
+            className="h-9 rounded-xl bg-rose-50 px-3 text-sm font-semibold text-rose-700 transition hover:bg-rose-100 disabled:text-stone-300"
+          >
+            Supprimer
+          </button>
+        </div>
+      )}
       {localError && <p className="mt-2 text-xs font-semibold text-rose-700">{localError}</p>}
     </div>
   );
@@ -12019,8 +11812,6 @@ function YearOverviewOverlay({
   onOpenNotification,
   onDismissNotification,
   onOpenTasks,
-  onOpenAllTasks,
-  canOpenAllTasks,
   onGoToday,
   onImportQuote,
   onImportNativeMstvCalendar,
@@ -12059,8 +11850,6 @@ function YearOverviewOverlay({
   onOpenNotification: (notification: AppNotification) => void;
   onDismissNotification: (notification: AppNotification) => void;
   onOpenTasks: () => void;
-  onOpenAllTasks: () => void;
-  canOpenAllTasks: boolean;
   onGoToday: () => void;
   onImportQuote: () => void;
   onImportNativeMstvCalendar: () => void;
@@ -12309,8 +12098,6 @@ function YearOverviewOverlay({
           onOpenNotification={onOpenNotification}
           onDismissNotification={onDismissNotification}
           onOpenTasks={onOpenTasks}
-          onOpenAllTasks={onOpenAllTasks}
-          canOpenAllTasks={canOpenAllTasks}
           onImportQuote={onImportQuote}
           onImportNativeMstvCalendar={onImportNativeMstvCalendar}
           onSearch={onSearch}
@@ -16681,191 +16468,6 @@ function getOptionAssigneeLabel(option: EventOption, tasks: AppTask[], profiles:
   const linkedTask = getLinkedTaskForOption(option, tasks);
   if (linkedTask) return getTaskAssigneeLabel(linkedTask, profiles);
   return getCompletedByNameForDisplay(option);
-}
-
-function TaskCreateDiagnosticBlock({ diagnostic }: { diagnostic: TaskCreateDiagnostic | null }) {
-  if (!diagnostic) return null;
-
-  return (
-    <div className="rounded-2xl bg-stone-50 px-3 py-2 text-xs font-semibold text-stone-500">
-      <p className="text-stone-700">Diagnostic temporaire tâche</p>
-      <dl className="mt-1 grid gap-1">
-        <div className="flex justify-between gap-3">
-          <dt>Utilisateur</dt>
-          <dd className="truncate text-right">{diagnostic.currentUserId ?? "absent"}</dd>
-        </div>
-        <div className="flex justify-between gap-3">
-          <dt>Rôle</dt>
-          <dd>{diagnostic.currentUserRole ?? "absent"}</dd>
-        </div>
-        <div className="flex justify-between gap-3">
-          <dt>Assigné</dt>
-          <dd className="truncate text-right">{diagnostic.assignedProfile?.name ?? diagnostic.assignedProfileId ?? "non assignée"}</dd>
-        </div>
-        <div className="flex justify-between gap-3">
-          <dt>Email assigné</dt>
-          <dd className="truncate text-right">{diagnostic.assignedProfile?.email ?? "absent"}</dd>
-        </div>
-        <div className="flex justify-between gap-3">
-          <dt>Rôle assigné</dt>
-          <dd>{diagnostic.assignedProfile?.role ?? "absent"}</dd>
-        </div>
-        <div className="flex justify-between gap-3">
-          <dt>Événement</dt>
-          <dd className="truncate text-right">{diagnostic.eventId ?? "aucun"}</dd>
-        </div>
-        <div className="flex justify-between gap-3">
-          <dt>Échéance</dt>
-          <dd>{diagnostic.dueDate ?? "aucune"}</dd>
-        </div>
-        <div className="flex justify-between gap-3">
-          <dt>Code</dt>
-          <dd>{diagnostic.supabaseErrorCode ?? "aucun"}</dd>
-        </div>
-        <div className="grid gap-0.5">
-          <dt>Erreur Supabase</dt>
-          <dd className="break-words text-stone-600">{diagnostic.supabaseErrorMessage ?? "aucune"}</dd>
-        </div>
-        {diagnostic.supabaseErrorDetails && (
-          <div className="grid gap-0.5">
-            <dt>Détails</dt>
-            <dd className="break-words text-stone-600">{diagnostic.supabaseErrorDetails}</dd>
-          </div>
-        )}
-        {diagnostic.supabaseErrorHint && (
-          <div className="grid gap-0.5">
-            <dt>Indice</dt>
-            <dd className="break-words text-stone-600">{diagnostic.supabaseErrorHint}</dd>
-          </div>
-        )}
-      </dl>
-    </div>
-  );
-}
-
-function TaskRow({
-  task,
-  profiles,
-  currentProfile,
-  permissions,
-  onUpdateTask,
-  onDeleteTask,
-  onNativeFieldFocus,
-  compact = false,
-}: {
-  task: AppTask;
-  profiles: UserProfile[];
-  currentProfile: UserProfile | null;
-  permissions: AppPermissions;
-  onUpdateTask: (task: AppTask, patch: TaskUpdatePatch) => Promise<void>;
-  onDeleteTask: (task: AppTask) => Promise<void>;
-  onNativeFieldFocus?: (target: HTMLElement) => boolean;
-  compact?: boolean;
-}) {
-  const [title, setTitle] = useState(task.title);
-  const [localError, setLocalError] = useState<string | null>(null);
-  const [saving, setSaving] = useState(false);
-  const canManage = permissions.canManageEvents;
-  const canToggle = canManage || task.assignedProfileId === currentProfile?.id;
-  const done = task.status === "done";
-
-  useEffect(() => {
-    setTitle(task.title);
-  }, [task.title]);
-
-  async function updateTaskSafely(patch: TaskUpdatePatch) {
-    setSaving(true);
-    setLocalError(null);
-    try {
-      await onUpdateTask(task, patch);
-    } catch (updateError) {
-      setLocalError(getUserFacingErrorMessage(updateError, "Impossible de modifier la tâche."));
-      setTitle(task.title);
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  return (
-    <div className={cn("rounded-2xl bg-stone-50 px-3 py-2.5", done && "opacity-70")}>
-      <div className="grid grid-cols-[auto_minmax(0,1fr)_auto] items-start gap-2">
-        <button
-          type="button"
-          disabled={!canToggle || saving}
-          onClick={() => void updateTaskSafely({ status: done ? "todo" : "done" })}
-          className={cn(
-            "mt-1 flex h-5 w-5 shrink-0 items-center justify-center rounded-full transition",
-            done ? "bg-emerald-600 text-white" : "bg-white text-transparent ring-1 ring-stone-200",
-            canToggle && !done && "hover:text-stone-300",
-            !canToggle && "opacity-50",
-          )}
-          aria-label={done ? "Marquer à faire" : "Marquer comme terminée"}
-        >
-          <Check className="h-3.5 w-3.5" />
-        </button>
-        <div className="min-w-0">
-          {canManage ? (
-            <input
-              {...iosKeyboardGuardProps}
-              value={title}
-              disabled={saving}
-              onFocus={(event) => onNativeFieldFocus?.(event.currentTarget)}
-              onChange={(event) => setTitle(event.target.value)}
-              onBlur={() => {
-                if (title.trim() !== task.title) void updateTaskSafely({ title });
-              }}
-              className={cn("h-8 w-full rounded-xl bg-white/70 px-2 text-base font-semibold outline-none", done ? "text-stone-500 line-through" : "text-stone-950")}
-            />
-          ) : (
-            <p className={cn("truncate text-base font-semibold", done ? "text-stone-500 line-through" : "text-stone-950")}>{task.title}</p>
-          )}
-          <div className={cn("mt-1 flex flex-wrap items-center gap-2 text-xs font-semibold text-stone-400", compact && "text-[0.7rem]")}>
-            <span>{getTaskAssigneeLabel(task, profiles)}</span>
-            {task.dueDate && <span>Échéance {formatShortDate(task.dueDate)}</span>}
-          </div>
-          {localError && <p className="mt-1 text-xs font-semibold text-rose-700">{localError}</p>}
-        </div>
-        {canManage && (
-          <button
-            type="button"
-            onClick={() => void onDeleteTask(task).catch((deleteError) => setLocalError(getUserFacingErrorMessage(deleteError, "Impossible de supprimer la tâche.")))}
-            className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-stone-400 transition hover:bg-white hover:text-rose-700"
-            aria-label="Supprimer la tâche"
-          >
-            <Trash2 className="h-3.5 w-3.5" />
-          </button>
-        )}
-      </div>
-      {canManage && (
-        <div className="mt-2 grid gap-2 pl-7 sm:grid-cols-2">
-          <select
-            {...iosKeyboardGuardProps}
-            value={task.assignedProfileId ?? ""}
-            disabled={saving}
-            onFocus={(event) => onNativeFieldFocus?.(event.currentTarget)}
-            onChange={(event) => void updateTaskSafely({ assignedProfileId: event.target.value || null })}
-            className="h-9 min-w-0 rounded-xl bg-white/70 px-2 text-sm font-semibold text-stone-600 outline-none"
-          >
-            <option value="">Non assignée</option>
-            {profiles.map((userProfile) => (
-              <option key={userProfile.id} value={userProfile.id}>
-                {getProfileOptionLabel(userProfile)}
-              </option>
-            ))}
-          </select>
-          <input
-            {...iosKeyboardGuardProps}
-            type="date"
-            value={task.dueDate ?? ""}
-            disabled={saving}
-            onFocus={(event) => onNativeFieldFocus?.(event.currentTarget)}
-            onChange={(event) => void updateTaskSafely({ dueDate: event.target.value || null })}
-            className="h-9 rounded-xl bg-white/70 px-2 text-sm font-semibold text-stone-600 outline-none"
-          />
-        </div>
-      )}
-    </div>
-  );
 }
 
 function CalendarSettingsListRow({
