@@ -294,7 +294,7 @@ export function EventEditorModal({
           </div>
 
           <div className="grid gap-3 sm:grid-cols-2">
-            <Field label="Événement">
+            <Field label="Nom du client">
               <input
                 {...iosKeyboardGuardProps}
                 value={form.clientName}
@@ -303,7 +303,7 @@ export function EventEditorModal({
                 className={formInputClassName}
               />
             </Field>
-            <Field label="Titre">
+            <Field label="Titre de l’événement">
               <input
                 {...iosKeyboardGuardProps}
                 value={form.eventName}

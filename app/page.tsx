@@ -2595,7 +2595,7 @@ function getQuoteImportDifferences(existingEvent: ProductionEvent, input: Create
     differences.push({ label, previousValue: previousDisplay, nextValue: nextDisplay });
   };
 
-  addDifference("Client", existingEvent.clientName, input.clientName);
+  addDifference("Nom du client", existingEvent.clientName, input.clientName);
   addDifference("Date", formatFullDate(existingEvent.date), formatFullDate(input.date));
   addDifference("Début", toTimeInputValue(existingEvent.clientArrivalTime), input.clientArrivalTime);
   addDifference("Fin", toTimeInputValue(existingEvent.endOfDayTime), input.endOfDayTime);
@@ -11417,7 +11417,6 @@ function TeamTasksSheet({
   const taskPeople = useMemo(() => (profiles.length > 0 ? profiles : currentProfile ? [currentProfile] : []), [currentProfile, profiles]);
   const activeProfile = taskPeople[Math.min(activeProfileIndex, Math.max(taskPeople.length - 1, 0))] ?? null;
   const activeProfileId = activeProfile?.id ?? null;
-  const activeFirstName = activeProfile?.firstName?.trim() || getProfileDisplayName(activeProfile)?.split(/\s+/)[0] || "Équipe";
   const canManageActiveProfileTasks = Boolean(activeProfileId && (permissions.canManageEvents || activeProfileId === currentProfile?.id));
   const canCreateForActiveProfile = canManageActiveProfileTasks;
   const personTasks = useMemo(() => tasks.filter((task) => task.assignedProfileId === activeProfileId), [activeProfileId, tasks]);
@@ -11594,39 +11593,37 @@ function TeamTasksSheet({
           {loading && <p className="rounded-2xl bg-stone-50 px-3 py-4 text-center text-sm font-semibold text-stone-400">Chargement...</p>}
 
           {!selectedTask && taskPeople.length > 0 && (
-            <div className="no-scrollbar flex gap-1.5 overflow-x-auto pb-1">
-              {taskPeople.map((person, index) => {
-                const firstName = person.firstName?.trim() || getProfileDisplayName(person)?.split(/\s+/)[0] || "Équipe";
-                const active = index === activeProfileIndex;
-                return (
-                  <button
-                    key={person.id}
-                    type="button"
-                    onClick={() => selectPerson(index)}
-                    className={cn(
-                      "shrink-0 rounded-full px-3 py-1.5 text-sm font-semibold transition",
-                      active ? "bg-stone-900 text-white" : "bg-stone-50 text-stone-500 hover:bg-stone-100 hover:text-stone-900",
-                    )}
-                  >
-                    {firstName}
-                  </button>
-                );
-              })}
-            </div>
-          )}
-
-          {!selectedTask && (
-            <div className="flex items-center justify-between gap-3">
-              <h3 className="truncate px-1 text-base font-semibold text-stone-900">{activeFirstName}</h3>
-            <button
-              type="button"
-              onClick={() => void createTaskForActiveProfile()}
-              disabled={!canCreateForActiveProfile || creating}
-              className="flex h-8 w-8 items-center justify-center rounded-full bg-stone-50 text-xl font-semibold leading-none text-stone-500 transition hover:bg-stone-100 disabled:text-stone-300"
-              aria-label="Ajouter une tâche"
-            >
-              +
-            </button>
+            <div className="flex items-end gap-2 border-b border-white/70">
+              <div className="no-scrollbar flex min-w-0 flex-1 items-end gap-0.5 overflow-x-auto">
+                {taskPeople.map((person, index) => {
+                  const firstName = person.firstName?.trim() || getProfileDisplayName(person)?.split(/\s+/)[0] || "Équipe";
+                  const active = index === activeProfileIndex;
+                  return (
+                    <button
+                      key={person.id}
+                      type="button"
+                      onClick={() => selectPerson(index)}
+                      className={cn(
+                        "shrink-0 rounded-t-xl px-3 py-2 text-sm font-semibold transition",
+                        active
+                          ? "bg-white text-stone-950 shadow-sm shadow-black/5"
+                          : "bg-white/45 text-stone-500 hover:bg-white/70 hover:text-stone-900",
+                      )}
+                    >
+                      {firstName}
+                    </button>
+                  );
+                })}
+              </div>
+              <button
+                type="button"
+                onClick={() => void createTaskForActiveProfile()}
+                disabled={!canCreateForActiveProfile || creating}
+                className="mb-1 flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-white text-xl font-semibold leading-none text-stone-500 transition hover:bg-stone-50 disabled:text-stone-300"
+                aria-label="Ajouter une tâche"
+              >
+                +
+              </button>
             </div>
           )}
 
@@ -11784,8 +11781,8 @@ const TaskQueueRow = forwardRef<HTMLDivElement, {
         completed
           ? "bg-white/80 opacity-65 hover:bg-stone-50/80"
           : selected
-            ? "bg-emerald-100/80"
-            : "bg-emerald-50/80 hover:bg-emerald-100/55",
+            ? "bg-white"
+            : "bg-white/80 hover:bg-white",
         dragging && "bg-white opacity-90 shadow-sm shadow-black/5",
       )}
       {...draggableProps}
@@ -11793,7 +11790,7 @@ const TaskQueueRow = forwardRef<HTMLDivElement, {
       <span
         className={cn(
           "min-w-0 flex-1 truncate text-left text-base font-semibold leading-snug transition",
-          completed ? "text-stone-400 line-through" : "text-stone-700 group-hover:text-emerald-950",
+          completed ? "text-stone-400 line-through" : "text-stone-700 group-hover:text-stone-950",
         )}
       >
         {task.title}
@@ -11974,7 +11971,7 @@ function AdminTaskDetailPanel({
 
       <div className="mt-2 rounded-xl bg-white/70 px-3 py-2">
         <div className="mb-1 flex items-center justify-between gap-2">
-          <span className={cn("text-xs font-semibold uppercase tracking-[0.08em]", taskTone.meta)}>Événement</span>
+          <span className={cn("text-xs font-semibold uppercase tracking-[0.08em]", taskTone.meta)}>Événement lié</span>
           {linkedEvent && canEditEventLink && (
             <button
               type="button"
@@ -14328,11 +14325,11 @@ function getOptionTone(state: CompletionStatus) {
 
 function getTaskTone(task: AppTask) {
   return {
-    panel: task.status === "done" ? "bg-white/85" : "bg-emerald-50/80",
-    title: task.status === "done" ? "text-stone-500 line-through" : "text-emerald-950",
+    panel: "bg-white/85",
+    title: task.status === "done" ? "text-stone-500 line-through" : "text-stone-950",
     body: "text-stone-700",
-    meta: task.status === "done" ? "text-stone-400" : "text-emerald-700/70",
-    actionText: task.status === "done" ? "text-stone-600" : "text-emerald-800",
+    meta: "text-stone-400",
+    actionText: "text-stone-600",
   };
 }
 
@@ -15234,6 +15231,19 @@ function ContextDetailBlock({
             onFocusTarget={onNativeFieldFocus}
           />
         </div>
+        {linkedOptionTask && (
+          <label className="flex h-8 shrink-0 items-center gap-1.5 rounded-full bg-stone-50 px-2 text-xs font-semibold text-stone-500 transition hover:bg-stone-100">
+            <input
+              type="checkbox"
+              checked={linkedOptionTask.status === "done"}
+              disabled={savingCompletedByOverride || !canEditLinkedTaskNotes}
+              onChange={(event) => void updateLinkedOptionTask({ status: event.target.checked ? "done" : "todo" })}
+              className="h-3.5 w-3.5 rounded border-stone-300 accent-emerald-600"
+              aria-label={linkedOptionTask.status === "done" ? "Marquer à faire" : "Marquer terminé"}
+            />
+            {linkedOptionTask.status === "done" ? "Terminé" : "À faire"}
+          </label>
+        )}
       </div>
       {titleRenameError && <div className="mt-2 text-base font-medium text-rose-700">{titleRenameError}</div>}
       {canAssignOptionTask && (
@@ -15992,7 +16002,7 @@ function QuoteImportModal({
         ) : (
           <>
             <div className="grid gap-3 sm:grid-cols-2">
-              <Field label="Client">
+              <Field label="Nom du client">
                 <input
                   {...iosKeyboardGuardProps}
                   required
