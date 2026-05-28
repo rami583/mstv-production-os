@@ -11666,12 +11666,12 @@ function TeamTasksSheet({
     <section className="mx-auto flex min-h-0 w-full max-w-3xl flex-1 flex-col">
         <div
           ref={nativeKeyboard.scrollContainerRef}
-          className="no-scrollbar min-h-0 flex-1 space-y-3 overflow-y-auto overscroll-contain pb-4"
+          className="no-scrollbar flex min-h-0 flex-1 flex-col overflow-y-auto overscroll-contain"
           style={nativeKeyboard.scrollContainerStyle}
         >
-          {(error) && <p className="text-sm font-semibold text-rose-700">{error}</p>}
-          {localError && <p className="text-sm font-semibold text-rose-700">{localError}</p>}
-          {loading && <p className="rounded-2xl bg-stone-50 px-3 py-4 text-center text-sm font-semibold text-stone-400">Chargement...</p>}
+          {(error) && <p className="mb-3 text-sm font-semibold text-rose-700">{error}</p>}
+          {localError && <p className="mb-3 text-sm font-semibold text-rose-700">{localError}</p>}
+          {loading && <p className="mb-3 rounded-2xl bg-stone-50 px-3 py-4 text-center text-sm font-semibold text-stone-400">Chargement...</p>}
 
           {!selectedTask && taskPeople.length > 0 && (
             <div className="flex items-end gap-2 border-b border-white/70">
@@ -11731,7 +11731,7 @@ function TeamTasksSheet({
           ) : taskPeople.length === 0 ? (
             <p className="rounded-2xl bg-stone-50 px-3 py-4 text-center text-sm font-medium text-stone-400">Aucun membre disponible.</p>
           ) : (
-            <div className="overflow-visible rounded-b-2xl bg-white px-3 py-3">
+            <div className="min-h-0 flex-1 overflow-visible rounded-b-2xl bg-white px-3 pb-4 pt-3">
               <div className="grid gap-2 overflow-visible">
                 {orderedTodoTasks.length === 0 ? (
                   <p className="rounded-2xl bg-white px-3 py-4 text-center text-sm font-medium text-stone-300">Aucune tâche.</p>
@@ -15345,7 +15345,7 @@ function ContextDetailBlock({
       </div>
       {titleRenameError && <div className="mt-2 text-base font-medium text-rose-700">{titleRenameError}</div>}
       {canAssignOptionTask && (
-        <div className={cn("mt-3 grid items-end gap-2 rounded-xl bg-sky-50/70 px-3 py-2", canAssignOptionTask ? "grid-cols-[minmax(0,1fr)_minmax(0,2fr)]" : "grid-cols-1")}>
+        <div className="mt-3 grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)] items-end gap-2 rounded-xl bg-sky-50/70 px-3 py-2">
           <label className="grid min-w-0 gap-1">
             <span className="text-xs font-semibold uppercase tracking-[0.08em] text-sky-700/70">Assigné à</span>
             <select
