@@ -920,6 +920,10 @@ const EVENT_SWIPE_AXIS_ACTIVATION_PX = 8;
 const EVENT_SWIPE_HORIZONTAL_DOMINANCE = 1.12;
 const EVENT_DETAIL_CAROUSEL_TRANSITION_MS = 240;
 const EVENT_DETAIL_CAROUSEL_EASING = "cubic-bezier(0.22, 1, 0.36, 1)";
+const TASK_DETAIL_SWIPE_THRESHOLD_PX = 50;
+const TASK_DETAIL_SWIPE_HORIZONTAL_DOMINANCE = 1.5;
+const TASK_DETAIL_SWIPE_AXIS_DOMINANCE = 1.2;
+const TASK_DETAIL_SWIPE_BLOCK_SELECTOR = "input, textarea, select, button, a, label, [role='button'], [contenteditable='true'], [data-task-swipe-block]";
 
 function getSwipePageStep(viewportWidth: number) {
   return viewportWidth + PAGE_GAP;
@@ -11432,12 +11436,12 @@ function TeamTasksSheet({
 
   function isTaskDetailSwipeTarget(target: EventTarget | null) {
     if (!(target instanceof HTMLElement)) return false;
-    if (target.closest("input, textarea, select, button, a, [contenteditable='true'], [data-task-swipe-block]")) return false;
+    if (target.closest(TASK_DETAIL_SWIPE_BLOCK_SELECTOR)) return false;
 
     const activeElement = document.activeElement;
     if (
       activeElement instanceof HTMLElement &&
-      activeElement.matches("input, textarea, select, [contenteditable='true']")
+      activeElement.closest(TASK_DETAIL_SWIPE_BLOCK_SELECTOR)
     ) {
       return false;
     }
@@ -11473,7 +11477,7 @@ function TeamTasksSheet({
   }
 
   function handleTaskDetailSwipePointerDown(pointerEvent: ReactPointerEvent<HTMLDivElement>) {
-    if (taskDetailSwipeStartRef.current || pointerEvent.pointerType === "mouse" || !isTaskDetailSwipeTarget(pointerEvent.target)) return;
+    if (taskDetailSlide || taskDetailSwipeStartRef.current || pointerEvent.pointerType === "mouse" || !isTaskDetailSwipeTarget(pointerEvent.target)) return;
     if (selectedTaskNavigationTasks.length <= 1) return;
 
     taskDetailSwipeStartRef.current = {
@@ -11491,9 +11495,15 @@ function TeamTasksSheet({
 
     const deltaX = pointerEvent.clientX - swipeStart.x;
     const deltaY = pointerEvent.clientY - swipeStart.y;
+    const absDeltaX = Math.abs(deltaX);
+    const absDeltaY = Math.abs(deltaY);
 
-    if (!swipeStart.axis && (Math.abs(deltaX) > EVENT_SWIPE_AXIS_ACTIVATION_PX || Math.abs(deltaY) > EVENT_SWIPE_AXIS_ACTIVATION_PX)) {
-      swipeStart.axis = Math.abs(deltaX) > Math.abs(deltaY) ? "horizontal" : "vertical";
+    if (!swipeStart.axis && (absDeltaX > EVENT_SWIPE_AXIS_ACTIVATION_PX || absDeltaY > EVENT_SWIPE_AXIS_ACTIVATION_PX)) {
+      if (absDeltaX > EVENT_SWIPE_AXIS_ACTIVATION_PX && absDeltaX > absDeltaY * TASK_DETAIL_SWIPE_AXIS_DOMINANCE) {
+        swipeStart.axis = "horizontal";
+      } else if (absDeltaY > EVENT_SWIPE_AXIS_ACTIVATION_PX && absDeltaY >= absDeltaX) {
+        swipeStart.axis = "vertical";
+      }
     }
 
     if (swipeStart.axis === "vertical") {
@@ -11511,10 +11521,9 @@ function TeamTasksSheet({
 
     const deltaX = pointerEvent.clientX - swipeStart.x;
     const deltaY = pointerEvent.clientY - swipeStart.y;
-    const swipeThreshold = getEventSwipeThreshold(pointerEvent.currentTarget.clientWidth);
     resetTaskDetailSwipe();
 
-    if (Math.abs(deltaX) >= swipeThreshold && Math.abs(deltaX) >= Math.abs(deltaY) * EVENT_SWIPE_HORIZONTAL_DOMINANCE) {
+    if (Math.abs(deltaX) >= TASK_DETAIL_SWIPE_THRESHOLD_PX && Math.abs(deltaX) >= Math.abs(deltaY) * TASK_DETAIL_SWIPE_HORIZONTAL_DOMINANCE) {
       navigateSelectedTaskByDirection(deltaX < 0 ? 1 : -1);
     }
   }
@@ -11651,10 +11660,10 @@ function TeamTasksSheet({
           {selectedTask ? (
             <div
               className="min-h-full touch-pan-y overflow-hidden"
-              onPointerDown={handleTaskDetailSwipePointerDown}
-              onPointerMove={handleTaskDetailSwipePointerMove}
-              onPointerUp={handleTaskDetailSwipePointerUp}
-              onPointerCancel={resetTaskDetailSwipe}
+              onPointerDownCapture={handleTaskDetailSwipePointerDown}
+              onPointerMoveCapture={handleTaskDetailSwipePointerMove}
+              onPointerUpCapture={handleTaskDetailSwipePointerUp}
+              onPointerCancelCapture={resetTaskDetailSwipe}
               onClick={(event) => {
                 if (event.target === event.currentTarget) closeSelectedTaskEditor();
               }}
