@@ -12423,12 +12423,14 @@ const TaskQueueRow = forwardRef<HTMLDivElement, {
       )}
     >
       {createdByAdmin && (
-        <span className="shrink-0 text-xs leading-none text-neutral-500" aria-label="Créée par un administrateur" title="Créée par un administrateur">
-          📌
+        <span className="inline-flex h-3.5 w-3.5 shrink-0 items-center justify-center text-xs font-bold leading-none text-neutral-500" aria-label="Créée par un administrateur" title="Créée par un administrateur">
+          ★
         </span>
       )}
       {!completed && isTaskUrgent(task) && (
-        <AlertCircle className="h-3.5 w-3.5 shrink-0 text-[#bb2720]" aria-label="Urgent" />
+        <span className="inline-flex h-3.5 w-3.5 shrink-0 items-center justify-center text-xs font-bold leading-none text-neutral-500" aria-label="Urgent" title="Urgent">
+          !
+        </span>
       )}
       <span
         className={cn(
