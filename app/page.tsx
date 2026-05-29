@@ -137,6 +137,7 @@ type EventLinkEntryRow = Database["public"]["Tables"]["event_link_entries"]["Row
 type EventDocumentRow = Database["public"]["Tables"]["event_documents"]["Row"];
 type EventDocumentGroupRow = Database["public"]["Tables"]["event_document_groups"]["Row"];
 type EventActivityLogRow = Database["public"]["Tables"]["event_activity_log"]["Row"];
+type EventActivityReadRow = Database["public"]["Tables"]["event_activity_reads"]["Row"];
 type NotificationRow = Database["public"]["Tables"]["notifications"]["Row"];
 type TaskRow = Database["public"]["Tables"]["tasks"]["Row"];
 type ProfileRow = Database["public"]["Tables"]["profiles"]["Row"];
@@ -379,7 +380,25 @@ type EventActivityLog = {
   previousValue: ActivityValue;
   newValue: ActivityValue;
   createdBy: string | null;
+  createdByProfileId: string | null;
   createdAt: string;
+};
+
+type EventUnreadActivity = Pick<
+  EventActivityLog,
+  "id" | "eventId" | "actionType" | "entityType" | "entityId" | "newValue" | "createdBy" | "createdByProfileId" | "createdAt"
+>;
+
+type EventActivityRead = {
+  eventId: string;
+  profileId: string;
+  readAt: string;
+};
+
+type EventUnreadSummary = {
+  count: number;
+  hasMetadata: boolean;
+  itemKeys: Set<string>;
 };
 
 type AppNotification = {
@@ -850,6 +869,7 @@ const realtimeTableNames = [
   "event_document_groups",
   "event_documents",
   "event_activity_log",
+  "event_activity_reads",
   "tasks",
   "profiles",
   "notifications",
@@ -3307,8 +3327,125 @@ function mapEventActivityLog(row: EventActivityLogRow): EventActivityLog {
     previousValue: row.previous_value,
     newValue: row.new_value,
     createdBy: row.created_by,
+    createdByProfileId: row.created_by_profile_id ?? null,
     createdAt: row.created_at,
   };
+}
+
+function mapEventUnreadActivity(row: EventActivityLogRow): EventUnreadActivity {
+  const activity = mapEventActivityLog(row);
+  return {
+    id: activity.id,
+    eventId: activity.eventId,
+    actionType: activity.actionType,
+    entityType: activity.entityType,
+    entityId: activity.entityId,
+    newValue: activity.newValue,
+    createdBy: activity.createdBy,
+    createdByProfileId: activity.createdByProfileId,
+    createdAt: activity.createdAt,
+  };
+}
+
+function mapEventActivityRead(row: EventActivityReadRow): EventActivityRead {
+  return {
+    eventId: row.event_id,
+    profileId: row.profile_id,
+    readAt: row.read_at,
+  };
+}
+
+function isTrackedUnreadActivity(activity: EventUnreadActivity) {
+  if (/delete|deleted|suppression/.test(activity.actionType)) return false;
+  const entityType = activity.entityType ?? "event";
+  return ["event", "option", "option_item", "link", "link_entry", "document", "document_group", "task"].includes(entityType);
+}
+
+function isUnreadActivityCreatedByProfile(activity: EventUnreadActivity, profile: UserProfile | null) {
+  if (!profile) return false;
+  if (activity.createdByProfileId && activity.createdByProfileId === profile.id) return true;
+  const createdBy = activity.createdBy?.trim().toLocaleLowerCase("fr-FR");
+  if (!createdBy) return false;
+  const possibleNames = [
+    getProfileDisplayName(profile),
+    profile.firstName,
+    profile.email?.split("@")[0],
+  ]
+    .map((value) => value?.trim().toLocaleLowerCase("fr-FR"))
+    .filter((value): value is string => Boolean(value));
+  return possibleNames.includes(createdBy);
+}
+
+function getUnreadActivityItemKey(activity: EventUnreadActivity, event: ProductionEvent | null, tasks: AppTask[]) {
+  if (!event) return null;
+  const entityId = activity.entityId;
+  const entityType = activity.entityType ?? "event";
+
+  if (entityType === "option" && entityId) return `option:${entityId}`;
+
+  if (entityType === "option_item" && entityId) {
+    const option = event.options.find((item) => item.items.some((optionItem) => optionItem.id === entityId));
+    return option ? `option:${option.id}` : null;
+  }
+
+  if (entityType === "link" && entityId) return `link:${entityId}`;
+
+  if (entityType === "link_entry" && entityId) {
+    const link = event.links.find((item) => item.entries.some((entry) => entry.id === entityId));
+    return link ? `link:${link.id}` : null;
+  }
+
+  if (entityType === "document_group" && entityId) return `document:${entityId}`;
+
+  if (entityType === "document" && entityId) {
+    const groupId = typeof activity.newValue?.groupId === "string" ? activity.newValue.groupId : null;
+    if (groupId) return `document:${groupId}`;
+    const group = event.documentGroups.find((item) => item.files.some((file) => file.id === entityId));
+    return group ? `document:${group.id}` : null;
+  }
+
+  if (entityType === "task" && entityId) {
+    const option = event.options.find((item) => item.taskId === entityId);
+    if (option) return `option:${option.id}`;
+    const task = tasks.find((item) => item.id === entityId);
+    if (task?.eventId === event.id) return null;
+  }
+
+  return null;
+}
+
+function buildUnreadChangeSummaries(
+  activities: EventUnreadActivity[],
+  reads: EventActivityRead[],
+  profile: UserProfile | null,
+  events: ProductionEvent[],
+  tasks: AppTask[],
+) {
+  const readAtByEventId = new Map(reads.map((read) => [read.eventId, read.readAt]));
+  const eventById = new Map(events.map((event) => [event.id, event]));
+  const summaries = new Map<string, EventUnreadSummary>();
+
+  activities.forEach((activity) => {
+    if (!isTrackedUnreadActivity(activity)) return;
+    if (isUnreadActivityCreatedByProfile(activity, profile)) return;
+    const readAt = readAtByEventId.get(activity.eventId);
+    if (readAt && activity.createdAt <= readAt) return;
+
+    const event = eventById.get(activity.eventId) ?? null;
+    const summary = summaries.get(activity.eventId) ?? { count: 0, hasMetadata: false, itemKeys: new Set<string>() };
+    summary.count += 1;
+
+    const itemKey = getUnreadActivityItemKey(activity, event, tasks);
+    if (itemKey) {
+      summary.itemKeys.add(itemKey);
+    } else {
+      summary.hasMetadata = true;
+    }
+
+    summaries.set(activity.eventId, summary);
+  });
+
+  return summaries;
 }
 
 function mapNotification(row: NotificationRow): AppNotification {
@@ -3857,6 +3994,41 @@ async function fetchTasks() {
   return rows.map(mapTask);
 }
 
+async function fetchUnreadChangeData(profileId: string) {
+  if (!supabase) {
+    throw new Error("Configuration Supabase manquante.");
+  }
+
+  try {
+    const [activityResult, readsResult] = await Promise.all([
+      supabase
+        .from("event_activity_log")
+        .select("id,event_id,action_type,entity_type,entity_id,description,previous_value,new_value,created_by,created_by_profile_id,created_at")
+        .order("created_at", { ascending: false })
+        .limit(1000),
+      supabase
+        .from("event_activity_reads")
+        .select("*")
+        .eq("profile_id", profileId),
+    ]);
+
+    if (activityResult.error) throw activityResult.error;
+    if (readsResult.error) throw readsResult.error;
+
+    return {
+      activities: ((activityResult.data ?? []) as EventActivityLogRow[]).map(mapEventUnreadActivity),
+      reads: ((readsResult.data ?? []) as EventActivityReadRow[]).map(mapEventActivityRead),
+    };
+  } catch (unreadError) {
+    const rawMessage = getRawErrorMessage(unreadError).toLocaleLowerCase("fr-FR");
+    if (/event_activity_reads|created_by_profile_id|schema cache|column .* does not exist|relation .* does not exist|pgrst204|pgrst205|42p01|42703/.test(rawMessage)) {
+      console.warn("Unread change badges are disabled until the Supabase migration is applied.", getDebugError(unreadError));
+      return { activities: [], reads: [] };
+    }
+    throw unreadError;
+  }
+}
+
 async function fetchNativeMstvIcsImportIds() {
   if (!supabase) {
     throw new Error("Configuration Supabase manquante.");
@@ -4027,6 +4199,8 @@ export default function Home() {
   const [activityLog, setActivityLog] = useState<EventActivityLog[]>([]);
   const [activityLoading, setActivityLoading] = useState(false);
   const [activityError, setActivityError] = useState<string | null>(null);
+  const [unreadActivities, setUnreadActivities] = useState<EventUnreadActivity[]>([]);
+  const [eventActivityReads, setEventActivityReads] = useState<EventActivityRead[]>([]);
   const [restoringActivityId, setRestoringActivityId] = useState<string | null>(null);
   const [eventDetailCarousel, setEventDetailCarousel] = useState<{ direction: -1 | 1; targetId: string } | null>(null);
   const [showEventDetailDesktopControls, setShowEventDetailDesktopControls] = useState(false);
@@ -4100,6 +4274,8 @@ export default function Home() {
     setAuthSession(null);
     setProfile(null);
     setEvents([]);
+    setUnreadActivities([]);
+    setEventActivityReads([]);
     setExternalCalendars([]);
     setExternalCalendarEvents([]);
     setNotifications([]);
@@ -4161,6 +4337,10 @@ export default function Home() {
   const visibleProductionEvents = useMemo(
     () => events.filter(isProductionEventVisible),
     [events, isProductionEventVisible],
+  );
+  const unreadChangeSummaries = useMemo(
+    () => buildUnreadChangeSummaries(unreadActivities, eventActivityReads, profile, visibleProductionEvents, tasks),
+    [eventActivityReads, profile?.id, profile?.email, profile?.firstName, profile?.lastName, tasks, unreadActivities, visibleProductionEvents],
   );
   const chronologicalEvents = useMemo(() => [...visibleProductionEvents].sort((a, b) => eventSortValue(a) - eventSortValue(b)), [visibleProductionEvents]);
   const selectedEvent = useMemo(() => {
@@ -4624,6 +4804,18 @@ export default function Home() {
   }, [historyOpen, selectedEvent?.id]);
 
   useEffect(() => {
+    if (screen !== "detail" || !selectedEvent || !profile?.id || !online) return;
+    const unreadCount = unreadChangeSummaries.get(selectedEvent.id)?.count ?? 0;
+    if (unreadCount === 0) return;
+
+    const readTimer = window.setTimeout(() => {
+      void markEventChangesRead(selectedEvent.id);
+    }, 1400);
+
+    return () => window.clearTimeout(readTimer);
+  }, [online, profile?.id, screen, selectedEvent?.id, unreadChangeSummaries]);
+
+  useEffect(() => {
     if (!trashOpen) return;
     void refreshTrash();
   }, [trashOpen]);
@@ -4767,11 +4959,12 @@ export default function Home() {
     setError(null);
 
     try {
-      const [nextEvents, nextExternalCalendars, nextExternalEvents, nextTasks] = await Promise.all([
+      const [nextEvents, nextExternalCalendars, nextExternalEvents, nextTasks, nextUnreadData] = await Promise.all([
         fetchEvents(),
         fetchExternalCalendars(),
         fetchExternalCalendarEvents(),
         fetchTasks(),
+        profile?.id ? fetchUnreadChangeData(profile.id) : Promise.resolve({ activities: [], reads: [] }),
       ]);
       const eventCounts = getProductionEventNetworkCounts(nextEvents);
       logNetworkDebug("reloadData:complete", {
@@ -4785,12 +4978,16 @@ export default function Home() {
           externalCalendars: nextExternalCalendars.length,
           legacyExternalCalendarEvents: nextExternalEvents.length,
           tasks: nextTasks.length,
+          unreadChanges: nextUnreadData.activities.length,
+          readReceipts: nextUnreadData.reads.length,
         },
         approxJsonBytes: {
           events: getApproxJsonBytes(nextEvents),
           externalCalendars: getApproxJsonBytes(nextExternalCalendars),
           legacyExternalCalendarEvents: getApproxJsonBytes(nextExternalEvents),
           tasks: getApproxJsonBytes(nextTasks),
+          unreadChanges: getApproxJsonBytes(nextUnreadData.activities),
+          readReceipts: getApproxJsonBytes(nextUnreadData.reads),
         },
       });
       if (authSession?.user.id) {
@@ -4803,6 +5000,8 @@ export default function Home() {
       }
       setEvents(nextEvents);
       setTasks(nextTasks);
+      setUnreadActivities(nextUnreadData.activities);
+      setEventActivityReads(nextUnreadData.reads);
       setExternalCalendars((current) => mergeExternalCalendarList(current, nextExternalCalendars));
       setExternalCalendarEvents(nextExternalEvents);
       setSelectedId((current) => {
@@ -6246,6 +6445,36 @@ export default function Home() {
     }
   }
 
+  async function markEventChangesRead(eventId: string) {
+    if (!supabase || !profile?.id || !online) return;
+    const readAt = new Date().toISOString();
+    const read: EventActivityRead = { eventId, profileId: profile.id, readAt };
+
+    setEventActivityReads((current) => {
+      const withoutEvent = current.filter((item) => item.eventId !== eventId || item.profileId !== profile.id);
+      return [...withoutEvent, read];
+    });
+
+    const { error: readError } = await supabase
+      .from("event_activity_reads")
+      .upsert(
+        {
+          event_id: eventId,
+          profile_id: profile.id,
+          read_at: readAt,
+        },
+        { onConflict: "event_id,profile_id" },
+      );
+
+    if (readError) {
+      console.warn("Failed to mark event changes as read.", {
+        eventId,
+        profileId: profile.id,
+        error: getDebugError(readError),
+      });
+    }
+  }
+
   async function logEventActivity(input: {
     eventId: string;
     actionType: string;
@@ -6270,6 +6499,7 @@ export default function Home() {
         previous_value: input.previousValue ?? null,
         new_value: input.newValue ?? null,
         created_by: actorName,
+        created_by_profile_id: profile?.id ?? null,
       })
       .select()
       .single();
@@ -6288,6 +6518,7 @@ export default function Home() {
     if (historyOpen && selectedEvent?.id === input.eventId) {
       setActivityLog((current) => [mapEventActivityLog(data), ...current].slice(0, 80));
     }
+    setUnreadActivities((current) => [mapEventUnreadActivity(data), ...current].slice(0, 1000));
   }
 
   async function writeQueuedActivity(activity: PendingActivityPayload | null | undefined) {
@@ -6303,6 +6534,7 @@ export default function Home() {
       previous_value: activity.previousValue ?? null,
       new_value: activity.newValue ?? null,
       created_by: actorName,
+      created_by_profile_id: profile?.id ?? null,
     });
 
     if (logError) {
@@ -6440,6 +6672,21 @@ export default function Home() {
     }
     const createdTask = mapTask(data);
     upsertTaskInState(createdTask);
+    if (createdTask.eventId) {
+      await logEventActivity({
+        eventId: createdTask.eventId,
+        actionType: "task_created",
+        entityType: "task",
+        entityId: createdTask.id,
+        description: `Tâche ${createdTask.title} créée`,
+        newValue: {
+          title: createdTask.title,
+          assignedProfileId: createdTask.assignedProfileId,
+          dueDate: createdTask.dueDate,
+          status: createdTask.status,
+        },
+      });
+    }
     return createdTask;
   }
 
@@ -6490,7 +6737,38 @@ export default function Home() {
       .single();
 
     if (updateError) throw updateError;
-    upsertTaskInState(mapTask(data));
+    const updatedTask = mapTask(data);
+    upsertTaskInState(updatedTask);
+
+    const sortOnlyUpdate = patchKeys.length === 1 && patch.sortOrder !== undefined;
+    const activityEventId = updatedTask.eventId ?? task.eventId;
+    if (activityEventId && !sortOnlyUpdate) {
+      await logEventActivity({
+        eventId: activityEventId,
+        actionType: "task_updated",
+        entityType: "task",
+        entityId: updatedTask.id,
+        description: `Tâche ${updatedTask.title} modifiée`,
+        previousValue: {
+          title: task.title,
+          assignedProfileId: task.assignedProfileId,
+          dueDate: task.dueDate,
+          notes: task.notes,
+          status: task.status,
+          priority: task.priority,
+          eventId: task.eventId,
+        },
+        newValue: {
+          title: updatedTask.title,
+          assignedProfileId: updatedTask.assignedProfileId,
+          dueDate: updatedTask.dueDate,
+          notes: updatedTask.notes,
+          status: updatedTask.status,
+          priority: updatedTask.priority,
+          eventId: updatedTask.eventId,
+        },
+      });
+    }
   }
 
   async function reorderTasksForAssignee(orderedTasks: AppTask[], assignedProfileId: string | null) {
@@ -7108,6 +7386,7 @@ export default function Home() {
         onDownloadDocument={downloadEventDocument}
         tasks={tasks.filter((task) => task.eventId === eventToRender.id)}
         profiles={taskProfiles}
+        unreadSummary={unreadChangeSummaries.get(eventToRender.id) ?? null}
         onUpdateTask={updateTask}
         permissions={permissions}
         profile={profile}
@@ -9264,6 +9543,14 @@ export default function Home() {
       label: nextLabel,
       ...creatorPayload,
     };
+    const activity: PendingActivityPayload = {
+      eventId: option.eventId,
+      actionType: "option_item_created",
+      entityType: "option_item",
+      entityId: localItemId,
+      description: "Note ajoutée",
+      newValue: { label: nextLabel, optionId: option.id },
+    };
 
     function applyOptimisticItem(optionItem: EventOptionItem) {
       setEvents((current) =>
@@ -9311,7 +9598,7 @@ export default function Home() {
         actionType: "option_item_insert",
         entityType: "option_item",
         entityId: localItemId,
-        payload: { values: insertPayload },
+        payload: { values: insertPayload, activity },
       });
       return optionItem;
     }
@@ -9341,7 +9628,7 @@ export default function Home() {
           actionType: "option_item_insert",
           entityType: "option_item",
           entityId: localItemId,
-          payload: { values: insertPayload },
+          payload: { values: insertPayload, activity },
         });
         return optionItem;
       }
@@ -9360,6 +9647,10 @@ export default function Home() {
 
     applyOptimisticItem(optionItem);
     notifyOptionNoteAdded();
+    await logEventActivity({
+      ...activity,
+      entityId: optionItem.id,
+    });
 
     return optionItem;
   }
@@ -9461,7 +9752,7 @@ export default function Home() {
       entityId: optionItem.id,
       description: "Note modifiée",
       previousValue: { label: optionItem.label },
-      newValue: { label: nextLabel },
+      newValue: { label: nextLabel, optionId: option.id },
     };
 
     function applyOptimisticUpdate() {
@@ -10740,6 +11031,7 @@ export default function Home() {
               canDuplicateEvents={permissions.canManageEvents}
               setSelectedDateKey={setSelectedDateKey}
               changeMonth={changeMonth}
+              unreadChangeSummaries={unreadChangeSummaries}
             />
           )}
 
@@ -13303,6 +13595,7 @@ function CalendarDashboard({
   selectedDateKey,
   setSelectedDateKey,
   changeMonth,
+  unreadChangeSummaries,
 }: {
   events: ProductionEvent[];
   externalEvents: ExternalCalendarEvent[];
@@ -13316,6 +13609,7 @@ function CalendarDashboard({
   selectedDateKey: string;
   setSelectedDateKey: (dateKey: string) => void;
   changeMonth: (delta: number) => void;
+  unreadChangeSummaries: Map<string, EventUnreadSummary>;
 }) {
   const weekdays = ["L", "M", "M", "J", "V", "S", "D"];
   const todayKey = formatDateKey(new Date());
@@ -13498,6 +13792,7 @@ function CalendarDashboard({
           onDuplicateRequest={onDuplicateRequest}
           canDeleteEvents={canDeleteEvents}
           canDuplicateEvents={canDuplicateEvents}
+          unreadChangeSummaries={unreadChangeSummaries}
           onPreviousMonth={() => animateMonthChange(-1)}
           onNextMonth={() => animateMonthChange(1)}
           interactive={false}
@@ -13514,6 +13809,7 @@ function CalendarDashboard({
           onDuplicateRequest={onDuplicateRequest}
           canDeleteEvents={canDeleteEvents}
           canDuplicateEvents={canDuplicateEvents}
+          unreadChangeSummaries={unreadChangeSummaries}
           onPreviousMonth={() => animateMonthChange(-1)}
           onNextMonth={() => animateMonthChange(1)}
           onCalendarPointerDown={handleMonthSwipePointerDown}
@@ -13541,6 +13837,7 @@ function CalendarDashboard({
           onDuplicateRequest={onDuplicateRequest}
           canDeleteEvents={canDeleteEvents}
           canDuplicateEvents={canDuplicateEvents}
+          unreadChangeSummaries={unreadChangeSummaries}
           onPreviousMonth={() => animateMonthChange(-1)}
           onNextMonth={() => animateMonthChange(1)}
           interactive={false}
@@ -13562,6 +13859,7 @@ function CalendarMonthPage({
   onDuplicateRequest,
   canDeleteEvents,
   canDuplicateEvents,
+  unreadChangeSummaries,
   onPreviousMonth,
   onNextMonth,
   onCalendarPointerDown,
@@ -13582,6 +13880,7 @@ function CalendarMonthPage({
   onDuplicateRequest: (event: ProductionEvent) => void;
   canDeleteEvents: boolean;
   canDuplicateEvents: boolean;
+  unreadChangeSummaries: Map<string, EventUnreadSummary>;
   onPreviousMonth: () => void;
   onNextMonth: () => void;
   onCalendarPointerDown?: (event: ReactPointerEvent<HTMLDivElement>) => void;
@@ -13650,6 +13949,7 @@ function CalendarMonthPage({
           onDuplicateRequest={onDuplicateRequest}
           canDeleteEvents={canDeleteEvents}
           canDuplicateEvents={canDuplicateEvents}
+          unreadChangeSummaries={unreadChangeSummaries}
         />
       </div>
     </div>
@@ -13827,6 +14127,7 @@ function SelectedDayEvents({
   onDuplicateRequest,
   canDeleteEvents,
   canDuplicateEvents,
+  unreadChangeSummaries,
 }: {
   markers: CalendarMarker[];
   events: ProductionEvent[];
@@ -13837,6 +14138,7 @@ function SelectedDayEvents({
   onDuplicateRequest: (event: ProductionEvent) => void;
   canDeleteEvents: boolean;
   canDuplicateEvents: boolean;
+  unreadChangeSummaries: Map<string, EventUnreadSummary>;
 }) {
   const [openSwipeAction, setOpenSwipeAction] = useState<{ eventId: string; type: "delete" | "duplicate" } | null>(null);
   const sectionRef = useRef<HTMLElement | null>(null);
@@ -13882,6 +14184,7 @@ function SelectedDayEvents({
           event={event}
           canDelete={canDeleteEvents}
           canDuplicate={canDuplicateEvents}
+          unreadCount={unreadChangeSummaries.get(event.id)?.count ?? 0}
           isDeleteOpen={openSwipeAction?.eventId === event.id && openSwipeAction.type === "delete"}
           isDuplicateOpen={openSwipeAction?.eventId === event.id && openSwipeAction.type === "duplicate"}
           hasOpenAction={Boolean(openSwipeAction)}
@@ -13930,6 +14233,19 @@ const selectedDayRowClassName =
 const selectedDayStaticRowClassName =
   "grid min-h-20 w-full grid-cols-[3px_1fr] items-center gap-4 rounded-xl bg-white/70 px-4 py-4 text-left lg:gap-5 lg:px-5";
 
+function UnreadCountBadge({ count }: { count: number }) {
+  if (count <= 0) return null;
+  return (
+    <span className="inline-flex h-5 min-w-5 shrink-0 items-center justify-center rounded-full bg-[#bb2720] px-1.5 text-xs font-bold leading-none text-white">
+      {count > 9 ? "9+" : count}
+    </span>
+  );
+}
+
+function UnreadDot({ className }: { className?: string }) {
+  return <span aria-hidden="true" className={cn("absolute right-2 top-2 h-2.5 w-2.5 rounded-full bg-[#bb2720]", className)} />;
+}
+
 function ExternalCalendarEventRow({
   event,
   onOpen,
@@ -13963,6 +14279,7 @@ function SwipeableCalendarEventRow({
   event,
   canDelete,
   canDuplicate,
+  unreadCount,
   isDeleteOpen,
   isDuplicateOpen,
   hasOpenAction,
@@ -13976,6 +14293,7 @@ function SwipeableCalendarEventRow({
   event: ProductionEvent;
   canDelete: boolean;
   canDuplicate: boolean;
+  unreadCount: number;
   isDeleteOpen: boolean;
   isDuplicateOpen: boolean;
   hasOpenAction: boolean;
@@ -14165,7 +14483,10 @@ function SwipeableCalendarEventRow({
           <span className="block text-base font-semibold leading-snug text-neutral-950">{display.title}</span>
           {display.subtitle && <span className="block truncate text-base font-medium text-neutral-500">{display.subtitle}</span>}
         </span>
-        {timeRange && <span className="pl-2 text-right text-base font-medium text-neutral-500">{timeRange}</span>}
+        <span className="flex items-center justify-end gap-2 pl-2 text-right">
+          {timeRange && <span className="text-base font-medium text-neutral-500">{timeRange}</span>}
+          {unreadCount > 0 && <UnreadCountBadge count={unreadCount} />}
+        </span>
       </div>
     </div>
   );
@@ -14482,6 +14803,7 @@ function ProductionDetail({
   onDownloadDocument,
   tasks,
   profiles,
+  unreadSummary,
   onUpdateTask,
   permissions,
   profile,
@@ -14515,6 +14837,7 @@ function ProductionDetail({
   onDownloadDocument: (document: EventDocument) => Promise<void>;
   tasks: AppTask[];
   profiles: UserProfile[];
+  unreadSummary: EventUnreadSummary | null;
   onUpdateTask: (task: AppTask, patch: TaskUpdatePatch) => Promise<void>;
   permissions: AppPermissions;
   profile: UserProfile | null;
@@ -14531,6 +14854,7 @@ function ProductionDetail({
   const nativeKeyboard = useNativeKeyboardVisibility<HTMLDivElement>();
   const previousContextSelectionKeyRef = useRef<string | null>(null);
   const eventDisplay = getProductionEventDisplay(event);
+  const unreadItemKeys = unreadSummary?.itemKeys ?? new Set<string>();
 
   const setDetailScrollContainerNode = useCallback((node: HTMLDivElement | null) => {
     detailScrollContainerRef.current = node;
@@ -14762,6 +15086,7 @@ function ProductionDetail({
           <div className="min-w-0 flex-1">
             <div className="mb-3 flex flex-wrap items-center gap-2">
               <EventCalendarBadge event={event} />
+              {unreadSummary?.hasMetadata && <span title="Changements non lus" className="h-2.5 w-2.5 rounded-full bg-[#bb2720]" />}
             </div>
             <h1 className="break-words pb-1 text-3xl font-semibold leading-[1.16] text-neutral-950 sm:text-5xl sm:leading-[1.12]">{eventDisplay.title}</h1>
             {eventDisplay.subtitle && <p className="mt-2 truncate text-base font-medium text-neutral-500">{eventDisplay.subtitle}</p>}
@@ -14824,6 +15149,7 @@ function ProductionDetail({
                 const showOptionMeta = Boolean(optionMetaLabel);
                 const isSelectedOption = contextSelection?.type === "option" && contextSelection.optionId === option.id;
                 const isConfirmingDelete = confirmDelete?.type === "option" && confirmDelete.optionId === option.id;
+                const hasUnreadOptionChanges = unreadItemKeys.has(`option:${option.id}`);
                 const canManageOptionStructure = canManageCreatedEntity(permissions, profile, option);
                 const canDeleteOption = canManageOptionStructure && (permissions.canManageEvents || option.items.every((item) => canManageCreatedEntity(permissions, profile, item)));
                 return (
@@ -14846,6 +15172,7 @@ function ProductionDetail({
                       />
                     ) : (
                       <>
+                        {hasUnreadOptionChanges && <UnreadDot className="left-2 right-auto top-2" />}
                         <button
                           onClick={() => selectOption(option)}
                           className={cn(
@@ -14908,6 +15235,7 @@ function ProductionDetail({
                 const isSelectedLink = contextSelection?.type === "link" && contextSelection.linkId === link.id;
                 const linkTone = getLinkTone(getLinkState(link));
                 const isConfirmingDelete = confirmDelete?.type === "link" && confirmDelete.linkId === link.id;
+                const hasUnreadLinkChanges = unreadItemKeys.has(`link:${link.id}`);
                 const canManageLinkStructure = canManageCreatedEntity(permissions, profile, link);
                 const canDeleteLink = canManageLinkStructure && (permissions.canManageEvents || link.entries.every((entry) => canManageCreatedEntity(permissions, profile, entry)));
                 return (
@@ -14930,6 +15258,7 @@ function ProductionDetail({
                       />
                     ) : (
                       <>
+                        {hasUnreadLinkChanges && <UnreadDot className="left-2 right-auto top-2" />}
                         <button onClick={() => selectLink(link)} className="flex h-full min-w-0 flex-1 items-center gap-1.5 px-2 py-2.5 text-left sm:gap-2 sm:px-3">
                           <Icon className={cn("h-4 w-4 shrink-0 sm:h-5 sm:w-5", linkTone.icon)} />
                           <span className={cn("min-w-0 flex-1 truncate pr-5 text-base font-semibold", linkTone.text)}>{link.label}</span>
@@ -14969,6 +15298,7 @@ function ProductionDetail({
                 const documentTone = getDocumentTone(group.files.length > 0);
                 const isSelectedDocument = contextSelection?.type === "document" && contextSelection.groupId === group.id;
                 const isConfirmingDelete = confirmDelete?.type === "document" && confirmDelete.groupId === group.id;
+                const hasUnreadDocumentChanges = unreadItemKeys.has(`document:${group.id}`);
                 const canManageDocumentGroupStructure = canManageCreatedEntity(permissions, profile, group);
                 const canDeleteDocumentGroup =
                   canManageDocumentGroupStructure && (permissions.canManageEvents || group.files.every((file) => canManageCreatedEntity(permissions, profile, file)));
@@ -14992,6 +15322,7 @@ function ProductionDetail({
                       />
                     ) : (
                       <>
+                        {hasUnreadDocumentChanges && <UnreadDot className="left-2 right-auto top-2" />}
                         <button
                           onClick={() => selectDocumentGroup(group)}
                           className="flex h-full min-w-0 flex-1 items-center gap-1.5 px-2 py-2.5 text-left sm:gap-2 sm:px-3"

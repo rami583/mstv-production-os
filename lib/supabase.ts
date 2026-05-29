@@ -250,6 +250,7 @@ export type Database = {
           previous_value: Record<string, unknown> | null;
           new_value: Record<string, unknown> | null;
           created_by: string | null;
+          created_by_profile_id: string | null;
           created_at: string;
         };
         Insert: {
@@ -262,9 +263,24 @@ export type Database = {
           previous_value?: Record<string, unknown> | null;
           new_value?: Record<string, unknown> | null;
           created_by?: string | null;
+          created_by_profile_id?: string | null;
           created_at?: string;
         };
         Update: Partial<Database["public"]["Tables"]["event_activity_log"]["Insert"]>;
+        Relationships: [];
+      };
+      event_activity_reads: {
+        Row: {
+          event_id: string;
+          profile_id: string;
+          read_at: string;
+        };
+        Insert: {
+          event_id: string;
+          profile_id: string;
+          read_at?: string;
+        };
+        Update: Partial<Database["public"]["Tables"]["event_activity_reads"]["Insert"]>;
         Relationships: [];
       };
       notifications: {
