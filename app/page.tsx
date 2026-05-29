@@ -11748,16 +11748,15 @@ function TeamTasksSheet({
               }}
             >
               <div
-                className="flex"
+                className="flex w-[300%]"
                 style={{
                   gap: `${TASK_DETAIL_SWIPE_PANEL_GAP_PX}px`,
-                  width: `calc(300% + ${TASK_DETAIL_SWIPE_PANEL_GAP_PX * 2}px)`,
-                  transform: `translate3d(calc((-100% - ${TASK_DETAIL_SWIPE_PANEL_GAP_PX}px) + ${taskDetailPagerOffset}px), 0, 0)`,
+                  transform: `translate3d(calc(-33.333333% - ${TASK_DETAIL_SWIPE_PANEL_GAP_PX}px + ${taskDetailPagerOffset}px), 0, 0)`,
                   transition: taskDetailPagerTransitionEnabled ? `transform ${EVENT_DETAIL_CAROUSEL_TRANSITION_MS}ms ${EVENT_DETAIL_CAROUSEL_EASING}` : undefined,
                 }}
               >
                 {[previousTaskDetailTask, selectedTask, nextTaskDetailTask].map((task, index) => (
-                  <div key={task?.id ?? `empty-${index}`} className="shrink-0" style={{ width: `calc((100% - ${TASK_DETAIL_SWIPE_PANEL_GAP_PX * 2}px) / 3)` }}>
+                  <div key={task?.id ?? `empty-${index}`} className="w-1/3 shrink-0">
                     {task ? renderTaskDetailPanel(task) : <div className="min-h-20" aria-hidden="true" />}
                   </div>
                 ))}
