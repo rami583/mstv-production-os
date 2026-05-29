@@ -60,6 +60,88 @@ a {
   border: 0;
 }
 
+.mstv-motion-fade-in,
+.mstv-motion-slide-vertical-in,
+.mstv-motion-slide-horizontal-in,
+.mstv-motion-scale-in {
+  animation-duration: 160ms;
+  animation-fill-mode: both;
+  animation-timing-function: cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.mstv-motion-slide-vertical-in,
+.mstv-motion-slide-horizontal-in,
+.mstv-motion-scale-in {
+  animation-duration: 240ms;
+}
+
+.mstv-motion-fade-in {
+  animation-name: mstvFadeIn;
+}
+
+.mstv-motion-slide-vertical-in {
+  animation-name: mstvSlideVerticalIn;
+}
+
+.mstv-motion-slide-horizontal-in {
+  animation-name: mstvSlideHorizontalIn;
+}
+
+.mstv-motion-scale-in {
+  animation-name: mstvScaleIn;
+}
+
+@keyframes mstvFadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes mstvSlideVerticalIn {
+  from {
+    opacity: 0;
+    transform: translate3d(0, 10px, 0);
+  }
+  to {
+    opacity: 1;
+    transform: translate3d(0, 0, 0);
+  }
+}
+
+@keyframes mstvSlideHorizontalIn {
+  from {
+    opacity: 0;
+    transform: translate3d(10px, 0, 0);
+  }
+  to {
+    opacity: 1;
+    transform: translate3d(0, 0, 0);
+  }
+}
+
+@keyframes mstvScaleIn {
+  from {
+    opacity: 0;
+    transform: scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mstv-motion-fade-in,
+  .mstv-motion-slide-vertical-in,
+  .mstv-motion-slide-horizontal-in,
+  .mstv-motion-scale-in {
+    animation: none;
+  }
+}
+
 .quiet-scrollbar {
   scrollbar-color: rgba(120, 120, 120, 0.28) transparent;
 }

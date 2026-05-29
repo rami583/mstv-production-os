@@ -13,6 +13,7 @@ import {
   type EventEditorFormInput,
 } from "@/lib/events/editor";
 import { useNativeKeyboardVisibility } from "@/lib/use-native-keyboard-visibility";
+import { uiMotionClasses } from "@/lib/ui-motion";
 import { cn } from "@/lib/utils";
 
 type DatePickerProps = {
@@ -216,10 +217,10 @@ export function EventEditorModal({
   useEscapeToClose(onClose);
 
   return (
-    <div className={cn(modalBackdropClassName, modalSheetPositionClassName)} onPointerDown={(pointerEvent) => handleModalBackdropPointerDown(pointerEvent, onClose)}>
+    <div className={cn(modalBackdropClassName, modalSheetPositionClassName, uiMotionClasses.modalBackdropIn)} onPointerDown={(pointerEvent) => handleModalBackdropPointerDown(pointerEvent, onClose)}>
       <form
         onSubmit={handleSubmit}
-        className={cn(modalPanelClassName, "flex max-h-[calc(var(--app-height)-1.5rem)] w-full flex-col p-4 sm:max-h-[calc(var(--app-height)-3rem)] sm:max-w-xl sm:p-6")}
+        className={cn(modalPanelClassName, "flex max-h-[calc(var(--app-height)-1.5rem)] w-full flex-col p-4 sm:max-h-[calc(var(--app-height)-3rem)] sm:max-w-xl sm:p-6", uiMotionClasses.modalPanelIn)}
         onPointerDownCapture={handlePanelPointerDown}
         onPointerDown={(pointerEvent) => pointerEvent.stopPropagation()}
       >

@@ -111,6 +111,7 @@ import {
   type CalendarVisibilityViewer,
 } from "@/lib/events/visibility";
 import { useNativeKeyboardVisibility } from "@/lib/use-native-keyboard-visibility";
+import { uiMotion, uiMotionClasses } from "@/lib/ui-motion";
 import { cn } from "@/lib/utils";
 import {
   supabase,
@@ -919,8 +920,8 @@ const EVENT_SWIPE_THRESHOLD_MIN = 38;
 const EVENT_SWIPE_THRESHOLD_MAX = 84;
 const EVENT_SWIPE_AXIS_ACTIVATION_PX = 8;
 const EVENT_SWIPE_HORIZONTAL_DOMINANCE = 1.12;
-const EVENT_DETAIL_CAROUSEL_TRANSITION_MS = 240;
-const EVENT_DETAIL_CAROUSEL_EASING = "cubic-bezier(0.22, 1, 0.36, 1)";
+const EVENT_DETAIL_CAROUSEL_TRANSITION_MS = uiMotion.duration.medium;
+const EVENT_DETAIL_CAROUSEL_EASING = uiMotion.easing.standard;
 const TASK_DETAIL_SWIPE_THRESHOLD_PX = 60;
 const TASK_DETAIL_SWIPE_HORIZONTAL_DOMINANCE = 1.5;
 const TASK_DETAIL_SWIPE_AXIS_DOMINANCE = 1.2;
@@ -11673,7 +11674,7 @@ function TeamTasksSheet({
 
           {selectedTask ? (
             <div
-              className="min-h-full touch-pan-y overflow-hidden"
+              className={cn("min-h-full touch-pan-y overflow-hidden", uiMotionClasses.taskSurfaceIn)}
               onPointerDownCapture={handleTaskDetailSwipePointerDown}
               onPointerMoveCapture={handleTaskDetailSwipePointerMove}
               onPointerUpCapture={handleTaskDetailSwipePointerUp}
@@ -11712,7 +11713,7 @@ function TeamTasksSheet({
           ) : taskPeople.length === 0 ? (
             <p className="rounded-2xl bg-neutral-50 px-3 py-4 text-center text-sm font-medium text-neutral-400">Aucun membre disponible.</p>
           ) : (
-            <div className="min-h-0 flex-1 overflow-visible rounded-b-2xl bg-white px-3 pb-4 pt-3">
+            <div className={cn("min-h-0 flex-1 overflow-visible rounded-b-2xl bg-white px-3 pb-4 pt-3", uiMotionClasses.fadeIn)}>
               <div className="grid gap-2 overflow-visible">
                 {orderedTodoTasks.length === 0 ? (
                   <p className="rounded-2xl bg-white px-3 py-4 text-center text-sm font-medium text-neutral-300">Aucune tâche.</p>
@@ -15190,7 +15191,7 @@ function ContextDetailBlock({
 
     return (
       <>
-      <Card className="w-full !border-0 bg-white p-4 sm:p-5">
+      <Card key={selectedLink.id} className={cn("w-full !border-0 bg-white p-4 sm:p-5", uiMotionClasses.detailPanelIn)}>
         <div className="link-detail-block flex w-full min-w-0 flex-col gap-3">
           <div className="top-row flex w-full min-w-0 items-center justify-between gap-3">
             <div className={cn("flex min-w-0 items-center gap-2 text-base font-semibold", linkTone.text)}>
@@ -15263,7 +15264,7 @@ function ContextDetailBlock({
 
     return (
       <>
-      <Card className="w-full !border-0 bg-white p-4 sm:p-5">
+      <Card key={selectedDocumentGroup.id} className={cn("w-full !border-0 bg-white p-4 sm:p-5", uiMotionClasses.detailPanelIn)}>
         <div className="flex w-full min-w-0 flex-col gap-3">
           <div className="flex w-full min-w-0 items-center justify-between gap-3">
             <div className={cn("flex min-w-0 items-center gap-2 text-base font-semibold", documentTone.text)}>
@@ -15405,7 +15406,7 @@ function ContextDetailBlock({
 
   return (
     <>
-    <Card className="!border-0 bg-white p-4 sm:p-5">
+    <Card key={selectedOption.id} className={cn("!border-0 bg-white p-4 sm:p-5", uiMotionClasses.detailPanelIn)}>
       <div className="flex items-center justify-between gap-3">
         <div className={cn("flex min-w-0 items-center gap-2 text-base font-semibold", optionTone.text)}>
           <InlineEditableTitle
@@ -17683,11 +17684,11 @@ function SharedConfirmationDialog({
 
   return createPortal(
     <div
-      className={cn(elevated ? elevatedModalBackdropClassName : modalBackdropClassName, modalSheetPositionClassName)}
+      className={cn(elevated ? elevatedModalBackdropClassName : modalBackdropClassName, modalSheetPositionClassName, uiMotionClasses.modalBackdropIn)}
       onPointerDown={(pointerEvent) => handleModalBackdropPointerDown(pointerEvent, onCancel)}
     >
       <div
-        className={cn(modalPanelClassName, "w-full p-5 sm:p-6", maxWidthClassName)}
+        className={cn(modalPanelClassName, "w-full p-5 sm:p-6", maxWidthClassName, uiMotionClasses.modalPanelIn)}
         onPointerDown={(pointerEvent) => pointerEvent.stopPropagation()}
       >
         <div className="mb-5">
