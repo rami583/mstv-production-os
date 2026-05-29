@@ -11511,6 +11511,7 @@ function TeamTasksSheet({
       .slice(0, 12)
   ), [personTasks]);
   const todoTasksById = useMemo(() => new Map(todoTasks.map((task) => [task.id, task])), [todoTasks]);
+  const profileRoleById = useMemo(() => new Map(taskPeople.map((person) => [person.id, person.role])), [taskPeople]);
   const orderedTodoTasks = useMemo(() => {
     const knownTasks = orderIds.map((id) => todoTasksById.get(id)).filter((task): task is AppTask => Boolean(task));
     const knownIds = new Set(knownTasks.map((task) => task.id));
@@ -11836,6 +11837,10 @@ function TeamTasksSheet({
     return permissions.canManageEvents || Boolean(currentProfile?.id && task.assignedProfileId === currentProfile.id);
   }
 
+  function wasCreatedByAdmin(task: AppTask) {
+    return Boolean(task.createdBy && profileRoleById.get(task.createdBy) === "admin");
+  }
+
   async function duplicateTask(task: AppTask) {
     if (!canDuplicateTask(task)) return;
     setLocalError(null);
@@ -11914,6 +11919,7 @@ function TeamTasksSheet({
           selected={selectedTaskId === task.id}
           completed={completed}
           priorityIndex={priorityIndex}
+          createdByAdmin={wasCreatedByAdmin(task)}
           canDelete={canDeleteTask(task)}
           canDuplicate={canDuplicateTask(task)}
           onDelete={() => void requestDeleteTask(task)}
@@ -11930,6 +11936,7 @@ function TeamTasksSheet({
         selected={selectedTaskId === task.id}
         dragging={draggingId === task.id}
         priorityIndex={priorityIndex}
+        createdByAdmin={wasCreatedByAdmin(task)}
         canDrag={canMoveTask(task)}
         canDelete={canDeleteTask(task)}
         canDuplicate={canDuplicateTask(task)}
@@ -12101,6 +12108,7 @@ function SortableTaskRow({
   selected,
   dragging = false,
   priorityIndex,
+  createdByAdmin,
   canDrag,
   canDelete,
   canDuplicate,
@@ -12112,6 +12120,7 @@ function SortableTaskRow({
   selected: boolean;
   dragging?: boolean;
   priorityIndex: number | null;
+  createdByAdmin: boolean;
   canDrag: boolean;
   canDelete: boolean;
   canDuplicate: boolean;
@@ -12151,6 +12160,7 @@ function SortableTaskRow({
         selected={selected}
         dragging={rowIsDragging}
         priorityIndex={priorityIndex}
+        createdByAdmin={createdByAdmin}
         draggable={canDrag}
         draggableProps={canDrag ? ({ ...attributes, ...listeners } as HTMLAttributes<HTMLDivElement>) : undefined}
         canDelete={canDelete}
@@ -12169,6 +12179,7 @@ const TaskQueueRow = forwardRef<HTMLDivElement, {
   completed?: boolean;
   dragging?: boolean;
   priorityIndex?: number | null;
+  createdByAdmin?: boolean;
   draggable?: boolean;
   draggableProps?: HTMLAttributes<HTMLDivElement>;
   canDelete?: boolean;
@@ -12182,6 +12193,7 @@ const TaskQueueRow = forwardRef<HTMLDivElement, {
   completed = false,
   dragging = false,
   priorityIndex = null,
+  createdByAdmin = false,
   draggable = false,
   draggableProps,
   canDelete = false,
@@ -12413,6 +12425,11 @@ const TaskQueueRow = forwardRef<HTMLDivElement, {
         swiping ? "transition-none" : "transition-transform duration-200 ease-out",
       )}
     >
+      {createdByAdmin && (
+        <span className="shrink-0 text-xs leading-none text-neutral-500" aria-label="Créée par un administrateur" title="Créée par un administrateur">
+          📌
+        </span>
+      )}
       {!completed && isTaskUrgent(task) && (
         <AlertCircle className="h-3.5 w-3.5 shrink-0 text-[#bb2720]" aria-label="Urgent" />
       )}
