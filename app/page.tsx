@@ -14309,14 +14309,14 @@ const selectedDayStaticRowClassName =
 function UnreadCountBadge({ count }: { count: number }) {
   if (count <= 0) return null;
   return (
-    <span className="inline-flex h-5 min-w-5 shrink-0 items-center justify-center rounded-full bg-[#bb2720] px-1.5 text-xs font-bold leading-none text-white">
+    <span className="inline-flex h-5 min-w-5 shrink-0 items-center justify-center rounded-full border border-[#bb2720] bg-white px-1.5 text-xs font-bold leading-none text-[#bb2720] shadow-[0_1px_4px_rgba(0,0,0,0.08)]">
       {count > 9 ? "9+" : count}
     </span>
   );
 }
 
 function UnreadDot({ className }: { className?: string }) {
-  return <span aria-hidden="true" className={cn("absolute right-2 top-2 h-2.5 w-2.5 rounded-full bg-[#bb2720]", className)} />;
+  return <span aria-hidden="true" className={cn("absolute right-2 top-2 h-3 w-3 rounded-full bg-[#bb2720]", className)} />;
 }
 
 function ExternalCalendarEventRow({
@@ -14487,38 +14487,42 @@ function SwipeableCalendarEventRow({
   }
 
   return (
-    <div data-calendar-swipe-row className="relative overflow-hidden rounded-xl">
-      {canDuplicate && (
-        <button
-          type="button"
-          data-swipe-action
-          onClick={(clickEvent) => {
-            clickEvent.stopPropagation();
-            onDuplicateRequest(event);
-          }}
-          className={cn(
-            "absolute inset-y-0 left-0 z-0 flex w-full items-center justify-start rounded-l-xl bg-sky-600 pl-5 text-base font-semibold text-white transition hover:bg-sky-700",
-            duplicateActionVisible ? "opacity-100" : "pointer-events-none opacity-0",
+    <div data-calendar-swipe-row className="relative overflow-visible rounded-xl">
+      {(canDuplicate || canDelete) && (
+        <div className="absolute inset-0 overflow-hidden rounded-xl">
+          {canDuplicate && (
+            <button
+              type="button"
+              data-swipe-action
+              onClick={(clickEvent) => {
+                clickEvent.stopPropagation();
+                onDuplicateRequest(event);
+              }}
+              className={cn(
+                "absolute inset-y-0 left-0 z-0 flex w-full items-center justify-start rounded-l-xl bg-sky-600 pl-5 text-base font-semibold text-white transition hover:bg-sky-700",
+                duplicateActionVisible ? "opacity-100" : "pointer-events-none opacity-0",
+              )}
+            >
+              Dupliquer
+            </button>
           )}
-        >
-          Dupliquer
-        </button>
-      )}
-      {canDelete && (
-        <button
-          type="button"
-          data-swipe-action
-          onClick={(clickEvent) => {
-            clickEvent.stopPropagation();
-            onDeleteRequest(event);
-          }}
-          className={cn(
-            "absolute inset-y-0 right-0 z-0 flex w-full items-center justify-end rounded-r-xl bg-[#bb2720] pr-5 text-base font-semibold text-white transition hover:bg-[#a9231d]",
-            deleteActionVisible ? "opacity-100" : "pointer-events-none opacity-0",
+          {canDelete && (
+            <button
+              type="button"
+              data-swipe-action
+              onClick={(clickEvent) => {
+                clickEvent.stopPropagation();
+                onDeleteRequest(event);
+              }}
+              className={cn(
+                "absolute inset-y-0 right-0 z-0 flex w-full items-center justify-end rounded-r-xl bg-[#bb2720] pr-5 text-base font-semibold text-white transition hover:bg-[#a9231d]",
+                deleteActionVisible ? "opacity-100" : "pointer-events-none opacity-0",
+              )}
+            >
+              Supprimer
+            </button>
           )}
-        >
-          Supprimer
-        </button>
+        </div>
       )}
       <div
         ref={rowRef}
@@ -14551,7 +14555,7 @@ function SwipeableCalendarEventRow({
           isDragging ? "transition-none" : "transition-transform duration-200 ease-out",
         )}
       >
-        {unreadCount > 0 && <span className="absolute right-3 top-2 z-20"><UnreadCountBadge count={unreadCount} /></span>}
+        {unreadCount > 0 && <span className="pointer-events-none absolute -right-1.5 -top-2 z-20"><UnreadCountBadge count={unreadCount} /></span>}
         <span style={externalTone.stripeStyle} className={cn("h-full min-h-14 rounded-full", externalLink?.calendarColor ? externalTone.stripe : "bg-[#bb2720]")} />
         <span className="min-w-0">
           <span className="block text-base font-semibold leading-snug text-neutral-950">{display.title}</span>
