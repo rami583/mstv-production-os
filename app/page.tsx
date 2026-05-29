@@ -11086,23 +11086,9 @@ function AppHeader({
   canDeleteEvent: boolean;
   onDeleteEvent: () => void;
 }) {
-  const menuWrapperRef = useRef<HTMLDivElement | null>(null);
+  const createMenuButtonRef = useRef<HTMLButtonElement | null>(null);
   const hasCreateMenuActions = canImportQuote || canCreateEvent || canDuplicateEvent || canDeleteEvent || canOpenTrash;
   const unreadNotificationCount = notifications.filter((notification) => !notification.readAt && importantNotificationTypes.has(notification.type)).length;
-
-  useEffect(() => {
-    if (!createMenuOpen) return;
-
-    function handlePointerDown(event: PointerEvent) {
-      const target = event.target;
-      if (!(target instanceof Node)) return;
-      if (menuWrapperRef.current?.contains(target)) return;
-      setCreateMenuOpen(false);
-    }
-
-    document.addEventListener("pointerdown", handlePointerDown);
-    return () => document.removeEventListener("pointerdown", handlePointerDown);
-  }, [createMenuOpen, setCreateMenuOpen]);
 
   useEffect(() => {
     if (!hasCreateMenuActions && createMenuOpen) {
@@ -11129,15 +11115,24 @@ function AppHeader({
             onDismissNotification={onDismissNotification}
           />
           {hasCreateMenuActions && (
-            <div ref={menuWrapperRef} className="relative">
+            <div className="relative">
               <button
+                ref={createMenuButtonRef}
                 onClick={() => setCreateMenuOpen((current) => !current)}
                 className="flex h-10 w-10 items-center justify-center rounded-full bg-[#bb2720] text-base font-semibold leading-none text-white transition hover:bg-[#a7211b]"
                 aria-label="Créer"
               >
                 +
               </button>
-              {createMenuOpen && (
+              <MstvPopover
+                open={createMenuOpen}
+                anchorRef={createMenuButtonRef}
+                onClose={() => setCreateMenuOpen(false)}
+                placement="bottom-end"
+                matchAnchorWidth={false}
+                minWidth={224}
+                maxWidth={224}
+              >
                 <CreateMenu
                   onImportQuote={onImportQuote}
                   onImportNativeMstvCalendar={onImportNativeMstvCalendar}
@@ -11152,7 +11147,7 @@ function AppHeader({
                   canDeleteEvent={canDeleteEvent}
                   onDeleteEvent={onDeleteEvent}
                 />
-              )}
+              </MstvPopover>
             </div>
           )}
           <AccountMenu
@@ -11236,7 +11231,7 @@ function CreateMenu({
   const hasActions = canImportQuote || canCreateEvent || canDuplicateEvent || canDeleteEvent || canOpenTrash;
 
   return (
-    <div className="absolute right-1 top-14 z-40 w-56 rounded-2xl bg-white/95 p-1.5 shadow-sm shadow-black/5">
+    <div className="grid gap-0.5">
       {!hasActions && (
         <div className="px-4 py-3 text-right text-base font-medium text-neutral-400">
           Aucune action
@@ -18980,27 +18975,14 @@ function AccountMenu({
   onLogout: () => void;
 }) {
   const [open, setOpen] = useState(false);
-  const wrapperRef = useRef<HTMLDivElement | null>(null);
+  const accountButtonRef = useRef<HTMLButtonElement | null>(null);
   const displayName = getProfileDisplayName(profile) ?? email ?? "Utilisateur";
   const initials = getProfileInitials(profile, email);
 
-  useEffect(() => {
-    if (!open) return;
-
-    function handlePointerDown(event: PointerEvent) {
-      const target = event.target;
-      if (!(target instanceof Node)) return;
-      if (wrapperRef.current?.contains(target)) return;
-      setOpen(false);
-    }
-
-    document.addEventListener("pointerdown", handlePointerDown);
-    return () => document.removeEventListener("pointerdown", handlePointerDown);
-  }, [open]);
-
   return (
-    <div ref={wrapperRef} className="relative">
+    <div className="relative">
       <button
+        ref={accountButtonRef}
         type="button"
         onClick={() => setOpen((current) => !current)}
         className="flex h-10 w-10 items-center justify-center rounded-full bg-white text-sm font-semibold text-neutral-700 transition hover:bg-neutral-50"
@@ -19009,9 +18991,17 @@ function AccountMenu({
       >
         {initials}
       </button>
-      {open && (
-        <div className="absolute right-0 top-12 z-40 w-52 rounded-2xl bg-white p-1 text-right shadow-sm shadow-black/5">
-          <div className="px-3 py-2">
+      <MstvPopover
+        open={open}
+        anchorRef={accountButtonRef}
+        onClose={() => setOpen(false)}
+        placement="bottom-end"
+        matchAnchorWidth={false}
+        minWidth={208}
+        maxWidth={208}
+      >
+        <div className="grid gap-0.5 text-right">
+          <div className="px-3 py-2.5">
             <p className="truncate text-sm font-semibold text-neutral-950">{displayName}</p>
             <p className="mt-0.5 truncate text-xs font-medium text-neutral-500">{profile ? getRoleLabel(profile.role) : email}</p>
           </div>
@@ -19038,7 +19028,7 @@ function AccountMenu({
             Déconnexion
           </button>
         </div>
-      )}
+      </MstvPopover>
     </div>
   );
 }
