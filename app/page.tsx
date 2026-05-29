@@ -927,11 +927,16 @@ const TASK_DETAIL_SWIPE_VELOCITY_THRESHOLD_PX_PER_MS = 0.65;
 const TASK_DETAIL_SWIPE_VELOCITY_MIN_DISTANCE_PX = 34;
 const TASK_DETAIL_SWIPE_HORIZONTAL_DOMINANCE = 1.5;
 const TASK_DETAIL_SWIPE_AXIS_DOMINANCE = 1.2;
+const TASK_DETAIL_SWIPE_PANEL_GAP_PX = 16;
 const TASK_DETAIL_ACTIVE_EDIT_SELECTOR = "input, textarea, select, [contenteditable='true']";
 const TASK_DETAIL_SWIPE_BLOCK_SELECTOR = "[data-task-swipe-block]";
 
 function getSwipePageStep(viewportWidth: number) {
   return viewportWidth + PAGE_GAP;
+}
+
+function getTaskDetailSwipePageStep(viewportWidth: number) {
+  return viewportWidth + TASK_DETAIL_SWIPE_PANEL_GAP_PX;
 }
 
 function getSwipeThreshold(viewportWidth: number) {
@@ -11472,11 +11477,12 @@ function TeamTasksSheet({
   function finishTaskDetailSwipe(direction: -1 | 1, viewportWidth: number) {
     const targetTask = direction === 1 ? nextTaskDetailTask : previousTaskDetailTask;
     if (!targetTask || taskDetailTransitioningRef.current) return;
+    const pageStep = getTaskDetailSwipePageStep(viewportWidth);
 
     taskDetailTransitioningRef.current = true;
     taskDetailSwipeStartRef.current = null;
     setTaskDetailPagerTransitionEnabled(true);
-    setTaskDetailPagerOffset(direction === 1 ? -viewportWidth : viewportWidth);
+    setTaskDetailPagerOffset(direction === 1 ? -pageStep : pageStep);
 
     if (taskDetailTransitionTimeoutRef.current !== null) {
       window.clearTimeout(taskDetailTransitionTimeoutRef.current);
@@ -11544,8 +11550,9 @@ function TeamTasksSheet({
     pointerEvent.preventDefault();
 
     const viewportWidth = taskDetailViewportRef.current?.clientWidth ?? pointerEvent.currentTarget.clientWidth;
-    const maxOffset = previousTaskDetailTask ? viewportWidth : viewportWidth * 0.16;
-    const minOffset = nextTaskDetailTask ? -viewportWidth : -viewportWidth * 0.16;
+    const pageStep = getTaskDetailSwipePageStep(viewportWidth);
+    const maxOffset = previousTaskDetailTask ? pageStep : viewportWidth * 0.16;
+    const minOffset = nextTaskDetailTask ? -pageStep : -viewportWidth * 0.16;
     setTaskDetailPagerOffset(Math.max(minOffset, Math.min(maxOffset, deltaX)));
   }
 
@@ -11741,14 +11748,16 @@ function TeamTasksSheet({
               }}
             >
               <div
-                className="flex w-[300%]"
+                className="flex"
                 style={{
-                  transform: `translate3d(calc(-33.333333% + ${taskDetailPagerOffset}px), 0, 0)`,
+                  gap: `${TASK_DETAIL_SWIPE_PANEL_GAP_PX}px`,
+                  width: `calc(300% + ${TASK_DETAIL_SWIPE_PANEL_GAP_PX * 2}px)`,
+                  transform: `translate3d(calc((-100% - ${TASK_DETAIL_SWIPE_PANEL_GAP_PX}px) + ${taskDetailPagerOffset}px), 0, 0)`,
                   transition: taskDetailPagerTransitionEnabled ? `transform ${EVENT_DETAIL_CAROUSEL_TRANSITION_MS}ms ${EVENT_DETAIL_CAROUSEL_EASING}` : undefined,
                 }}
               >
                 {[previousTaskDetailTask, selectedTask, nextTaskDetailTask].map((task, index) => (
-                  <div key={task?.id ?? `empty-${index}`} className="w-1/3 shrink-0">
+                  <div key={task?.id ?? `empty-${index}`} className="shrink-0" style={{ width: `calc((100% - ${TASK_DETAIL_SWIPE_PANEL_GAP_PX * 2}px) / 3)` }}>
                     {task ? renderTaskDetailPanel(task) : <div className="min-h-20" aria-hidden="true" />}
                   </div>
                 ))}
