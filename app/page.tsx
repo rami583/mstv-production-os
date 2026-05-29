@@ -80,6 +80,7 @@ import { createPortal } from "react-dom";
 import { Card } from "@/components/ui/card";
 import { EventEditorModal } from "@/components/events/EventEditorModal";
 import { MstvDatePicker } from "@/components/ui/MstvDatePicker";
+import { MstvPopover } from "@/components/ui/MstvPopover";
 import type { Session } from "@supabase/supabase-js";
 import {
   publicHolidays,
@@ -11981,10 +11982,12 @@ function AdminTaskDetailPanel({
   const [title, setTitle] = useState(task.title);
   const [notes, setNotes] = useState(task.notes ?? "");
   const [eventQuery, setEventQuery] = useState("");
+  const [eventSearchOpen, setEventSearchOpen] = useState(false);
   const [dueDatePickerOpen, setDueDatePickerOpen] = useState(false);
   const [deleteConfirmationOpen, setDeleteConfirmationOpen] = useState(false);
   const [localError, setLocalError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const eventSearchInputRef = useRef<HTMLInputElement | null>(null);
   const done = task.status === "done";
   const taskTone = getTaskTone(task);
   const assignedToCurrentProfile = Boolean(currentProfile?.id && task.assignedProfileId === currentProfile.id);
@@ -12010,6 +12013,7 @@ function AdminTaskDetailPanel({
     setTitle(task.title);
     setNotes(task.notes ?? "");
     setEventQuery("");
+    setEventSearchOpen(false);
     setLocalError(null);
     setDueDatePickerOpen(false);
   }, [task.id, task.title, task.notes]);
@@ -12167,14 +12171,26 @@ function AdminTaskDetailPanel({
           <div className="mt-2 space-y-1.5">
             <input
               {...iosKeyboardGuardProps}
+              ref={eventSearchInputRef}
               value={eventQuery}
               disabled={saving}
-              onFocus={(event) => onNativeFieldFocus?.(event.currentTarget)}
-              onChange={(event) => setEventQuery(event.target.value)}
+              onFocus={(event) => {
+                onNativeFieldFocus?.(event.currentTarget);
+                setEventSearchOpen(true);
+              }}
+              onChange={(event) => {
+                setEventQuery(event.target.value);
+                setEventSearchOpen(true);
+              }}
               className="h-9 w-full rounded-xl bg-white px-3 text-base font-semibold text-neutral-700 outline-none transition placeholder:text-neutral-300 focus:bg-white"
               placeholder="Rechercher un événement"
             />
-            {eventCandidates.length > 0 && (
+            <MstvPopover
+              open={eventSearchOpen && eventCandidates.length > 0}
+              anchorRef={eventSearchInputRef}
+              onClose={() => setEventSearchOpen(false)}
+              maxWidth={420}
+            >
               <div className="grid gap-1">
                 {eventCandidates.map((event) => {
                   const display = getProductionEventDisplay(event);
@@ -12185,9 +12201,10 @@ function AdminTaskDetailPanel({
                       disabled={saving}
                       onClick={() => {
                         setEventQuery("");
+                        setEventSearchOpen(false);
                         void updateTaskSafely({ eventId: event.id });
                       }}
-                      className="grid min-w-0 gap-0.5 rounded-lg bg-white px-2 py-1.5 text-left transition hover:bg-neutral-50 disabled:text-neutral-300"
+                      className="grid min-w-0 gap-0.5 rounded-xl bg-white px-2.5 py-2 text-left transition hover:bg-neutral-50 disabled:text-neutral-300"
                     >
                       <span className="truncate text-sm font-semibold text-neutral-700">{display.title}</span>
                       <span className="truncate text-xs font-semibold text-neutral-400">{formatShortDate(event.date)}</span>
@@ -12195,7 +12212,7 @@ function AdminTaskDetailPanel({
                   );
                 })}
               </div>
-            )}
+            </MstvPopover>
           </div>
         )}
       </div>
