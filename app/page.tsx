@@ -10618,6 +10618,7 @@ export default function Home() {
           notificationsHydrated={notificationsHydrated}
           notificationsOpen={notificationsOpen && !yearOverviewOpen}
           setNotificationsOpen={setNotificationsOpen}
+          searchActive={searchOpen}
           onOpenNotification={handleNotificationOpen}
           onDismissNotification={markNotificationRead}
           onOpenTasks={() => {
@@ -10769,6 +10770,7 @@ export default function Home() {
           notificationsHydrated={notificationsHydrated}
           notificationsOpen={notificationsOpen}
           setNotificationsOpen={setNotificationsOpen}
+          searchActive={searchOpen}
           onOpenNotification={handleNotificationOpen}
           onDismissNotification={markNotificationRead}
           onOpenTasks={() => {
@@ -11046,6 +11048,7 @@ function AppHeader({
   notificationsHydrated,
   notificationsOpen,
   setNotificationsOpen,
+  searchActive,
   onOpenNotification,
   onDismissNotification,
   onOpenTasks,
@@ -11088,6 +11091,7 @@ function AppHeader({
   notificationsHydrated: boolean;
   notificationsOpen: boolean;
   setNotificationsOpen: (open: boolean | ((current: boolean) => boolean)) => void;
+  searchActive: boolean;
   onOpenNotification: (notification: AppNotification) => void;
   onDismissNotification: (notification: AppNotification) => void;
   onOpenTasks: () => void;
@@ -11124,8 +11128,8 @@ function AppHeader({
           <img src="/brand/mon-studio-tv-icon.png" alt="Mon Studio TV" className="h-11 w-auto shrink-0" />
         </button>
         <div className="flex shrink-0 items-center gap-1.5 sm:gap-2">
-          <HeaderIcon label="Tâches" icon={ListTodo} onClick={onOpenTasks} />
-          <HeaderIcon label="Rechercher" icon={Search} onClick={onSearch} />
+          <HeaderIcon label="Tâches" icon={ListTodo} active={screen === "tasks"} onClick={onOpenTasks} />
+          <HeaderIcon label="Rechercher" icon={Search} active={searchActive} onClick={onSearch} />
           <NotificationMenu
             notifications={notifications}
             hydrated={notificationsHydrated}
@@ -12737,6 +12741,7 @@ function YearOverviewOverlay({
   notificationsHydrated,
   notificationsOpen,
   setNotificationsOpen,
+  searchActive,
   onOpenNotification,
   onDismissNotification,
   onOpenTasks,
@@ -12775,6 +12780,7 @@ function YearOverviewOverlay({
   notificationsHydrated: boolean;
   notificationsOpen: boolean;
   setNotificationsOpen: (open: boolean | ((current: boolean) => boolean)) => void;
+  searchActive: boolean;
   onOpenNotification: (notification: AppNotification) => void;
   onDismissNotification: (notification: AppNotification) => void;
   onOpenTasks: () => void;
@@ -13023,6 +13029,7 @@ function YearOverviewOverlay({
           notificationsHydrated={notificationsHydrated}
           notificationsOpen={notificationsOpen}
           setNotificationsOpen={setNotificationsOpen}
+          searchActive={searchActive}
           onOpenNotification={onOpenNotification}
           onDismissNotification={onDismissNotification}
           onOpenTasks={onOpenTasks}
@@ -19115,9 +19122,13 @@ function NotificationMenu({
       <button
         type="button"
         onClick={() => setOpen((current) => !current)}
-        className="relative flex h-10 w-10 items-center justify-center rounded-full bg-white text-neutral-600 transition hover:bg-neutral-50"
+        className={cn(
+          "relative flex h-10 w-10 items-center justify-center rounded-full bg-white transition hover:bg-neutral-50",
+          open ? "text-[#bb2720]" : "text-neutral-600",
+        )}
         title="Notifications"
         aria-label="Notifications"
+        aria-pressed={open}
       >
         <Bell className="h-4 w-4" />
         {showUnreadBadge && (
@@ -19196,14 +19207,18 @@ function NotificationMenu({
   );
 }
 
-function HeaderIcon({ label, icon: Icon, onClick }: { label: string; icon: LucideIcon; onClick?: () => void }) {
+function HeaderIcon({ label, icon: Icon, active = false, onClick }: { label: string; icon: LucideIcon; active?: boolean; onClick?: () => void }) {
   return (
     <button
       type="button"
       onClick={onClick}
-      className="flex h-10 w-10 items-center justify-center rounded-full bg-white text-neutral-600 transition hover:bg-neutral-50"
+      className={cn(
+        "flex h-10 w-10 items-center justify-center rounded-full bg-white transition hover:bg-neutral-50",
+        active ? "text-[#bb2720]" : "text-neutral-600",
+      )}
       title={label}
       aria-label={label}
+      aria-pressed={active}
     >
       <Icon className="h-4 w-4" />
     </button>
@@ -19325,8 +19340,12 @@ function AccountMenu({
         ref={accountButtonRef}
         type="button"
         onClick={() => setOpen((current) => !current)}
-        className="flex h-10 w-10 items-center justify-center rounded-full bg-white text-sm font-semibold text-neutral-700 transition hover:bg-neutral-50"
+        className={cn(
+          "flex h-10 w-10 items-center justify-center rounded-full bg-white text-sm font-semibold transition hover:bg-neutral-50",
+          open ? "text-[#bb2720]" : "text-neutral-700",
+        )}
         aria-label="Compte"
+        aria-pressed={open}
         title={displayName}
       >
         {initials}
