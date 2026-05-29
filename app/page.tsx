@@ -1021,6 +1021,51 @@ function isSessionExpiredError(error: unknown) {
   return isInvalidRefreshTokenError(error) || /votre session a expiré|session expirée|session expiree/.test(normalizedMessage);
 }
 
+function isAppAuthSessionError(error: unknown) {
+  const normalizedMessage = getRawErrorMessage(error).toLocaleLowerCase("fr-FR");
+  if (isSessionExpiredError(error)) return true;
+  return /auth session missing|no current user|user.*not authenticated|jwt expired|invalid jwt|supabase auth/.test(normalizedMessage);
+}
+
+function getEventEditorDiagnostic(error: unknown): EventEditorDiagnostic | null {
+  if (!error || typeof error !== "object") return null;
+  return (error as Error & { eventEditorDiagnostic?: EventEditorDiagnostic }).eventEditorDiagnostic ?? null;
+}
+
+function isExternalCalendarSyncError(error: unknown) {
+  const diagnostic = getEventEditorDiagnostic(error);
+  const normalizedMessage = getRawErrorMessage(error).toLocaleLowerCase("fr-FR");
+  const diagnosticSource = [diagnostic?.stage, diagnostic?.routeCalled, diagnostic?.selectedProvider]
+    .filter((value): value is string => typeof value === "string")
+    .join(" ")
+    .toLocaleLowerCase("fr-FR");
+
+  return /apple|google|calendar|calendrier|caldav|oauth|provider|autorisation/.test(`${normalizedMessage} ${diagnosticSource}`);
+}
+
+function getExternalCalendarSyncUserMessage(error: unknown, fallback = "L’événement MSTV a été enregistré, mais la synchronisation du calendrier lié a échoué.") {
+  const diagnostic = getEventEditorDiagnostic(error);
+  const normalizedMessage = getRawErrorMessage(error).toLocaleLowerCase("fr-FR");
+
+  console.warn("[MSTV event sync] secondary external calendar sync failed after local save", {
+    stage: diagnostic?.stage ?? null,
+    routeCalled: diagnostic?.routeCalled ?? null,
+    responseStatus: diagnostic?.responseStatus ?? null,
+    responseJson: diagnostic?.responseJson ?? null,
+    selectedCalendarId: diagnostic?.selectedCalendarId ?? null,
+    selectedProvider: diagnostic?.selectedProvider ?? null,
+    error: getDebugError(error),
+  });
+
+  if (/apple/.test(normalizedMessage) || diagnostic?.selectedProvider === "apple_caldav") {
+    return "L’événement a été modifié dans MSTV, mais la mise à jour Apple Calendar a échoué.";
+  }
+  if (/google/.test(normalizedMessage) || diagnostic?.selectedProvider === "google") {
+    return "L’événement a été modifié dans MSTV, mais la mise à jour Google Calendar a échoué.";
+  }
+  return fallback;
+}
+
 function getProfileLoadUserMessage(error: unknown) {
   const normalizedMessage = getRawErrorMessage(error).toLocaleLowerCase("fr-FR");
 
@@ -1038,11 +1083,12 @@ function getProfileLoadUserMessage(error: unknown) {
 function getUserFacingErrorMessage(error: unknown, fallback = "Une erreur est survenue.") {
   const rawMessage = getRawErrorMessage(error).trim();
   const normalizedMessage = rawMessage.toLocaleLowerCase("fr-FR");
+  const externalCalendarSyncError = isExternalCalendarSyncError(error);
 
   if (!rawMessage) return fallback;
-  if (isInvalidRefreshTokenError(error)) return sessionExpiredMessage;
+  if (isInvalidRefreshTokenError(error) && !externalCalendarSyncError) return sessionExpiredMessage;
   if (isNetworkOrUnavailableError(error)) return "Connexion réseau indisponible.";
-  if (/invalid login credentials|invalid credentials|email not confirmed|invalid grant/.test(normalizedMessage)) {
+  if (!externalCalendarSyncError && /invalid login credentials|invalid credentials|email not confirmed|invalid grant/.test(normalizedMessage)) {
     return "Email ou mot de passe incorrect.";
   }
   if (/password should be at least|weak password|password.*characters/.test(normalizedMessage)) {
@@ -1051,9 +1097,10 @@ function getUserFacingErrorMessage(error: unknown, fallback = "Une erreur est su
   if (/rate limit|too many requests|over request rate limit/.test(normalizedMessage)) {
     return "Trop de tentatives. Réessayez dans quelques instants.";
   }
-  if (/jwt|session|refresh token|invalid token|token.*expired/.test(normalizedMessage)) {
+  if (isAppAuthSessionError(error) && !externalCalendarSyncError) {
     return sessionExpiredMessage;
   }
+  if (isAppAuthSessionError(error) && externalCalendarSyncError) return fallback;
   if (/row-level security|rls|permission denied|not authorized|unauthorized|forbidden|policy/.test(normalizedMessage)) {
     return "Action non autorisée.";
   }
@@ -7517,7 +7564,7 @@ export default function Home() {
           },
           { persist: false },
         );
-        setError(getUserFacingErrorMessage(googleSyncError, "L’événement MSTV a été enregistré, mais la synchronisation du calendrier lié a échoué."));
+        setError(getExternalCalendarSyncUserMessage(googleSyncError));
         await reloadData(updatedEvent.id, { silent: true, source: "edit-event" });
         throw googleSyncError;
       }
@@ -8026,7 +8073,7 @@ export default function Home() {
             },
             { persist: false },
           );
-          setError(getUserFacingErrorMessage(googleSyncError, "L’événement MSTV a été enregistré, mais la synchronisation du calendrier lié a échoué."));
+          setError(getExternalCalendarSyncUserMessage(googleSyncError));
         } finally {
           await reloadData(event.id, { silent: true, source: "delete-event" });
         }
@@ -8188,7 +8235,7 @@ export default function Home() {
             },
             { persist: false },
           );
-          setError(getUserFacingErrorMessage(googleSyncError, "L’événement MSTV a été enregistré, mais la synchronisation du calendrier lié a échoué."));
+          setError(getExternalCalendarSyncUserMessage(googleSyncError));
         } finally {
           await reloadData(event.id, { silent: true, source: "restore-event" });
         }
