@@ -920,13 +920,18 @@ const PAGE_TRANSITION_EASING = "cubic-bezier(0.22, 1, 0.36, 1)";
 const PAGE_SWIPE_THRESHOLD_RATIO = 0.18;
 const PAGE_SWIPE_THRESHOLD_MIN = 58;
 const PAGE_SWIPE_THRESHOLD_MAX = 124;
-const EVENT_SWIPE_THRESHOLD_RATIO = 0.12;
-const EVENT_SWIPE_THRESHOLD_MIN = 38;
-const EVENT_SWIPE_THRESHOLD_MAX = 84;
+const EVENT_SWIPE_THRESHOLD_RATIO = 0.18;
+const EVENT_SWIPE_THRESHOLD_MIN = 58;
+const EVENT_SWIPE_THRESHOLD_MAX = 124;
 const EVENT_SWIPE_AXIS_ACTIVATION_PX = 8;
-const EVENT_SWIPE_HORIZONTAL_DOMINANCE = 1.12;
+const EVENT_SWIPE_HORIZONTAL_DOMINANCE = 1.5;
+const EVENT_SWIPE_AXIS_DOMINANCE = 1.2;
+const EVENT_SWIPE_VELOCITY_THRESHOLD_PX_PER_MS = 0.65;
+const EVENT_SWIPE_VELOCITY_MIN_DISTANCE_PX = 34;
 const EVENT_DETAIL_CAROUSEL_TRANSITION_MS = uiMotion.duration.medium;
 const EVENT_DETAIL_CAROUSEL_EASING = uiMotion.easing.standard;
+const EVENT_DETAIL_ACTIVE_EDIT_SELECTOR = "input, textarea, select, [contenteditable='true']";
+const EVENT_DETAIL_SWIPE_BLOCK_SELECTOR = "button, a, [data-no-event-swipe]";
 const TASK_DETAIL_SWIPE_THRESHOLD_PX = 60;
 const TASK_DETAIL_SWIPE_VELOCITY_THRESHOLD_PX_PER_MS = 0.65;
 const TASK_DETAIL_SWIPE_VELOCITY_MIN_DISTANCE_PX = 34;
@@ -10702,6 +10707,7 @@ export default function Home() {
               nextEvent={nextDetailEvent}
               direction={eventDetailCarousel?.direction ?? null}
               targetId={eventDetailCarousel?.targetId ?? null}
+              onNavigateDirection={startEventDetailCarousel}
               onTransitionComplete={finishEventDetailCarousel}
               renderPanel={renderEventDetailPanel}
             />
@@ -13815,6 +13821,7 @@ function EventDetailCarousel({
   nextEvent,
   direction,
   targetId,
+  onNavigateDirection,
   onTransitionComplete,
   renderPanel,
 }: {
@@ -13823,35 +13830,182 @@ function EventDetailCarousel({
   nextEvent: ProductionEvent | null;
   direction: -1 | 1 | null;
   targetId: string | null;
+  onNavigateDirection: (direction: -1 | 1) => void;
   onTransitionComplete: (targetId: string) => void;
   renderPanel: (event: ProductionEvent) => ReactNode;
 }) {
+  const swipeStartRef = useRef<{ pointerId: number; x: number; y: number; startedAt: number; axis: "horizontal" | "vertical" | null } | null>(null);
+  const suppressClickRef = useRef(false);
+  const snapBackTimeoutRef = useRef<number | null>(null);
+  const [dragOffset, setDragOffset] = useState(0);
+  const [dragTransitionEnabled, setDragTransitionEnabled] = useState(false);
   const trackTransform =
     direction === 1
       ? "translate3d(-66.666666%, 0, 0)"
       : direction === -1
         ? "translate3d(0, 0, 0)"
-        : "translate3d(-33.333333%, 0, 0)";
+        : `translate3d(calc(-33.333333% + ${dragOffset}px), 0, 0)`;
   const panels: Array<{ key: string; event: ProductionEvent | null; current: boolean }> = [
     { key: `previous-${previousEvent?.id ?? "empty"}`, event: previousEvent, current: false },
     { key: `current-${currentEvent.id}`, event: currentEvent, current: true },
     { key: `next-${nextEvent?.id ?? "empty"}`, event: nextEvent, current: false },
   ];
 
+  useEffect(() => {
+    return () => {
+      if (snapBackTimeoutRef.current !== null) {
+        window.clearTimeout(snapBackTimeoutRef.current);
+      }
+    };
+  }, []);
+
+  function shouldBlockSwipeStart(target: EventTarget | null) {
+    if (!(target instanceof HTMLElement)) return false;
+    if (target.closest(EVENT_DETAIL_SWIPE_BLOCK_SELECTOR)) return true;
+
+    const activeElement = document.activeElement;
+    return activeElement instanceof HTMLElement && Boolean(activeElement.closest(EVENT_DETAIL_ACTIVE_EDIT_SELECTOR));
+  }
+
+  function resetSwipe() {
+    swipeStartRef.current = null;
+  }
+
+  function snapBack() {
+    setDragTransitionEnabled(true);
+    setDragOffset(0);
+    if (snapBackTimeoutRef.current !== null) {
+      window.clearTimeout(snapBackTimeoutRef.current);
+    }
+    snapBackTimeoutRef.current = window.setTimeout(() => {
+      setDragTransitionEnabled(false);
+      snapBackTimeoutRef.current = null;
+    }, EVENT_DETAIL_CAROUSEL_TRANSITION_MS);
+  }
+
+  function handlePointerDown(pointerEvent: ReactPointerEvent<HTMLDivElement>) {
+    if (direction || swipeStartRef.current || pointerEvent.pointerType === "mouse" || shouldBlockSwipeStart(pointerEvent.target)) return;
+    if (typeof window !== "undefined" && !window.matchMedia("(hover: none), (pointer: coarse)").matches) return;
+    if (!previousEvent && !nextEvent) return;
+
+    swipeStartRef.current = {
+      pointerId: pointerEvent.pointerId,
+      x: pointerEvent.clientX,
+      y: pointerEvent.clientY,
+      startedAt: window.performance.now(),
+      axis: null,
+    };
+    setDragTransitionEnabled(false);
+    setDragOffset(0);
+    pointerEvent.currentTarget.setPointerCapture(pointerEvent.pointerId);
+  }
+
+  function handlePointerMove(pointerEvent: ReactPointerEvent<HTMLDivElement>) {
+    const swipeStart = swipeStartRef.current;
+    if (!swipeStart || swipeStart.pointerId !== pointerEvent.pointerId) return;
+
+    const deltaX = pointerEvent.clientX - swipeStart.x;
+    const deltaY = pointerEvent.clientY - swipeStart.y;
+    const absDeltaX = Math.abs(deltaX);
+    const absDeltaY = Math.abs(deltaY);
+
+    if (!swipeStart.axis && (absDeltaX > EVENT_SWIPE_AXIS_ACTIVATION_PX || absDeltaY > EVENT_SWIPE_AXIS_ACTIVATION_PX)) {
+      if (absDeltaX > EVENT_SWIPE_AXIS_ACTIVATION_PX && absDeltaX > absDeltaY * EVENT_SWIPE_AXIS_DOMINANCE) {
+        swipeStart.axis = "horizontal";
+      } else if (absDeltaY > EVENT_SWIPE_AXIS_ACTIVATION_PX && absDeltaY >= absDeltaX) {
+        swipeStart.axis = "vertical";
+      }
+    }
+
+    if (swipeStart.axis === "vertical") {
+      resetSwipe();
+      return;
+    }
+
+    if (swipeStart.axis !== "horizontal") return;
+    suppressClickRef.current = true;
+    pointerEvent.preventDefault();
+
+    const viewportWidth = pointerEvent.currentTarget.clientWidth;
+    const maxOffset = previousEvent ? viewportWidth : viewportWidth * 0.16;
+    const minOffset = nextEvent ? -viewportWidth : -viewportWidth * 0.16;
+    setDragOffset(Math.max(minOffset, Math.min(maxOffset, deltaX)));
+  }
+
+  function handlePointerUp(pointerEvent: ReactPointerEvent<HTMLDivElement>) {
+    const swipeStart = swipeStartRef.current;
+    if (!swipeStart || swipeStart.pointerId !== pointerEvent.pointerId) return;
+
+    const deltaX = pointerEvent.clientX - swipeStart.x;
+    const deltaY = pointerEvent.clientY - swipeStart.y;
+    const viewportWidth = pointerEvent.currentTarget.clientWidth;
+    const swipeThreshold = getEventSwipeThreshold(viewportWidth);
+    const eventDirection = deltaX < 0 ? 1 : -1;
+    const canNavigate = eventDirection === 1 ? Boolean(nextEvent) : Boolean(previousEvent);
+    const elapsedMs = Math.max(1, window.performance.now() - swipeStart.startedAt);
+    const horizontalVelocity = Math.abs(deltaX) / elapsedMs;
+    resetSwipe();
+
+    if (swipeStart.axis !== "horizontal") return;
+
+    if (suppressClickRef.current) {
+      window.setTimeout(() => {
+        suppressClickRef.current = false;
+      }, 0);
+    }
+
+    if (
+      (
+        Math.abs(deltaX) >= swipeThreshold ||
+        (Math.abs(deltaX) >= EVENT_SWIPE_VELOCITY_MIN_DISTANCE_PX && horizontalVelocity >= EVENT_SWIPE_VELOCITY_THRESHOLD_PX_PER_MS)
+      ) &&
+      Math.abs(deltaX) >= Math.abs(deltaY) * EVENT_SWIPE_HORIZONTAL_DOMINANCE &&
+      canNavigate
+    ) {
+      pointerEvent.preventDefault();
+      setDragTransitionEnabled(true);
+      setDragOffset(0);
+      onNavigateDirection(eventDirection);
+      return;
+    }
+
+    snapBack();
+  }
+
+  function handleClickCapture(clickEvent: ReactMouseEvent<HTMLDivElement>) {
+    if (!suppressClickRef.current) return;
+    clickEvent.preventDefault();
+    clickEvent.stopPropagation();
+    suppressClickRef.current = false;
+  }
+
   function handleTransitionEnd(transitionEvent: ReactTransitionEvent<HTMLDivElement>) {
     if (transitionEvent.target !== transitionEvent.currentTarget || transitionEvent.propertyName !== "transform") return;
     if (!targetId) return;
+    setDragTransitionEnabled(false);
+    setDragOffset(0);
     onTransitionComplete(targetId);
   }
 
   return (
-    <div className="min-h-0 min-w-0 flex-1 overflow-hidden">
+    <div
+      className="min-h-0 min-w-0 flex-1 overflow-hidden"
+      style={{ touchAction: "pan-y" }}
+      onPointerDown={handlePointerDown}
+      onPointerMove={handlePointerMove}
+      onPointerUp={handlePointerUp}
+      onPointerCancel={() => {
+        resetSwipe();
+        snapBack();
+      }}
+      onClickCapture={handleClickCapture}
+    >
       <div
         className="flex h-full min-h-0 will-change-transform"
         style={{
           width: "300%",
           transform: trackTransform,
-          transition: direction ? `transform ${EVENT_DETAIL_CAROUSEL_TRANSITION_MS}ms ${EVENT_DETAIL_CAROUSEL_EASING}` : "none",
+          transition: direction || dragTransitionEnabled ? `transform ${EVENT_DETAIL_CAROUSEL_TRANSITION_MS}ms ${EVENT_DETAIL_CAROUSEL_EASING}` : "none",
         }}
         onTransitionEnd={handleTransitionEnd}
       >
@@ -14018,8 +14172,6 @@ function ProductionDetail({
   const detailBlockRef = useRef<HTMLDivElement | null>(null);
   const nativeKeyboard = useNativeKeyboardVisibility<HTMLDivElement>();
   const previousContextSelectionKeyRef = useRef<string | null>(null);
-  const eventSwipeStartRef = useRef<{ pointerId: number; x: number; y: number; axis: "horizontal" | "vertical" | null } | null>(null);
-  const suppressEventSwipeClickRef = useRef(false);
   const eventDisplay = getProductionEventDisplay(event);
 
   const setDetailScrollContainerNode = useCallback((node: HTMLDivElement | null) => {
@@ -14231,20 +14383,9 @@ function ProductionDetail({
     setConfirmDelete(null);
   }
 
-  function isTouchEventSwipeTarget(target: EventTarget | null) {
-    return target instanceof HTMLElement && !target.closest("input, textarea, select, button, a, [contenteditable='true'], [data-no-event-swipe]");
-  }
-
-  function resetEventSwipe() {
-    eventSwipeStartRef.current = null;
-  }
-
   function navigateEventByDirection(direction: -1 | 1) {
     const canNavigate = direction === 1 ? hasNext : hasPrevious;
-    if (!canNavigate) {
-      resetEventSwipe();
-      return;
-    }
+    if (!canNavigate) return;
 
     if (direction === 1) {
       goNext();
@@ -14253,84 +14394,9 @@ function ProductionDetail({
     }
   }
 
-  function beginEventSwipe(pointerId: number, clientX: number, clientY: number) {
-    eventSwipeStartRef.current = {
-      pointerId,
-      x: clientX,
-      y: clientY,
-      axis: null,
-    };
-    suppressEventSwipeClickRef.current = false;
-  }
-
-  function updateEventSwipe(pointerId: number, clientX: number, clientY: number, currentTargetWidth: number, preventDefault: () => void) {
-    const swipeStart = eventSwipeStartRef.current;
-    if (!swipeStart || swipeStart.pointerId !== pointerId) return;
-
-    const deltaX = clientX - swipeStart.x;
-    const deltaY = clientY - swipeStart.y;
-
-    if (!swipeStart.axis && (Math.abs(deltaX) > EVENT_SWIPE_AXIS_ACTIVATION_PX || Math.abs(deltaY) > EVENT_SWIPE_AXIS_ACTIVATION_PX)) {
-      swipeStart.axis = Math.abs(deltaX) > Math.abs(deltaY) ? "horizontal" : "vertical";
-    }
-
-    if (swipeStart.axis === "vertical") {
-      resetEventSwipe();
-      return;
-    }
-
-    if (swipeStart.axis !== "horizontal") return;
-
-    preventDefault();
-    suppressEventSwipeClickRef.current = true;
-  }
-
-  function finishEventSwipe(pointerId: number, clientX: number, clientY: number, currentTargetWidth: number) {
-    const swipeStart = eventSwipeStartRef.current;
-    if (!swipeStart || swipeStart.pointerId !== pointerId) return;
-
-    const deltaX = clientX - swipeStart.x;
-    const deltaY = clientY - swipeStart.y;
-    const viewportWidth = currentTargetWidth;
-    const swipeThreshold = getEventSwipeThreshold(viewportWidth);
-    eventSwipeStartRef.current = null;
-
-    if (swipeStart.axis === "horizontal" && Math.abs(deltaX) >= swipeThreshold && Math.abs(deltaX) >= Math.abs(deltaY) * EVENT_SWIPE_HORIZONTAL_DOMINANCE) {
-      navigateEventByDirection(deltaX < 0 ? 1 : -1);
-    }
-  }
-
-  function handleEventSwipePointerDown(pointerEvent: ReactPointerEvent<HTMLDivElement>) {
-    if (eventSwipeStartRef.current || pointerEvent.pointerType === "mouse" || !isTouchEventSwipeTarget(pointerEvent.target)) return;
-    if (typeof window !== "undefined" && !window.matchMedia("(hover: none), (pointer: coarse)").matches) return;
-
-    beginEventSwipe(pointerEvent.pointerId, pointerEvent.clientX, pointerEvent.clientY);
-    pointerEvent.currentTarget.setPointerCapture(pointerEvent.pointerId);
-  }
-
-  function handleEventSwipePointerMove(pointerEvent: ReactPointerEvent<HTMLDivElement>) {
-    updateEventSwipe(pointerEvent.pointerId, pointerEvent.clientX, pointerEvent.clientY, pointerEvent.currentTarget.clientWidth, () => pointerEvent.preventDefault());
-  }
-
-  function handleEventSwipePointerUp(pointerEvent: ReactPointerEvent<HTMLDivElement>) {
-    finishEventSwipe(pointerEvent.pointerId, pointerEvent.clientX, pointerEvent.clientY, pointerEvent.currentTarget.clientWidth);
-  }
-
   return (
     <>
-      <section
-        className="flex min-h-0 w-full touch-pan-y flex-1 flex-col gap-5 overflow-hidden"
-        onPointerDown={handleEventSwipePointerDown}
-        onPointerMove={handleEventSwipePointerMove}
-        onPointerUp={handleEventSwipePointerUp}
-        onPointerCancel={resetEventSwipe}
-        onClickCapture={(clickEvent) => {
-          if (!suppressEventSwipeClickRef.current) return;
-          clickEvent.preventDefault();
-          clickEvent.stopPropagation();
-          suppressEventSwipeClickRef.current = false;
-        }}
-      >
+      <section className="flex min-h-0 w-full touch-pan-y flex-1 flex-col gap-5 overflow-hidden">
       <Card
         className="premium-surface shrink-0 !border-0 p-4 sm:p-6"
       >
