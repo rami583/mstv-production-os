@@ -12,6 +12,7 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 import { uiMotionClasses } from "@/lib/ui-motion";
+import { mstvLayerZIndex } from "@/lib/ui-layers";
 import { cn } from "@/lib/utils";
 
 type MstvPopoverPlacement = "bottom-start" | "bottom-end" | "top-start" | "top-end";
@@ -100,7 +101,7 @@ export function MstvPopover({
       top,
       width,
       maxHeight: Math.max(120, viewportBottom - top),
-      zIndex: 75,
+      zIndex: mstvLayerZIndex.popover,
     });
   }, [anchorRef, matchAnchorWidth, maxWidth, minWidth, offset, placement]);
 
@@ -154,7 +155,7 @@ export function MstvPopover({
   return createPortal(
     <div
       ref={popoverRef}
-      style={position ?? { position: "fixed", left: -9999, top: -9999, zIndex: 75 }}
+      style={position ?? { position: "fixed", left: -9999, top: -9999, zIndex: mstvLayerZIndex.popover }}
       className={cn(
         "overflow-auto rounded-2xl bg-white p-1.5 text-neutral-800 shadow-[0_12px_36px_rgba(0,0,0,0.055)]",
         uiMotionClasses.scaleIn,

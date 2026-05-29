@@ -80,6 +80,7 @@ import { createPortal } from "react-dom";
 import { Card } from "@/components/ui/card";
 import { EventEditorModal } from "@/components/events/EventEditorModal";
 import { MstvDatePicker } from "@/components/ui/MstvDatePicker";
+import { MstvModalPanel, MstvModalSurface, mstvModalPanelClassName } from "@/components/ui/MstvModalSurface";
 import { MstvPopover } from "@/components/ui/MstvPopover";
 import type { Session } from "@supabase/supabase-js";
 import {
@@ -114,6 +115,7 @@ import {
 } from "@/lib/events/visibility";
 import { useNativeKeyboardVisibility } from "@/lib/use-native-keyboard-visibility";
 import { uiMotion, uiMotionClasses } from "@/lib/ui-motion";
+import { mstvLayerClassNames } from "@/lib/ui-layers";
 import { cn } from "@/lib/utils";
 import {
   supabase,
@@ -1482,11 +1484,11 @@ const importantNotificationTypes = new Set([
   "google_calendar_sync_success",
   "google_calendar_sync_failed",
 ]);
-const modalBackdropClassName = "fixed inset-0 z-40 flex bg-black/35";
-const elevatedModalBackdropClassName = "fixed inset-0 z-[60] flex bg-black/35";
-const notificationLayerClassName = "fixed inset-0 z-[80] flex bg-black/35";
+const modalBackdropClassName = cn("fixed inset-0 flex bg-black/35", mstvLayerClassNames.modal);
+const elevatedModalBackdropClassName = cn("fixed inset-0 flex bg-black/35", mstvLayerClassNames.elevatedModal);
+const notificationLayerClassName = cn("fixed inset-0 flex bg-black/35", mstvLayerClassNames.notification);
 const modalSheetPositionClassName = "items-end p-3 sm:items-center sm:justify-center sm:p-6";
-const modalPanelClassName = "rounded-2xl bg-white shadow-sm shadow-black/5";
+const modalPanelClassName = mstvModalPanelClassName;
 const uiTextPrimaryClassName = "text-neutral-950";
 const uiTextMutedClassName = "text-neutral-500";
 const uiErrorMessageClassName = "rounded-2xl bg-rose-50 px-4 py-3 text-base font-medium text-rose-700";
@@ -16335,11 +16337,11 @@ function QuoteImportModal({
   useEscapeToClose(onClose);
 
   return (
-    <div className={cn(modalBackdropClassName, modalSheetPositionClassName)} onPointerDown={(pointerEvent) => handleModalBackdropPointerDown(pointerEvent, onClose)}>
+    <MstvModalSurface onClose={onClose} position="sheet">
       <form
         ref={nativeKeyboard.scrollContainerRef}
         onSubmit={handleSubmit}
-        className={cn(modalPanelClassName, "max-h-[calc(var(--app-height)-1.5rem)] w-full overflow-y-auto p-5 sm:max-h-[calc(var(--app-height)-3rem)] sm:max-w-2xl sm:p-6")}
+        className={cn(mstvModalPanelClassName, uiMotionClasses.modalPanelIn, "max-h-[calc(var(--app-height)-1.5rem)] w-full overflow-y-auto p-5 sm:max-h-[calc(var(--app-height)-3rem)] sm:max-w-2xl sm:p-6")}
         style={nativeKeyboard.scrollContainerStyle}
         onPointerDown={(pointerEvent) => pointerEvent.stopPropagation()}
       >
@@ -16570,7 +16572,7 @@ function QuoteImportModal({
           )}
         </div>
       </form>
-    </div>
+    </MstvModalSurface>
   );
 }
 
@@ -18474,8 +18476,8 @@ function DuplicateEventDialog({
   useEscapeToClose(onClose);
 
   return (
-    <div className={cn(modalBackdropClassName, modalSheetPositionClassName)} onPointerDown={(pointerEvent) => handleModalBackdropPointerDown(pointerEvent, onClose)}>
-      <div className={cn(modalPanelClassName, "w-full p-5 sm:max-w-md sm:p-6")} onPointerDown={(pointerEvent) => pointerEvent.stopPropagation()}>
+    <MstvModalSurface onClose={onClose} position="sheet">
+      <MstvModalPanel className="w-full p-5 sm:max-w-md sm:p-6">
         <div className="mb-5">
           <p className="truncate text-base font-semibold text-neutral-950">{display.title}</p>
           {display.subtitle && <p className="mt-1 truncate text-base text-neutral-500">{display.subtitle}</p>}
@@ -18511,8 +18513,8 @@ function DuplicateEventDialog({
             {duplicating ? "Duplication..." : "Dupliquer"}
           </button>
         </div>
-      </div>
-    </div>
+      </MstvModalPanel>
+    </MstvModalSurface>
   );
 }
 

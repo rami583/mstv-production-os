@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
-import { createPortal } from "react-dom";
+import { MstvModalPanel, MstvModalSurface } from "@/components/ui/MstvModalSurface";
 import { uiMotion, uiMotionClasses } from "@/lib/ui-motion";
 import { cn } from "@/lib/utils";
 
@@ -49,8 +49,6 @@ const monthNames = [
   "Décembre",
 ];
 const weekdays = ["L", "M", "M", "J", "V", "S", "D"];
-const modalBackdropClassName = "fixed inset-0 z-[70] flex bg-black/35";
-const modalPanelClassName = "rounded-2xl bg-white shadow-sm shadow-black/5";
 const calendarArrowClassName =
   "flex h-9 w-9 items-center justify-center rounded-full text-base text-[#bb2720] transition hover:bg-[#bb2720]/[0.08] disabled:cursor-not-allowed disabled:text-neutral-300 disabled:hover:bg-transparent";
 
@@ -290,16 +288,14 @@ export function MstvDatePicker({
     setPickerPagerOffset(0);
   }
 
-  if (typeof document === "undefined") return null;
-
-  return createPortal(
-    <div
-      className={cn(modalBackdropClassName, "items-end justify-center p-3 sm:items-center sm:p-6", uiMotionClasses.modalBackdropIn)}
-      onPointerDown={(pointerEvent) => {
-        if (pointerEvent.target === pointerEvent.currentTarget && !saving) onClose();
-      }}
+  return (
+    <MstvModalSurface
+      onClose={onClose}
+      layer="datePicker"
+      position="sheet"
+      closeOnBackdrop={!saving}
     >
-      <div className={cn(modalPanelClassName, "w-full max-w-sm p-3 sm:p-4", uiMotionClasses.modalPanelIn)} onPointerDown={(pointerEvent) => pointerEvent.stopPropagation()}>
+      <MstvModalPanel className="w-full max-w-sm p-3 sm:p-4">
         <div
           ref={pickerPagerRef}
           className="overflow-hidden"
@@ -362,18 +358,16 @@ export function MstvDatePicker({
             Annuler
           </button>
         </div>
-      </div>
+      </MstvModalPanel>
 
       {pendingDate && (
         <div
-          className="absolute inset-0 flex items-end justify-center bg-black/35 p-3 sm:items-center sm:p-6"
+          className={cn("absolute inset-0 flex items-end justify-center bg-black/35 p-3 sm:items-center sm:p-6", uiMotionClasses.modalBackdropIn)}
           onPointerDown={(pointerEvent) => {
-            if (pointerEvent.target === pointerEvent.currentTarget && !saving) {
-              onClose();
-            }
+            if (!saving && pointerEvent.target === pointerEvent.currentTarget) onClose();
           }}
         >
-          <div className={cn(modalPanelClassName, "w-full max-w-sm p-4 sm:p-5")} onPointerDown={(pointerEvent) => pointerEvent.stopPropagation()}>
+          <MstvModalPanel className="w-full max-w-sm p-4 sm:p-5">
             <div className="mb-3">
               <h2 className="text-base font-semibold text-neutral-950">{confirmationTitle}</h2>
             </div>
@@ -399,11 +393,10 @@ export function MstvDatePicker({
             </div>
 
             {error && <div className="mt-4 rounded-2xl bg-rose-50 px-4 py-3 text-base font-medium text-rose-700">{error}</div>}
-          </div>
+          </MstvModalPanel>
         </div>
       )}
-    </div>,
-    document.body,
+    </MstvModalSurface>
   );
 }
 
