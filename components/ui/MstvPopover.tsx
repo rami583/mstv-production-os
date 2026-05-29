@@ -156,7 +156,7 @@ export function MstvPopover({
       ref={popoverRef}
       style={position ?? { position: "fixed", left: -9999, top: -9999, zIndex: 75 }}
       className={cn(
-        "overflow-auto rounded-2xl border border-neutral-200 bg-white p-1.5 text-neutral-800 shadow-sm shadow-black/5",
+        "overflow-auto rounded-2xl bg-white p-1.5 text-neutral-800 shadow-[0_12px_36px_rgba(0,0,0,0.055)]",
         uiMotionClasses.scaleIn,
         className,
       )}
