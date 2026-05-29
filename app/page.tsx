@@ -14319,7 +14319,7 @@ function UnreadCountBadge({ count }: { count: number }) {
 }
 
 function UnreadDot({ className }: { className?: string }) {
-  return <span aria-hidden="true" className={cn("absolute right-2 top-2 h-3 w-3 rounded-full border-2 border-[#bb2720] bg-white/80", className)} />;
+  return <span aria-hidden="true" className={cn("absolute right-2 top-2 h-2 w-2 rounded-full bg-[#bb2720]", className)} />;
 }
 
 function ExternalCalendarEventRow({
