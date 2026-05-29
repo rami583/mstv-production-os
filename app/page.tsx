@@ -12423,7 +12423,7 @@ const TaskQueueRow = forwardRef<HTMLDivElement, {
       )}
     >
       {createdByAdmin && (
-        <span className="inline-flex h-3.5 w-3.5 shrink-0 items-center justify-center text-xs font-bold leading-none text-[#c89a1d]" aria-label="Créée par un administrateur" title="Créée par un administrateur">
+        <span className="inline-flex h-3.5 w-3.5 shrink-0 items-center justify-center text-xs font-bold leading-none text-[#eab308]" aria-label="Créée par un administrateur" title="Créée par un administrateur">
           ★
         </span>
       )}
