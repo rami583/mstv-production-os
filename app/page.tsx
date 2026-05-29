@@ -941,6 +941,8 @@ const TASK_DETAIL_SWIPE_AXIS_DOMINANCE = 1.2;
 const TASK_DETAIL_SWIPE_PANEL_GAP_PX = 16;
 const TASK_DETAIL_ACTIVE_EDIT_SELECTOR = "input, textarea, select, [contenteditable='true']";
 const TASK_DETAIL_SWIPE_BLOCK_SELECTOR = "[data-task-swipe-block]";
+const TASK_ROW_SWIPE_ACTION_WIDTH = 112;
+const TASK_ROW_FULL_SWIPE_RATIO = 0.65;
 
 function getSwipePageStep(viewportWidth: number) {
   return viewportWidth + PAGE_GAP;
@@ -11799,6 +11801,56 @@ function TeamTasksSheet({
     return permissions.canManageEvents || Boolean(currentProfile?.id && task.assignedProfileId === currentProfile.id && task.createdBy === currentProfile.id);
   }
 
+  function canDuplicateTask(task: AppTask) {
+    return permissions.canManageEvents || Boolean(currentProfile?.id && task.assignedProfileId === currentProfile.id);
+  }
+
+  async function duplicateTask(task: AppTask) {
+    if (!canDuplicateTask(task)) return;
+    setLocalError(null);
+    setDragError(null);
+
+    try {
+      const assignedProfileId = task.assignedProfileId;
+      const duplicatedTask = await onCreateTask({
+        title: task.title,
+        eventId: task.eventId,
+        assignedProfileId,
+        dueDate: task.dueDate,
+        notes: task.notes,
+        priority: "normal",
+        sortOrder: getNextTaskSortOrder(tasks, assignedProfileId),
+      });
+
+      if (task.status !== "todo" || duplicatedTask.status !== "todo" || assignedProfileId !== activeProfileId) return;
+
+      const reorderableTasks = permissions.canManageEvents
+        ? orderedTodoTasks
+        : orderedTodoTasks.filter((item) => canMoveTask(item));
+      const queueWithoutDuplicate = reorderableTasks.filter((item) => item.id !== duplicatedTask.id);
+      const originalIndex = queueWithoutDuplicate.findIndex((item) => item.id === task.id);
+      if (originalIndex === -1) return;
+
+      const nextQueue = [
+        ...queueWithoutDuplicate.slice(0, originalIndex + 1),
+        duplicatedTask,
+        ...queueWithoutDuplicate.slice(originalIndex + 1),
+      ];
+      const previousIds = sortableTaskIds;
+      const nextIds = nextQueue.map((item) => item.id);
+      setOrderIds(nextIds);
+
+      try {
+        await onReorderTasks(nextQueue, assignedProfileId);
+      } catch (reorderError) {
+        setOrderIds(previousIds);
+        setDragError(getUserFacingErrorMessage(reorderError, "La tâche a été dupliquée, mais l'ordre n'a pas pu être ajusté."));
+      }
+    } catch (duplicateError) {
+      setLocalError(getUserFacingErrorMessage(duplicateError, "Impossible de dupliquer la tâche."));
+    }
+  }
+
   async function requestDeleteTask(task: AppTask) {
     if (!canDeleteTask(task)) return;
     setDeleteTaskError(null);
@@ -11832,7 +11884,9 @@ function TeamTasksSheet({
           completed={completed}
           priorityIndex={priorityIndex}
           canDelete={canDeleteTask(task)}
+          canDuplicate={canDuplicateTask(task)}
           onDelete={() => void requestDeleteTask(task)}
+          onDuplicate={() => void duplicateTask(task)}
           onOpen={() => openTaskDetail(task.id)}
         />
       );
@@ -11847,7 +11901,9 @@ function TeamTasksSheet({
         priorityIndex={priorityIndex}
         canDrag={canMoveTask(task)}
         canDelete={canDeleteTask(task)}
+        canDuplicate={canDuplicateTask(task)}
         onDelete={() => void requestDeleteTask(task)}
+        onDuplicate={() => void duplicateTask(task)}
         onOpen={() => openTaskDetail(task.id)}
       />
     );
@@ -12016,7 +12072,9 @@ function SortableTaskRow({
   priorityIndex,
   canDrag,
   canDelete,
+  canDuplicate,
   onDelete,
+  onDuplicate,
   onOpen,
 }: {
   task: AppTask;
@@ -12025,7 +12083,9 @@ function SortableTaskRow({
   priorityIndex: number | null;
   canDrag: boolean;
   canDelete: boolean;
+  canDuplicate: boolean;
   onDelete: () => void;
+  onDuplicate: () => void;
   onOpen: () => void;
 }) {
   const {
@@ -12063,7 +12123,9 @@ function SortableTaskRow({
         draggable={canDrag}
         draggableProps={canDrag ? ({ ...attributes, ...listeners } as HTMLAttributes<HTMLDivElement>) : undefined}
         canDelete={canDelete}
+        canDuplicate={canDuplicate}
         onDelete={onDelete}
+        onDuplicate={onDuplicate}
         onOpen={onOpen}
       />
     </div>
@@ -12079,7 +12141,9 @@ const TaskQueueRow = forwardRef<HTMLDivElement, {
   draggable?: boolean;
   draggableProps?: HTMLAttributes<HTMLDivElement>;
   canDelete?: boolean;
+  canDuplicate?: boolean;
   onDelete?: () => void;
+  onDuplicate?: () => void;
   onOpen: () => void;
 }>(function TaskQueueRow({
   task,
@@ -12090,29 +12154,233 @@ const TaskQueueRow = forwardRef<HTMLDivElement, {
   draggable = false,
   draggableProps,
   canDelete = false,
+  canDuplicate = false,
   onDelete,
+  onDuplicate,
   onOpen,
 }, ref) {
+  const rowRef = useRef<HTMLDivElement | null>(null);
+  const pointerStartRef = useRef<{ pointerId: number; x: number; y: number; axis: "horizontal" | "vertical" | null } | null>(null);
+  const stableRowWidthRef = useRef(0);
+  const suppressClickRef = useRef(false);
+  const [swipeOffset, setSwipeOffset] = useState(0);
+  const [swiping, setSwiping] = useState(false);
+  const [openAction, setOpenAction] = useState<"delete" | "duplicate" | null>(null);
   const taskSurface = getTaskSurfaceTone(task, priorityIndex);
+  const canSwipeDelete = canDelete && Boolean(onDelete);
+  const canSwipeDuplicate = canDuplicate && Boolean(onDuplicate);
+  const canSwipe = canSwipeDelete || canSwipeDuplicate;
+  const baseOffset = canSwipeDelete && openAction === "delete"
+    ? -TASK_ROW_SWIPE_ACTION_WIDTH
+    : canSwipeDuplicate && openAction === "duplicate"
+      ? TASK_ROW_SWIPE_ACTION_WIDTH
+      : 0;
+  const visibleOffset = swiping ? swipeOffset : baseOffset;
+  const deleteActionVisible = canSwipeDelete && visibleOffset < -1;
+  const duplicateActionVisible = canSwipeDuplicate && visibleOffset > 1;
+
+  function setTaskQueueRowRef(node: HTMLDivElement | null) {
+    rowRef.current = node;
+    if (typeof ref === "function") {
+      ref(node);
+    } else if (ref) {
+      ref.current = node;
+    }
+  }
+
+  function resetSwipe() {
+    pointerStartRef.current = null;
+    stableRowWidthRef.current = 0;
+    setSwiping(false);
+    setSwipeOffset(0);
+  }
+
+  function callDraggableHandler<TEvent extends ReactPointerEvent<HTMLDivElement>>(
+    handler: HTMLAttributes<HTMLDivElement>["onPointerDown"] | HTMLAttributes<HTMLDivElement>["onPointerMove"] | HTMLAttributes<HTMLDivElement>["onPointerUp"] | HTMLAttributes<HTMLDivElement>["onPointerCancel"] | undefined,
+    event: TEvent,
+  ) {
+    handler?.(event);
+  }
+
+  function handlePointerDown(event: ReactPointerEvent<HTMLDivElement>) {
+    if ((event.target as HTMLElement).closest("[data-task-row-swipe-action]")) return;
+    if (canSwipe) {
+      pointerStartRef.current = {
+        pointerId: event.pointerId,
+        x: event.clientX,
+        y: event.clientY,
+        axis: null,
+      };
+      stableRowWidthRef.current = rowRef.current?.offsetWidth ?? event.currentTarget.offsetWidth ?? TASK_ROW_SWIPE_ACTION_WIDTH;
+      setSwiping(true);
+      setSwipeOffset(baseOffset);
+      event.currentTarget.setPointerCapture(event.pointerId);
+    }
+    callDraggableHandler(draggableProps?.onPointerDown, event);
+  }
+
+  function handlePointerMove(event: ReactPointerEvent<HTMLDivElement>) {
+    callDraggableHandler(draggableProps?.onPointerMove, event);
+    if (!canSwipe) return;
+    const pointerStart = pointerStartRef.current;
+    if (!pointerStart || pointerStart.pointerId !== event.pointerId) return;
+
+    const deltaX = event.clientX - pointerStart.x;
+    const deltaY = event.clientY - pointerStart.y;
+    const absDeltaX = Math.abs(deltaX);
+    const absDeltaY = Math.abs(deltaY);
+
+    if (!pointerStart.axis && (absDeltaX > EVENT_SWIPE_AXIS_ACTIVATION_PX || absDeltaY > EVENT_SWIPE_AXIS_ACTIVATION_PX)) {
+      if (absDeltaX > EVENT_SWIPE_AXIS_ACTIVATION_PX && absDeltaX > absDeltaY * EVENT_SWIPE_AXIS_DOMINANCE) {
+        pointerStart.axis = "horizontal";
+      } else if (absDeltaY > EVENT_SWIPE_AXIS_ACTIVATION_PX && absDeltaY >= absDeltaX) {
+        pointerStart.axis = "vertical";
+        suppressClickRef.current = true;
+      }
+    }
+
+    if (pointerStart.axis === "vertical") return;
+    if (pointerStart.axis !== "horizontal") return;
+
+    const rowWidth = stableRowWidthRef.current || rowRef.current?.offsetWidth || TASK_ROW_SWIPE_ACTION_WIDTH;
+    const minOffset = canSwipeDelete ? -rowWidth : 0;
+    const maxOffset = canSwipeDuplicate ? rowWidth : 0;
+    const nextOffset = Math.max(minOffset, Math.min(maxOffset, baseOffset + deltaX));
+    suppressClickRef.current = true;
+    event.preventDefault();
+    setSwipeOffset(nextOffset);
+  }
+
+  function handlePointerUp(event: ReactPointerEvent<HTMLDivElement>) {
+    callDraggableHandler(draggableProps?.onPointerUp, event);
+    if (!canSwipe) return;
+    const pointerStart = pointerStartRef.current;
+    if (!pointerStart || pointerStart.pointerId !== event.pointerId) return;
+
+    const deltaX = event.clientX - pointerStart.x;
+    const rowWidth = stableRowWidthRef.current || rowRef.current?.offsetWidth || TASK_ROW_SWIPE_ACTION_WIDTH;
+    const minOffset = canSwipeDelete ? -rowWidth : 0;
+    const maxOffset = canSwipeDuplicate ? rowWidth : 0;
+    const finalOffset = Math.max(minOffset, Math.min(maxOffset, baseOffset + deltaX));
+    const fullSwipeThreshold = rowWidth * TASK_ROW_FULL_SWIPE_RATIO;
+    const shouldRequestDelete = canSwipeDelete && finalOffset <= -fullSwipeThreshold;
+    const shouldRequestDuplicate = canSwipeDuplicate && finalOffset >= fullSwipeThreshold;
+    const shouldOpenDelete = canSwipeDelete && finalOffset < -TASK_ROW_SWIPE_ACTION_WIDTH / 2;
+    const shouldOpenDuplicate = canSwipeDuplicate && finalOffset > TASK_ROW_SWIPE_ACTION_WIDTH / 2;
+
+    const wasHorizontalSwipe = pointerStart.axis === "horizontal";
+    resetSwipe();
+
+    if (!wasHorizontalSwipe) return;
+
+    window.setTimeout(() => {
+      suppressClickRef.current = false;
+    }, 0);
+
+    if (shouldRequestDelete) {
+      setOpenAction(null);
+      onDelete?.();
+    } else if (shouldRequestDuplicate) {
+      setOpenAction(null);
+      onDuplicate?.();
+    } else if (shouldOpenDelete) {
+      setOpenAction("delete");
+    } else if (shouldOpenDuplicate) {
+      setOpenAction("duplicate");
+    } else {
+      setOpenAction(null);
+    }
+  }
+
+  function handlePointerCancel(event: ReactPointerEvent<HTMLDivElement>) {
+    callDraggableHandler(draggableProps?.onPointerCancel, event);
+    resetSwipe();
+  }
+
+  function handleRowClick() {
+    if (suppressClickRef.current) {
+      suppressClickRef.current = false;
+      return;
+    }
+
+    if (openAction) {
+      setOpenAction(null);
+      return;
+    }
+
+    onOpen();
+  }
 
   return (
     <div
-      ref={ref}
+      ref={setTaskQueueRowRef}
+      data-task-swipe-row
+      className="relative mx-0.5 overflow-hidden rounded-xl"
+      {...draggableProps}
+      onPointerDown={handlePointerDown}
+      onPointerMove={handlePointerMove}
+      onPointerUp={handlePointerUp}
+      onPointerCancel={handlePointerCancel}
+    >
+      {canSwipeDuplicate && (
+        <button
+          type="button"
+          data-task-row-swipe-action
+          onPointerDown={(event) => event.stopPropagation()}
+          onClick={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            setOpenAction(null);
+            onDuplicate?.();
+          }}
+          className={cn(
+            "absolute inset-y-0 left-0 z-0 flex w-full items-center justify-start rounded-l-xl bg-emerald-600 pl-5 text-base font-semibold text-white transition hover:bg-emerald-700",
+            duplicateActionVisible ? "opacity-100" : "pointer-events-none opacity-0",
+          )}
+        >
+          Dupliquer
+        </button>
+      )}
+      {canSwipeDelete && (
+        <button
+          type="button"
+          data-task-row-swipe-action
+          onPointerDown={(event) => event.stopPropagation()}
+          onClick={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            setOpenAction(null);
+            onDelete?.();
+          }}
+          className={cn(
+            "absolute inset-y-0 right-0 z-0 flex w-full items-center justify-end rounded-r-xl bg-[#bb2720] pr-5 text-base font-semibold text-white transition hover:bg-[#a9231d]",
+            deleteActionVisible ? "opacity-100" : "pointer-events-none opacity-0",
+          )}
+        >
+          Supprimer
+        </button>
+      )}
+      <div
       role="button"
       tabIndex={0}
-      onClick={onOpen}
+      onClick={handleRowClick}
       onKeyDown={(event) => {
         if (event.key !== "Enter" && event.key !== " ") return;
         event.preventDefault();
-        onOpen();
+        if (openAction) {
+          setOpenAction(null);
+        } else {
+          onOpen();
+        }
       }}
+      style={{ transform: `translateX(${canSwipe ? visibleOffset : 0}px)`, touchAction: "pan-y" }}
       className={cn(
-        "group mx-0.5 flex min-h-11 select-none items-center gap-2 rounded-xl px-3 py-2 transition",
+        "group relative z-10 flex min-h-11 select-none items-center gap-2 rounded-xl px-3 py-2 transition",
         draggable ? "cursor-grab active:cursor-grabbing" : "cursor-pointer",
         taskSurface.row,
         dragging && "bg-white opacity-90 shadow-sm shadow-black/5",
+        swiping ? "transition-none" : "transition-transform duration-200 ease-out",
       )}
-      {...draggableProps}
     >
       {!completed && isTaskUrgent(task) && (
         <AlertCircle className="h-3.5 w-3.5 shrink-0 text-[#bb2720]" aria-label="Urgent" />
@@ -12125,21 +12393,7 @@ const TaskQueueRow = forwardRef<HTMLDivElement, {
       >
         {task.title}
       </span>
-      {canDelete && (
-        <button
-          type="button"
-          onPointerDown={(event) => event.stopPropagation()}
-          onClick={(event) => {
-            event.preventDefault();
-            event.stopPropagation();
-            onDelete?.();
-          }}
-          className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-lg font-semibold leading-none text-neutral-300 transition hover:bg-neutral-100 hover:text-rose-600"
-          aria-label={`Supprimer ${task.title}`}
-        >
-          ×
-        </button>
-      )}
+      </div>
     </div>
   );
 });
