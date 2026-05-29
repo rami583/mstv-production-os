@@ -7660,10 +7660,190 @@ export default function Home() {
   }
 
   async function duplicateEventToDate(sourceEvent: ProductionEvent, nextDate: string) {
-    void sourceEvent;
-    void nextDate;
     assertCanManageEvents();
-    throw new Error(noCreatableCalendarMessage);
+    if (!supabase) {
+      throw new Error("Configuration Supabase manquante.");
+    }
+
+    if (sourceEvent.deletedAt) {
+      throw new Error("Impossible de dupliquer un événement supprimé.");
+    }
+
+    const normalizedDate = nextDate.trim();
+    if (!normalizedDate) {
+      throw new Error("La nouvelle date est obligatoire.");
+    }
+
+    const sourceWritableCalendarIds = getEventWritableExternalLinks(sourceEvent).map((link) => link.externalCalendarId);
+    const targetCalendar =
+      writableExternalCalendars.find((calendar) => sourceWritableCalendarIds.includes(calendar.id)) ??
+      writableExternalCalendars[0] ??
+      null;
+
+    if (!targetCalendar) {
+      throw new Error(noCreatableCalendarMessage);
+    }
+
+    if (!online) {
+      throw new Error("Connexion Internet requise pour créer un événement dans un calendrier synchronisé.");
+    }
+
+    const { data: duplicatedEvent, error: eventError } = await supabase
+      .from("events")
+      .insert({
+        client_name: sourceEvent.clientName,
+        event_name: sourceEvent.eventName,
+        date: normalizedDate,
+        is_all_day: sourceEvent.isAllDay,
+        client_arrival_time: sourceEvent.clientArrivalTime || null,
+        start_time: sourceEvent.startTime || null,
+        end_time: sourceEvent.endTime || null,
+        end_of_day_time: sourceEvent.endOfDayTime || null,
+        location: sourceEvent.location || null,
+        notes: sourceEvent.notes || null,
+        status: sourceEvent.status,
+        event_role: "production",
+        quote_reference: sourceEvent.quoteReference,
+        quote_version: sourceEvent.quoteVersion,
+        source_quote_text: sourceEvent.sourceQuoteText,
+        last_quote_imported_at: sourceEvent.lastQuoteImportedAt,
+        ...getCreatorInsertPayload(profile),
+      })
+      .select()
+      .single();
+
+    if (eventError) throw eventError;
+
+    for (const option of sourceEvent.options) {
+      const { data: duplicatedOption, error: optionError } = await supabase
+        .from("event_options")
+        .insert({
+          event_id: duplicatedEvent.id,
+          label: option.label,
+          status: "incomplete" as CompletionStatus,
+          details: option.details,
+          external_assignee_name: option.externalAssigneeName,
+          task_due_date: option.taskDueDate,
+          task_notes: option.taskNotes,
+          ...getCreatorInsertPayload(profile),
+        })
+        .select()
+        .single();
+
+      if (optionError) throw optionError;
+
+      if (option.items.length > 0) {
+        const { error: optionItemsError } = await supabase.from("event_option_items").insert(
+          option.items.map((item) => ({
+            option_id: duplicatedOption.id,
+            label: item.label,
+            ...getCreatorInsertPayload(profile),
+          })),
+        );
+
+        if (optionItemsError) throw optionItemsError;
+      }
+    }
+
+    for (const link of sourceEvent.links) {
+      const { data: duplicatedLink, error: linkError } = await supabase
+        .from("event_links")
+        .insert({
+          event_id: duplicatedEvent.id,
+          label: link.label,
+          url: link.url,
+          stream_key: link.streamKey,
+          status: link.status,
+          ...getCreatorInsertPayload(profile),
+        })
+        .select()
+        .single();
+
+      if (linkError) throw linkError;
+
+      const entriesToDuplicate =
+        link.entries.length > 0
+          ? link.entries
+          : link.url || link.streamKey
+            ? [
+                {
+                  id: "",
+                  linkId: link.id,
+                  url: link.url,
+                  streamKey: link.streamKey,
+                  position: 0,
+                  createdAt: link.createdAt,
+                  createdByProfileId: link.createdByProfileId,
+                  createdByRole: link.createdByRole,
+                  createdByName: link.createdByName,
+                },
+              ]
+            : [];
+
+      if (entriesToDuplicate.length > 0) {
+        const { error: linkEntriesError } = await supabase.from("event_link_entries").insert(
+          entriesToDuplicate.map((entry, position) => ({
+            link_id: duplicatedLink.id,
+            url: entry.url,
+            stream_key: entry.streamKey,
+            position: entry.position ?? position,
+            ...getCreatorInsertPayload(profile),
+          })),
+        );
+
+        if (linkEntriesError) throw linkEntriesError;
+      }
+    }
+
+    if (sourceEvent.documentGroups.length > 0) {
+      const { error: documentGroupsError } = await supabase.from("event_document_groups").insert(
+        sourceEvent.documentGroups.map((group) => ({
+          event_id: duplicatedEvent.id,
+          label: group.label,
+          ...getCreatorInsertPayload(profile),
+        })),
+      );
+
+      if (documentGroupsError) throw documentGroupsError;
+    }
+
+    try {
+      await syncProviderEventAction("create", duplicatedEvent.id, targetCalendar.id);
+    } catch (syncError) {
+      console.error("Duplicated event external calendar sync failed", getDebugError(syncError));
+      throw syncError;
+    }
+
+    await logEventActivity({
+      eventId: duplicatedEvent.id,
+      actionType: "event_duplicated",
+      entityType: "event",
+      entityId: duplicatedEvent.id,
+      description: `Événement dupliqué depuis ${formatFullDate(sourceEvent.date)}`,
+      previousValue: {
+        eventId: sourceEvent.id,
+        date: sourceEvent.date,
+        externalCalendarId: targetCalendar.id,
+      },
+      newValue: {
+        date: normalizedDate,
+      },
+    });
+    await createNotification(
+      {
+        type: "event_created",
+        title: "Événement créé",
+        body: `${sourceEvent.clientName} - ${sourceEvent.eventName}`,
+        relatedEventId: duplicatedEvent.id,
+      },
+      { dedupe: true },
+    );
+
+    await reloadData(duplicatedEvent.id, { source: "duplicate-event" });
+    setSelectedDateKey(normalizedDate);
+    setVisibleMonth(new Date(`${normalizedDate}T12:00:00`));
+    setSelectedId(duplicatedEvent.id);
+    setScreen("detail");
   }
 
   async function updateEventTime(event: ProductionEvent, field: EventTimeField, value: string, activityDescription = "Horaire modifié") {
@@ -10489,7 +10669,7 @@ export default function Home() {
                 }
               }}
               canDeleteEvents={permissions.canSoftDeleteEvents}
-              canDuplicateEvents={false}
+              canDuplicateEvents={permissions.canManageEvents}
               setSelectedDateKey={setSelectedDateKey}
               changeMonth={changeMonth}
             />
