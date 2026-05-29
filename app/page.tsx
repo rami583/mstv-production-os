@@ -11144,10 +11144,7 @@ function AppHeader({
               <button
                 ref={createMenuButtonRef}
                 onClick={() => setCreateMenuOpen((current) => !current)}
-                className={cn(
-                  "flex h-10 w-10 items-center justify-center rounded-full bg-white text-base font-semibold leading-none transition hover:bg-white active:bg-white focus:bg-white focus-visible:bg-white focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#bb2720]/35",
-                  createMenuOpen ? "text-[#bb2720]" : "text-neutral-600",
-                )}
+                className="flex h-10 w-10 items-center justify-center rounded-full bg-[#bb2720] text-base font-semibold leading-none text-white transition hover:bg-[#bb2720] active:bg-[#bb2720] focus:bg-[#bb2720] focus-visible:bg-[#bb2720] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#bb2720]/35"
                 aria-label="Créer"
                 aria-pressed={createMenuOpen}
               >
