@@ -923,6 +923,8 @@ const EVENT_SWIPE_HORIZONTAL_DOMINANCE = 1.12;
 const EVENT_DETAIL_CAROUSEL_TRANSITION_MS = uiMotion.duration.medium;
 const EVENT_DETAIL_CAROUSEL_EASING = uiMotion.easing.standard;
 const TASK_DETAIL_SWIPE_THRESHOLD_PX = 60;
+const TASK_DETAIL_SWIPE_VELOCITY_THRESHOLD_PX_PER_MS = 0.65;
+const TASK_DETAIL_SWIPE_VELOCITY_MIN_DISTANCE_PX = 34;
 const TASK_DETAIL_SWIPE_HORIZONTAL_DOMINANCE = 1.5;
 const TASK_DETAIL_SWIPE_AXIS_DOMINANCE = 1.2;
 const TASK_DETAIL_ACTIVE_EDIT_SELECTOR = "input, textarea, select, [contenteditable='true']";
@@ -11251,17 +11253,15 @@ function TeamTasksSheet({
 }) {
   const nativeKeyboard = useNativeKeyboardVisibility<HTMLDivElement>();
   const suppressTaskOpenRef = useRef(false);
-  const taskDetailSwipeStartRef = useRef<{ pointerId: number; x: number; y: number; axis: "horizontal" | "vertical" | null } | null>(null);
+  const taskDetailSwipeStartRef = useRef<{ pointerId: number; x: number; y: number; startedAt: number; axis: "horizontal" | "vertical" | null } | null>(null);
   const suppressTaskDetailClickRef = useRef(false);
-  const taskDetailSlideFrameRef = useRef<number | null>(null);
+  const taskDetailViewportRef = useRef<HTMLDivElement | null>(null);
+  const taskDetailTransitioningRef = useRef(false);
+  const taskDetailTransitionTimeoutRef = useRef<number | null>(null);
   const [selectedProfileId, setSelectedProfileId] = useState<string | null>(() => currentProfile?.id ?? null);
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
-  const [taskDetailSlide, setTaskDetailSlide] = useState<{
-    fromTaskId: string;
-    toTaskId: string;
-    direction: -1 | 1;
-    settling: boolean;
-  } | null>(null);
+  const [taskDetailPagerOffset, setTaskDetailPagerOffset] = useState(0);
+  const [taskDetailPagerTransitionEnabled, setTaskDetailPagerTransitionEnabled] = useState(false);
   const [orderIds, setOrderIds] = useState<string[]>([]);
   const [draggingId, setDraggingId] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
@@ -11309,8 +11309,9 @@ function TeamTasksSheet({
     if (!selectedTask) return [];
     return selectedTask.status === "done" ? doneTasks : orderedTodoTasks;
   }, [doneTasks, orderedTodoTasks, selectedTask]);
-  const taskDetailSlideFromTask = taskDetailSlide ? tasks.find((task) => task.id === taskDetailSlide.fromTaskId) ?? null : null;
-  const taskDetailSlideToTask = taskDetailSlide ? tasks.find((task) => task.id === taskDetailSlide.toTaskId) ?? null : null;
+  const selectedTaskNavigationIndex = selectedTask ? selectedTaskNavigationTasks.findIndex((task) => task.id === selectedTask.id) : -1;
+  const previousTaskDetailTask = selectedTaskNavigationIndex > 0 ? selectedTaskNavigationTasks[selectedTaskNavigationIndex - 1] : null;
+  const nextTaskDetailTask = selectedTaskNavigationIndex >= 0 && selectedTaskNavigationIndex < selectedTaskNavigationTasks.length - 1 ? selectedTaskNavigationTasks[selectedTaskNavigationIndex + 1] : null;
 
   useEscapeToClose(onClose);
 
@@ -11330,8 +11331,8 @@ function TeamTasksSheet({
 
   useEffect(() => {
     return () => {
-      if (taskDetailSlideFrameRef.current !== null) {
-        window.cancelAnimationFrame(taskDetailSlideFrameRef.current);
+      if (taskDetailTransitionTimeoutRef.current !== null) {
+        window.clearTimeout(taskDetailTransitionTimeoutRef.current);
       }
     };
   }, []);
@@ -11422,12 +11423,12 @@ function TeamTasksSheet({
       suppressTaskOpenRef.current = false;
       return;
     }
-    setTaskDetailSlide(null);
+    resetTaskDetailPager();
     setSelectedTaskId(taskId);
   }
 
   function closeSelectedTaskEditor() {
-    setTaskDetailSlide(null);
+    resetTaskDetailPager();
     if (selectedTask?.assignedProfileId) {
       setSelectedProfileId(selectedTask.assignedProfileId);
     }
@@ -11457,39 +11458,62 @@ function TeamTasksSheet({
     taskDetailSwipeStartRef.current = null;
   }
 
-  function navigateSelectedTaskByDirection(direction: -1 | 1) {
-    if (taskDetailSlide) return;
-    if (!selectedTask || selectedTaskNavigationTasks.length <= 1) return;
-    const currentIndex = selectedTaskNavigationTasks.findIndex((task) => task.id === selectedTask.id);
-    if (currentIndex === -1) return;
-    const nextTask = selectedTaskNavigationTasks[currentIndex + direction];
-    if (!nextTask) return;
-
-    if (taskDetailSlideFrameRef.current !== null) {
-      window.cancelAnimationFrame(taskDetailSlideFrameRef.current);
+  function resetTaskDetailPager() {
+    taskDetailTransitioningRef.current = false;
+    taskDetailSwipeStartRef.current = null;
+    if (taskDetailTransitionTimeoutRef.current !== null) {
+      window.clearTimeout(taskDetailTransitionTimeoutRef.current);
+      taskDetailTransitionTimeoutRef.current = null;
     }
-    setTaskDetailSlide({
-      fromTaskId: selectedTask.id,
-      toTaskId: nextTask.id,
-      direction,
-      settling: false,
-    });
-    taskDetailSlideFrameRef.current = window.requestAnimationFrame(() => {
-      taskDetailSlideFrameRef.current = null;
-      setTaskDetailSlide((current) => current ? { ...current, settling: true } : current);
-    });
+    setTaskDetailPagerTransitionEnabled(false);
+    setTaskDetailPagerOffset(0);
+  }
+
+  function finishTaskDetailSwipe(direction: -1 | 1, viewportWidth: number) {
+    const targetTask = direction === 1 ? nextTaskDetailTask : previousTaskDetailTask;
+    if (!targetTask || taskDetailTransitioningRef.current) return;
+
+    taskDetailTransitioningRef.current = true;
+    taskDetailSwipeStartRef.current = null;
+    setTaskDetailPagerTransitionEnabled(true);
+    setTaskDetailPagerOffset(direction === 1 ? -viewportWidth : viewportWidth);
+
+    if (taskDetailTransitionTimeoutRef.current !== null) {
+      window.clearTimeout(taskDetailTransitionTimeoutRef.current);
+    }
+
+    taskDetailTransitionTimeoutRef.current = window.setTimeout(() => {
+      setSelectedTaskId(targetTask.id);
+      setTaskDetailPagerTransitionEnabled(false);
+      setTaskDetailPagerOffset(0);
+      taskDetailTransitioningRef.current = false;
+      taskDetailTransitionTimeoutRef.current = null;
+    }, EVENT_DETAIL_CAROUSEL_TRANSITION_MS);
+  }
+
+  function snapTaskDetailSwipeBack() {
+    setTaskDetailPagerTransitionEnabled(true);
+    setTaskDetailPagerOffset(0);
+    window.setTimeout(() => {
+      if (!taskDetailTransitioningRef.current) {
+        setTaskDetailPagerTransitionEnabled(false);
+      }
+    }, EVENT_DETAIL_CAROUSEL_TRANSITION_MS);
   }
 
   function handleTaskDetailSwipePointerDown(pointerEvent: ReactPointerEvent<HTMLDivElement>) {
-    if (taskDetailSlide || taskDetailSwipeStartRef.current || pointerEvent.pointerType === "mouse" || shouldBlockTaskDetailSwipeStart(pointerEvent.target)) return;
+    if (taskDetailTransitioningRef.current || taskDetailSwipeStartRef.current || shouldBlockTaskDetailSwipeStart(pointerEvent.target)) return;
     if (selectedTaskNavigationTasks.length <= 1) return;
 
     taskDetailSwipeStartRef.current = {
       pointerId: pointerEvent.pointerId,
       x: pointerEvent.clientX,
       y: pointerEvent.clientY,
+      startedAt: window.performance.now(),
       axis: null,
     };
+    setTaskDetailPagerTransitionEnabled(false);
+    setTaskDetailPagerOffset(0);
     pointerEvent.currentTarget.setPointerCapture(pointerEvent.pointerId);
   }
 
@@ -11516,7 +11540,13 @@ function TeamTasksSheet({
     }
 
     if (swipeStart.axis !== "horizontal") return;
+    suppressTaskDetailClickRef.current = true;
     pointerEvent.preventDefault();
+
+    const viewportWidth = taskDetailViewportRef.current?.clientWidth ?? pointerEvent.currentTarget.clientWidth;
+    const maxOffset = previousTaskDetailTask ? viewportWidth : viewportWidth * 0.16;
+    const minOffset = nextTaskDetailTask ? -viewportWidth : -viewportWidth * 0.16;
+    setTaskDetailPagerOffset(Math.max(minOffset, Math.min(maxOffset, deltaX)));
   }
 
   function handleTaskDetailSwipePointerUp(pointerEvent: ReactPointerEvent<HTMLDivElement>) {
@@ -11525,22 +11555,47 @@ function TeamTasksSheet({
 
     const deltaX = pointerEvent.clientX - swipeStart.x;
     const deltaY = pointerEvent.clientY - swipeStart.y;
+    const viewportWidth = taskDetailViewportRef.current?.clientWidth ?? pointerEvent.currentTarget.clientWidth;
+    const direction = deltaX < 0 ? 1 : -1;
+    const canNavigate = direction === 1 ? Boolean(nextTaskDetailTask) : Boolean(previousTaskDetailTask);
+    const elapsedMs = Math.max(1, window.performance.now() - swipeStart.startedAt);
+    const horizontalVelocity = Math.abs(deltaX) / elapsedMs;
     resetTaskDetailSwipe();
 
-    if (Math.abs(deltaX) >= TASK_DETAIL_SWIPE_THRESHOLD_PX && Math.abs(deltaX) >= Math.abs(deltaY) * TASK_DETAIL_SWIPE_HORIZONTAL_DOMINANCE) {
-      suppressTaskDetailClickRef.current = true;
+    if (swipeStart.axis !== "horizontal") return;
+
+    if (suppressTaskDetailClickRef.current) {
       window.setTimeout(() => {
         suppressTaskDetailClickRef.current = false;
       }, 0);
-      pointerEvent.preventDefault();
-      navigateSelectedTaskByDirection(deltaX < 0 ? 1 : -1);
     }
+
+    if (
+      (
+        Math.abs(deltaX) >= TASK_DETAIL_SWIPE_THRESHOLD_PX ||
+        (Math.abs(deltaX) >= TASK_DETAIL_SWIPE_VELOCITY_MIN_DISTANCE_PX && horizontalVelocity >= TASK_DETAIL_SWIPE_VELOCITY_THRESHOLD_PX_PER_MS)
+      ) &&
+      Math.abs(deltaX) >= Math.abs(deltaY) * TASK_DETAIL_SWIPE_HORIZONTAL_DOMINANCE &&
+      canNavigate
+    ) {
+      pointerEvent.preventDefault();
+      finishTaskDetailSwipe(direction, viewportWidth);
+      return;
+    }
+
+    snapTaskDetailSwipeBack();
   }
 
   function handleTaskDetailClickCapture(event: ReactMouseEvent<HTMLDivElement>) {
     if (!suppressTaskDetailClickRef.current) return;
     event.preventDefault();
     event.stopPropagation();
+    suppressTaskDetailClickRef.current = false;
+  }
+
+  function handleTaskDetailSwipeCancel() {
+    resetTaskDetailSwipe();
+    snapTaskDetailSwipeBack();
   }
 
   function canDeleteTask(task: AppTask) {
@@ -11674,41 +11729,30 @@ function TeamTasksSheet({
 
           {selectedTask ? (
             <div
+              ref={taskDetailViewportRef}
               className={cn("min-h-full touch-pan-y overflow-hidden", uiMotionClasses.taskSurfaceIn)}
               onPointerDownCapture={handleTaskDetailSwipePointerDown}
               onPointerMoveCapture={handleTaskDetailSwipePointerMove}
               onPointerUpCapture={handleTaskDetailSwipePointerUp}
-              onPointerCancelCapture={resetTaskDetailSwipe}
+              onPointerCancelCapture={handleTaskDetailSwipeCancel}
               onClickCapture={handleTaskDetailClickCapture}
               onClick={(event) => {
                 if (event.target === event.currentTarget) closeSelectedTaskEditor();
               }}
             >
-              {taskDetailSlide && taskDetailSlideFromTask && taskDetailSlideToTask ? (
-                <div
-                  className="flex w-[200%]"
-                  style={{
-                    transform:
-                      taskDetailSlide.direction === 1
-                        ? taskDetailSlide.settling ? "translate3d(-50%, 0, 0)" : "translate3d(0, 0, 0)"
-                        : taskDetailSlide.settling ? "translate3d(0, 0, 0)" : "translate3d(-50%, 0, 0)",
-                    transition: taskDetailSlide.settling ? `transform ${EVENT_DETAIL_CAROUSEL_TRANSITION_MS}ms ${EVENT_DETAIL_CAROUSEL_EASING}` : undefined,
-                  }}
-                  onTransitionEnd={(transitionEvent) => {
-                    if (transitionEvent.target !== transitionEvent.currentTarget || transitionEvent.propertyName !== "transform") return;
-                    setSelectedTaskId(taskDetailSlide.toTaskId);
-                    setTaskDetailSlide(null);
-                  }}
-                >
-                  {(taskDetailSlide.direction === 1 ? [taskDetailSlideFromTask, taskDetailSlideToTask] : [taskDetailSlideToTask, taskDetailSlideFromTask]).map((task) => (
-                    <div key={task.id} className="w-1/2 shrink-0">
-                      {renderTaskDetailPanel(task)}
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                renderTaskDetailPanel(selectedTask)
-              )}
+              <div
+                className="flex w-[300%]"
+                style={{
+                  transform: `translate3d(calc(-33.333333% + ${taskDetailPagerOffset}px), 0, 0)`,
+                  transition: taskDetailPagerTransitionEnabled ? `transform ${EVENT_DETAIL_CAROUSEL_TRANSITION_MS}ms ${EVENT_DETAIL_CAROUSEL_EASING}` : undefined,
+                }}
+              >
+                {[previousTaskDetailTask, selectedTask, nextTaskDetailTask].map((task, index) => (
+                  <div key={task?.id ?? `empty-${index}`} className="w-1/3 shrink-0">
+                    {task ? renderTaskDetailPanel(task) : <div className="min-h-20" aria-hidden="true" />}
+                  </div>
+                ))}
+              </div>
             </div>
           ) : taskPeople.length === 0 ? (
             <p className="rounded-2xl bg-neutral-50 px-3 py-4 text-center text-sm font-medium text-neutral-400">Aucun membre disponible.</p>
@@ -17684,7 +17728,7 @@ function SharedConfirmationDialog({
 
   return createPortal(
     <div
-      className={cn(elevated ? elevatedModalBackdropClassName : modalBackdropClassName, modalSheetPositionClassName, uiMotionClasses.modalBackdropIn)}
+      className={cn(elevated ? elevatedModalBackdropClassName : modalBackdropClassName, "items-center justify-center p-3 sm:p-6", uiMotionClasses.modalBackdropIn)}
       onPointerDown={(pointerEvent) => handleModalBackdropPointerDown(pointerEvent, onCancel)}
     >
       <div
