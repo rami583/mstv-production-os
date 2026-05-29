@@ -930,6 +930,7 @@ const EVENT_SWIPE_VELOCITY_THRESHOLD_PX_PER_MS = 0.65;
 const EVENT_SWIPE_VELOCITY_MIN_DISTANCE_PX = 34;
 const EVENT_DETAIL_CAROUSEL_TRANSITION_MS = uiMotion.duration.medium;
 const EVENT_DETAIL_CAROUSEL_EASING = uiMotion.easing.standard;
+const EVENT_DETAIL_CAROUSEL_GAP_PX = 16;
 const EVENT_DETAIL_ACTIVE_EDIT_SELECTOR = "input, textarea, select, [contenteditable='true']";
 const EVENT_DETAIL_SWIPE_BLOCK_SELECTOR = "button, a, [data-no-event-swipe]";
 const TASK_DETAIL_SWIPE_THRESHOLD_PX = 60;
@@ -947,6 +948,10 @@ function getSwipePageStep(viewportWidth: number) {
 
 function getTaskDetailSwipePageStep(viewportWidth: number) {
   return viewportWidth + TASK_DETAIL_SWIPE_PANEL_GAP_PX;
+}
+
+function getEventDetailSwipePageStep(viewportWidth: number) {
+  return viewportWidth + EVENT_DETAIL_CAROUSEL_GAP_PX;
 }
 
 function getSwipeThreshold(viewportWidth: number) {
@@ -13841,10 +13846,10 @@ function EventDetailCarousel({
   const [dragTransitionEnabled, setDragTransitionEnabled] = useState(false);
   const trackTransform =
     direction === 1
-      ? "translate3d(-66.666666%, 0, 0)"
+      ? `translate3d(calc(-66.666666% - ${EVENT_DETAIL_CAROUSEL_GAP_PX}px), 0, 0)`
       : direction === -1
         ? "translate3d(0, 0, 0)"
-        : `translate3d(calc(-33.333333% + ${dragOffset}px), 0, 0)`;
+        : `translate3d(calc(-33.333333% - ${EVENT_DETAIL_CAROUSEL_GAP_PX / 2}px + ${dragOffset}px), 0, 0)`;
   const panels: Array<{ key: string; event: ProductionEvent | null; current: boolean }> = [
     { key: `previous-${previousEvent?.id ?? "empty"}`, event: previousEvent, current: false },
     { key: `current-${currentEvent.id}`, event: currentEvent, current: true },
@@ -13927,8 +13932,9 @@ function EventDetailCarousel({
     pointerEvent.preventDefault();
 
     const viewportWidth = pointerEvent.currentTarget.clientWidth;
-    const maxOffset = previousEvent ? viewportWidth : viewportWidth * 0.16;
-    const minOffset = nextEvent ? -viewportWidth : -viewportWidth * 0.16;
+    const pageStep = getEventDetailSwipePageStep(viewportWidth);
+    const maxOffset = previousEvent ? pageStep : viewportWidth * 0.16;
+    const minOffset = nextEvent ? -pageStep : -viewportWidth * 0.16;
     setDragOffset(Math.max(minOffset, Math.min(maxOffset, deltaX)));
   }
 
@@ -14003,6 +14009,7 @@ function EventDetailCarousel({
       <div
         className="flex h-full min-h-0 will-change-transform"
         style={{
+          gap: `${EVENT_DETAIL_CAROUSEL_GAP_PX}px`,
           width: "300%",
           transform: trackTransform,
           transition: direction || dragTransitionEnabled ? `transform ${EVENT_DETAIL_CAROUSEL_TRANSITION_MS}ms ${EVENT_DETAIL_CAROUSEL_EASING}` : "none",
