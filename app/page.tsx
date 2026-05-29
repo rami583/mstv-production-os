@@ -13202,7 +13202,7 @@ function YearOverviewMiniMonth({
       {isVisibleMonth && (
         <span
           aria-hidden="true"
-          className="pointer-events-none absolute -inset-1 rounded-[1.35rem] bg-white/[0.58] sm:-inset-1.5 sm:rounded-[1.45rem] lg:-inset-2"
+          className="pointer-events-none absolute -inset-1.5 rounded-[1.35rem] bg-white/[0.58] sm:-inset-2 sm:rounded-[1.45rem] lg:-inset-2.5"
         />
       )}
       <span className={cn("relative z-10 mb-1.5 block truncate text-xs font-semibold leading-none sm:mb-2 sm:text-sm lg:mb-2", isVisibleMonth ? "text-[#bb2720]" : "text-neutral-950")}>
