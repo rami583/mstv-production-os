@@ -13,6 +13,7 @@ import {
 import { createPortal } from "react-dom";
 import { uiMotionClasses } from "@/lib/ui-motion";
 import { mstvLayerZIndex } from "@/lib/ui-layers";
+import { mstvRadiusClassNames } from "@/lib/ui-radii";
 import { cn } from "@/lib/utils";
 
 type MstvPopoverPlacement = "bottom-start" | "bottom-end" | "top-start" | "top-end";
@@ -157,7 +158,8 @@ export function MstvPopover({
       ref={popoverRef}
       style={position ?? { position: "fixed", left: -9999, top: -9999, zIndex: mstvLayerZIndex.popover }}
       className={cn(
-        "overflow-auto rounded-2xl bg-white p-1.5 text-neutral-800 shadow-[0_12px_36px_rgba(0,0,0,0.055)]",
+        "overflow-auto bg-white p-1.5 text-neutral-800 shadow-[0_12px_36px_rgba(0,0,0,0.055)]",
+        mstvRadiusClassNames.card,
         uiMotionClasses.scaleIn,
         className,
       )}

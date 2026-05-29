@@ -116,6 +116,7 @@ import {
 import { useNativeKeyboardVisibility } from "@/lib/use-native-keyboard-visibility";
 import { uiMotion, uiMotionClasses } from "@/lib/ui-motion";
 import { mstvLayerClassNames } from "@/lib/ui-layers";
+import { mstvRadiusClassNames } from "@/lib/ui-radii";
 import { cn } from "@/lib/utils";
 import {
   supabase,
@@ -1491,8 +1492,8 @@ const modalPanelClassName = mstvModalPanelClassName;
 const uiTextPrimaryClassName = "text-neutral-950";
 const uiTextMutedClassName = "text-neutral-500";
 const uiErrorMessageClassName = "rounded-2xl bg-rose-50 px-4 py-3 text-base font-medium text-rose-700";
-const uiNeutralButtonClassName = "rounded-xl bg-neutral-50 px-4 py-2 text-base font-semibold text-neutral-600 transition hover:bg-neutral-100 disabled:text-neutral-300";
-const uiDestructiveButtonClassName = "rounded-xl bg-[#bb2720] px-4 py-2 text-base font-semibold text-white transition hover:bg-[#a0201b] disabled:bg-neutral-300";
+const uiNeutralButtonClassName = cn(mstvRadiusClassNames.control, "bg-neutral-50 px-4 py-2 text-base font-semibold text-neutral-600 transition hover:bg-neutral-100 disabled:text-neutral-300");
+const uiDestructiveButtonClassName = cn(mstvRadiusClassNames.control, "bg-[#bb2720] px-4 py-2 text-base font-semibold text-white transition hover:bg-[#a0201b] disabled:bg-neutral-300");
 const calendarArrowClassName =
   "flex h-9 w-9 items-center justify-center rounded-full text-base text-[#bb2720] transition hover:bg-[#bb2720]/[0.08] disabled:cursor-not-allowed disabled:text-neutral-300 disabled:hover:bg-transparent";
 const weekendColumnTintStyle: React.CSSProperties = {
@@ -12232,7 +12233,7 @@ function AdminTaskDetailPanel({
 
   return (
     <>
-    <div className={cn("rounded-2xl p-3", taskTone.panel)}>
+    <div className={cn(mstvRadiusClassNames.panel, "p-3", taskTone.panel)}>
       <div className="mb-3 flex items-center justify-between gap-2">
         <button type="button" onClick={onClose} className={cn("rounded-xl bg-white px-3 py-1.5 text-sm font-semibold transition hover:bg-neutral-50", taskTone.actionText)}>
           Retour
@@ -12336,7 +12337,7 @@ function AdminTaskDetailPanel({
           <button
             type="button"
             onClick={() => onOpenEvent(linkedEvent.id)}
-            className="block w-full truncate rounded-lg py-1 text-left text-base font-semibold text-neutral-600 transition hover:text-neutral-950"
+            className="block w-full truncate rounded-xl py-1 text-left text-base font-semibold text-neutral-600 transition hover:text-neutral-950"
           >
             {getProductionEventDisplay(linkedEvent).title} · {formatShortDate(linkedEvent.date)}
           </button>
@@ -13254,7 +13255,7 @@ function CalendarMonthPage({
           onPointerCancel={onCalendarPointerCancel}
           onClickCapture={onCalendarClickCapture}
           style={{ touchAction: "pan-y" }}
-          className="mt-4 overflow-hidden rounded-[1.75rem] bg-white/70 p-0"
+          className="mt-4 overflow-hidden rounded-3xl bg-white/70 p-0"
         >
           <div className="grid grid-cols-7">
             {weekdays.map((weekday, index) => (
@@ -14877,7 +14878,7 @@ function InlineEditableTitle({
           }
         }}
         className={cn(
-          "h-8 min-w-0 rounded-lg border border-transparent bg-neutral-50/80 px-2 text-base font-semibold outline-none transition focus:border-neutral-300 focus:bg-white disabled:opacity-70",
+          "h-8 min-w-0 rounded-xl border border-transparent bg-neutral-50/80 px-2 text-base font-semibold outline-none transition focus:border-neutral-300 focus:bg-white disabled:opacity-70",
           inputClassName,
         )}
       />
@@ -15545,7 +15546,7 @@ function ContextDetailBlock({
                 draggingDocumentFiles && "border-amber-300/80 bg-amber-50/80",
               )}
             >
-              <label className="flex min-h-16 cursor-pointer items-center justify-center rounded-lg bg-amber-50/70 px-3 text-center text-base font-semibold text-amber-800 transition hover:bg-amber-100/70">
+              <label className="flex min-h-16 cursor-pointer items-center justify-center rounded-xl bg-amber-50/70 px-3 text-center text-base font-semibold text-amber-800 transition hover:bg-amber-100/70">
                 {uploadingDocumentFiles ? "Envoi..." : "Déposer ou choisir"}
                 <input
                   type="file"
@@ -19085,7 +19086,7 @@ function InlineGridDeleteConfirmation({
         : "bg-[#FEF4BD]";
 
   return (
-    <div className={cn("flex h-[4.75rem] min-w-0 flex-1 items-center justify-center rounded-[0.65rem] px-2 py-2.5 transition sm:h-20 sm:px-3", toneClassName)}>
+    <div className={cn("flex h-[4.75rem] min-w-0 flex-1 items-center justify-center rounded-xl px-2 py-2.5 transition sm:h-20 sm:px-3", toneClassName)}>
       <div className="flex items-center justify-center gap-3">
         <button
           type="button"

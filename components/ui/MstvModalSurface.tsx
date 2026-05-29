@@ -3,6 +3,7 @@
 import { createPortal } from "react-dom";
 import { uiMotionClasses } from "@/lib/ui-motion";
 import { mstvLayerClassNames, type MstvLayer } from "@/lib/ui-layers";
+import { mstvRadiusClassNames } from "@/lib/ui-radii";
 import { cn } from "@/lib/utils";
 import type { HTMLAttributes, PointerEvent, ReactNode } from "react";
 
@@ -25,7 +26,7 @@ const modalPositionClassNames: Record<MstvModalPosition, string> = {
   custom: "",
 };
 
-export const mstvModalPanelClassName = "rounded-2xl bg-white shadow-sm shadow-black/5";
+export const mstvModalPanelClassName = cn(mstvRadiusClassNames.panel, "bg-white shadow-sm shadow-black/5");
 
 export function MstvModalSurface({
   children,

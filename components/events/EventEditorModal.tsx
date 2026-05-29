@@ -12,6 +12,7 @@ import {
   type EventEditorExternalCalendar,
   type EventEditorFormInput,
 } from "@/lib/events/editor";
+import { mstvModalPanelClassName } from "@/components/ui/MstvModalSurface";
 import { useNativeKeyboardVisibility } from "@/lib/use-native-keyboard-visibility";
 import { uiMotionClasses } from "@/lib/ui-motion";
 import { cn } from "@/lib/utils";
@@ -35,7 +36,7 @@ type EventEditorModalProps = {
 
 const modalBackdropClassName = "fixed inset-0 z-40 flex bg-black/35";
 const modalSheetPositionClassName = "items-end p-3 sm:items-center sm:justify-center sm:p-6";
-const modalPanelClassName = "rounded-2xl bg-white shadow-sm shadow-black/5";
+const modalPanelClassName = mstvModalPanelClassName;
 const formInputClassName =
   "h-11 w-full rounded-xl border border-neutral-200 bg-white px-3 text-base font-medium text-neutral-950 outline-none transition focus:border-[#bb2720]/50";
 const iosKeyboardGuardProps = { "data-ios-keyboard-guard": "true" } as const;
