@@ -138,6 +138,7 @@ type EventDocumentRow = Database["public"]["Tables"]["event_documents"]["Row"];
 type EventDocumentGroupRow = Database["public"]["Tables"]["event_document_groups"]["Row"];
 type EventActivityLogRow = Database["public"]["Tables"]["event_activity_log"]["Row"];
 type EventActivityReadRow = Database["public"]["Tables"]["event_activity_reads"]["Row"];
+type EventActivityItemReadRow = Database["public"]["Tables"]["event_activity_item_reads"]["Row"];
 type NotificationRow = Database["public"]["Tables"]["notifications"]["Row"];
 type TaskRow = Database["public"]["Tables"]["tasks"]["Row"];
 type ProfileRow = Database["public"]["Tables"]["profiles"]["Row"];
@@ -393,6 +394,10 @@ type EventActivityRead = {
   eventId: string;
   profileId: string;
   readAt: string;
+};
+
+type EventActivityItemRead = EventActivityRead & {
+  itemKey: string;
 };
 
 type EventUnreadSummary = {
@@ -870,6 +875,7 @@ const realtimeTableNames = [
   "event_documents",
   "event_activity_log",
   "event_activity_reads",
+  "event_activity_item_reads",
   "tasks",
   "profiles",
   "notifications",
@@ -3355,6 +3361,15 @@ function mapEventActivityRead(row: EventActivityReadRow): EventActivityRead {
   };
 }
 
+function mapEventActivityItemRead(row: EventActivityItemReadRow): EventActivityItemRead {
+  return {
+    eventId: row.event_id,
+    profileId: row.profile_id,
+    itemKey: row.item_key,
+    readAt: row.read_at,
+  };
+}
+
 function isTrackedUnreadActivity(activity: EventUnreadActivity) {
   if (/delete|deleted|suppression/.test(activity.actionType)) return false;
   const entityType = activity.entityType ?? "event";
@@ -3417,32 +3432,46 @@ function getUnreadActivityItemKey(activity: EventUnreadActivity, event: Producti
 function buildUnreadChangeSummaries(
   activities: EventUnreadActivity[],
   reads: EventActivityRead[],
+  itemReads: EventActivityItemRead[],
   profile: UserProfile | null,
   events: ProductionEvent[],
   tasks: AppTask[],
 ) {
   const readAtByEventId = new Map(reads.map((read) => [read.eventId, read.readAt]));
+  const itemReadAtByEventAndKey = new Map(itemReads.map((read) => [`${read.eventId}:${read.itemKey}`, read.readAt]));
   const eventById = new Map(events.map((event) => [event.id, event]));
   const summaries = new Map<string, EventUnreadSummary>();
+  const countedTargetsByEventId = new Map<string, Set<string>>();
 
   activities.forEach((activity) => {
     if (!isTrackedUnreadActivity(activity)) return;
     if (isUnreadActivityCreatedByProfile(activity, profile)) return;
-    const readAt = readAtByEventId.get(activity.eventId);
-    if (readAt && activity.createdAt <= readAt) return;
 
     const event = eventById.get(activity.eventId) ?? null;
     const summary = summaries.get(activity.eventId) ?? { count: 0, hasMetadata: false, itemKeys: new Set<string>() };
-    summary.count += 1;
-
     const itemKey = getUnreadActivityItemKey(activity, event, tasks);
-    if (itemKey) {
-      summary.itemKeys.add(itemKey);
-    } else {
-      summary.hasMetadata = true;
+    const eventReadAt = readAtByEventId.get(activity.eventId);
+    const unreadForEventBadge = !eventReadAt || activity.createdAt > eventReadAt;
+
+    if (unreadForEventBadge) {
+      const targetKey = itemKey ?? "event:metadata";
+      const countedTargets = countedTargetsByEventId.get(activity.eventId) ?? new Set<string>();
+      if (!countedTargets.has(targetKey)) {
+        countedTargets.add(targetKey);
+        countedTargetsByEventId.set(activity.eventId, countedTargets);
+        summary.count += 1;
+      }
+      if (!itemKey) summary.hasMetadata = true;
     }
 
-    summaries.set(activity.eventId, summary);
+    const itemReadAt = itemKey ? itemReadAtByEventAndKey.get(`${activity.eventId}:${itemKey}`) : null;
+    if (itemKey && (!itemReadAt || activity.createdAt > itemReadAt)) {
+      summary.itemKeys.add(itemKey);
+    }
+
+    if (summary.count > 0 || summary.hasMetadata || summary.itemKeys.size > 0) {
+      summaries.set(activity.eventId, summary);
+    }
   });
 
   return summaries;
@@ -4000,7 +4029,7 @@ async function fetchUnreadChangeData(profileId: string) {
   }
 
   try {
-    const [activityResult, readsResult] = await Promise.all([
+    const [activityResult, readsResult, itemReadsResult] = await Promise.all([
       supabase
         .from("event_activity_log")
         .select("id,event_id,action_type,entity_type,entity_id,description,previous_value,new_value,created_by,created_by_profile_id,created_at")
@@ -4010,20 +4039,26 @@ async function fetchUnreadChangeData(profileId: string) {
         .from("event_activity_reads")
         .select("*")
         .eq("profile_id", profileId),
+      supabase
+        .from("event_activity_item_reads")
+        .select("*")
+        .eq("profile_id", profileId),
     ]);
 
     if (activityResult.error) throw activityResult.error;
     if (readsResult.error) throw readsResult.error;
+    if (itemReadsResult.error) throw itemReadsResult.error;
 
     return {
       activities: ((activityResult.data ?? []) as EventActivityLogRow[]).map(mapEventUnreadActivity),
       reads: ((readsResult.data ?? []) as EventActivityReadRow[]).map(mapEventActivityRead),
+      itemReads: ((itemReadsResult.data ?? []) as EventActivityItemReadRow[]).map(mapEventActivityItemRead),
     };
   } catch (unreadError) {
     const rawMessage = getRawErrorMessage(unreadError).toLocaleLowerCase("fr-FR");
-    if (/event_activity_reads|created_by_profile_id|schema cache|column .* does not exist|relation .* does not exist|pgrst204|pgrst205|42p01|42703/.test(rawMessage)) {
+    if (/event_activity_reads|event_activity_item_reads|created_by_profile_id|schema cache|column .* does not exist|relation .* does not exist|pgrst204|pgrst205|42p01|42703/.test(rawMessage)) {
       console.warn("Unread change badges are disabled until the Supabase migration is applied.", getDebugError(unreadError));
-      return { activities: [], reads: [] };
+      return { activities: [], reads: [], itemReads: [] };
     }
     throw unreadError;
   }
@@ -4201,6 +4236,7 @@ export default function Home() {
   const [activityError, setActivityError] = useState<string | null>(null);
   const [unreadActivities, setUnreadActivities] = useState<EventUnreadActivity[]>([]);
   const [eventActivityReads, setEventActivityReads] = useState<EventActivityRead[]>([]);
+  const [eventActivityItemReads, setEventActivityItemReads] = useState<EventActivityItemRead[]>([]);
   const [restoringActivityId, setRestoringActivityId] = useState<string | null>(null);
   const [eventDetailCarousel, setEventDetailCarousel] = useState<{ direction: -1 | 1; targetId: string } | null>(null);
   const [showEventDetailDesktopControls, setShowEventDetailDesktopControls] = useState(false);
@@ -4276,6 +4312,7 @@ export default function Home() {
     setEvents([]);
     setUnreadActivities([]);
     setEventActivityReads([]);
+    setEventActivityItemReads([]);
     setExternalCalendars([]);
     setExternalCalendarEvents([]);
     setNotifications([]);
@@ -4339,8 +4376,8 @@ export default function Home() {
     [events, isProductionEventVisible],
   );
   const unreadChangeSummaries = useMemo(
-    () => buildUnreadChangeSummaries(unreadActivities, eventActivityReads, profile, visibleProductionEvents, tasks),
-    [eventActivityReads, profile?.id, profile?.email, profile?.firstName, profile?.lastName, tasks, unreadActivities, visibleProductionEvents],
+    () => buildUnreadChangeSummaries(unreadActivities, eventActivityReads, eventActivityItemReads, profile, visibleProductionEvents, tasks),
+    [eventActivityItemReads, eventActivityReads, profile?.id, profile?.email, profile?.firstName, profile?.lastName, tasks, unreadActivities, visibleProductionEvents],
   );
   const chronologicalEvents = useMemo(() => [...visibleProductionEvents].sort((a, b) => eventSortValue(a) - eventSortValue(b)), [visibleProductionEvents]);
   const selectedEvent = useMemo(() => {
@@ -4964,7 +5001,7 @@ export default function Home() {
         fetchExternalCalendars(),
         fetchExternalCalendarEvents(),
         fetchTasks(),
-        profile?.id ? fetchUnreadChangeData(profile.id) : Promise.resolve({ activities: [], reads: [] }),
+        profile?.id ? fetchUnreadChangeData(profile.id) : Promise.resolve({ activities: [], reads: [], itemReads: [] }),
       ]);
       const eventCounts = getProductionEventNetworkCounts(nextEvents);
       logNetworkDebug("reloadData:complete", {
@@ -4980,6 +5017,7 @@ export default function Home() {
           tasks: nextTasks.length,
           unreadChanges: nextUnreadData.activities.length,
           readReceipts: nextUnreadData.reads.length,
+          itemReadReceipts: nextUnreadData.itemReads.length,
         },
         approxJsonBytes: {
           events: getApproxJsonBytes(nextEvents),
@@ -4988,6 +5026,7 @@ export default function Home() {
           tasks: getApproxJsonBytes(nextTasks),
           unreadChanges: getApproxJsonBytes(nextUnreadData.activities),
           readReceipts: getApproxJsonBytes(nextUnreadData.reads),
+          itemReadReceipts: getApproxJsonBytes(nextUnreadData.itemReads),
         },
       });
       if (authSession?.user.id) {
@@ -5002,6 +5041,7 @@ export default function Home() {
       setTasks(nextTasks);
       setUnreadActivities(nextUnreadData.activities);
       setEventActivityReads(nextUnreadData.reads);
+      setEventActivityItemReads(nextUnreadData.itemReads);
       setExternalCalendars((current) => mergeExternalCalendarList(current, nextExternalCalendars));
       setExternalCalendarEvents(nextExternalEvents);
       setSelectedId((current) => {
@@ -6475,6 +6515,38 @@ export default function Home() {
     }
   }
 
+  async function markEventItemChangesRead(eventId: string, itemKey: string) {
+    if (!supabase || !profile?.id || !online) return;
+    const readAt = new Date().toISOString();
+    const read: EventActivityItemRead = { eventId, profileId: profile.id, itemKey, readAt };
+
+    setEventActivityItemReads((current) => {
+      const withoutItem = current.filter((item) => item.eventId !== eventId || item.profileId !== profile.id || item.itemKey !== itemKey);
+      return [...withoutItem, read];
+    });
+
+    const { error: readError } = await supabase
+      .from("event_activity_item_reads")
+      .upsert(
+        {
+          event_id: eventId,
+          profile_id: profile.id,
+          item_key: itemKey,
+          read_at: readAt,
+        },
+        { onConflict: "event_id,profile_id,item_key" },
+      );
+
+    if (readError) {
+      console.warn("Failed to mark event item changes as read.", {
+        eventId,
+        profileId: profile.id,
+        itemKey,
+        error: getDebugError(readError),
+      });
+    }
+  }
+
   async function logEventActivity(input: {
     eventId: string;
     actionType: string;
@@ -7387,6 +7459,7 @@ export default function Home() {
         tasks={tasks.filter((task) => task.eventId === eventToRender.id)}
         profiles={taskProfiles}
         unreadSummary={unreadChangeSummaries.get(eventToRender.id) ?? null}
+        onMarkItemRead={(itemKey) => void markEventItemChangesRead(eventToRender.id, itemKey)}
         onUpdateTask={updateTask}
         permissions={permissions}
         profile={profile}
@@ -14478,6 +14551,7 @@ function SwipeableCalendarEventRow({
           isDragging ? "transition-none" : "transition-transform duration-200 ease-out",
         )}
       >
+        {unreadCount > 0 && <span className="absolute right-3 top-2 z-20"><UnreadCountBadge count={unreadCount} /></span>}
         <span style={externalTone.stripeStyle} className={cn("h-full min-h-14 rounded-full", externalLink?.calendarColor ? externalTone.stripe : "bg-[#bb2720]")} />
         <span className="min-w-0">
           <span className="block text-base font-semibold leading-snug text-neutral-950">{display.title}</span>
@@ -14485,7 +14559,6 @@ function SwipeableCalendarEventRow({
         </span>
         <span className="flex items-center justify-end gap-2 pl-2 text-right">
           {timeRange && <span className="text-base font-medium text-neutral-500">{timeRange}</span>}
-          {unreadCount > 0 && <UnreadCountBadge count={unreadCount} />}
         </span>
       </div>
     </div>
@@ -14804,6 +14877,7 @@ function ProductionDetail({
   tasks,
   profiles,
   unreadSummary,
+  onMarkItemRead,
   onUpdateTask,
   permissions,
   profile,
@@ -14838,6 +14912,7 @@ function ProductionDetail({
   tasks: AppTask[];
   profiles: UserProfile[];
   unreadSummary: EventUnreadSummary | null;
+  onMarkItemRead: (itemKey: string) => void;
   onUpdateTask: (task: AppTask, patch: TaskUpdatePatch) => Promise<void>;
   permissions: AppPermissions;
   profile: UserProfile | null;
@@ -14955,16 +15030,19 @@ function ProductionDetail({
   }, [event.id]);
 
   function selectOption(option: EventOption) {
+    onMarkItemRead(`option:${option.id}`);
     setContextSelection((current) =>
       current?.type === "option" && current.optionId === option.id ? null : { type: "option", optionId: option.id },
     );
   }
 
   function selectLink(link: EventLink) {
+    onMarkItemRead(`link:${link.id}`);
     setContextSelection((current) => (current?.type === "link" && current.linkId === link.id ? null : { type: "link", linkId: link.id }));
   }
 
   function selectDocumentGroup(group: EventDocumentGroup) {
+    onMarkItemRead(`document:${group.id}`);
     setContextSelection((current) =>
       current?.type === "document" && current.groupId === group.id ? null : { type: "document", groupId: group.id },
     );
