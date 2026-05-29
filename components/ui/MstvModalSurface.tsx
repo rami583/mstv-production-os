@@ -6,7 +6,7 @@ import { mstvLayerClassNames, type MstvLayer } from "@/lib/ui-layers";
 import { cn } from "@/lib/utils";
 import type { HTMLAttributes, PointerEvent, ReactNode } from "react";
 
-type MstvModalPosition = "center" | "sheet";
+type MstvModalPosition = "center" | "sheet" | "custom";
 
 type MstvModalSurfaceProps = {
   children: ReactNode;
@@ -22,6 +22,7 @@ type MstvModalSurfaceProps = {
 const modalPositionClassNames: Record<MstvModalPosition, string> = {
   center: "items-center justify-center p-3 sm:p-6",
   sheet: "items-end justify-center p-3 sm:items-center sm:p-6",
+  custom: "",
 };
 
 export const mstvModalPanelClassName = "rounded-2xl bg-white shadow-sm shadow-black/5";

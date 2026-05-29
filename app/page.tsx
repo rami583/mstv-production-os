@@ -1485,7 +1485,6 @@ const importantNotificationTypes = new Set([
   "google_calendar_sync_failed",
 ]);
 const modalBackdropClassName = cn("fixed inset-0 flex bg-black/35", mstvLayerClassNames.modal);
-const elevatedModalBackdropClassName = cn("fixed inset-0 flex bg-black/35", mstvLayerClassNames.elevatedModal);
 const notificationLayerClassName = cn("fixed inset-0 flex bg-black/35", mstvLayerClassNames.notification);
 const modalSheetPositionClassName = "items-end p-3 sm:items-center sm:justify-center sm:p-6";
 const modalPanelClassName = mstvModalPanelClassName;
@@ -17042,22 +17041,18 @@ function ExternalCalendarsSheet({
   useEscapeToClose(onClose);
 
   return (
-    <div
-      className={cn(
-        modalBackdropClassName,
-        isMobileFormView ? "items-stretch p-0 sm:items-center sm:justify-center sm:p-6" : "items-end p-3 sm:items-center sm:justify-center sm:p-6",
-      )}
-      onPointerDown={(pointerEvent) => handleModalBackdropPointerDown(pointerEvent, onClose)}
+    <MstvModalSurface
+      onClose={onClose}
+      position="custom"
+      className={cn(isMobileFormView ? "items-stretch p-0 sm:items-center sm:justify-center sm:p-6" : "items-end p-3 sm:items-center sm:justify-center sm:p-6")}
     >
-      <div
+      <MstvModalPanel
         className={cn(
-          modalPanelClassName,
           "flex w-full flex-col",
           isMobileFormView
             ? "h-[var(--app-height)] max-h-[var(--app-height)] rounded-none px-4 pb-[calc(env(safe-area-inset-bottom)+1rem)] pt-[calc(env(safe-area-inset-top)+var(--app-viewport-offset-top)+1rem)] shadow-none sm:h-auto sm:max-h-[86vh] sm:max-w-2xl sm:rounded-2xl sm:p-5 sm:shadow-sm sm:shadow-black/5"
             : "max-h-[86vh] p-4 sm:max-w-2xl sm:p-5",
         )}
-        onPointerDown={(pointerEvent) => pointerEvent.stopPropagation()}
       >
         {isMobileFormView && (
           <div className="mb-5 flex items-center justify-between sm:hidden">
@@ -17159,8 +17154,8 @@ function ExternalCalendarsSheet({
             />
           )}
         </div>
-      </div>
-    </div>
+      </MstvModalPanel>
+    </MstvModalSurface>
   );
 }
 
@@ -17927,17 +17922,10 @@ function SharedConfirmationDialog({
   onConfirm: () => void;
 }) {
   useEscapeToClose(onCancel);
-  if (typeof document === "undefined") return null;
 
-  return createPortal(
-    <div
-      className={cn(elevated ? elevatedModalBackdropClassName : modalBackdropClassName, "items-center justify-center p-3 sm:p-6", uiMotionClasses.modalBackdropIn)}
-      onPointerDown={(pointerEvent) => handleModalBackdropPointerDown(pointerEvent, onCancel)}
-    >
-      <div
-        className={cn(modalPanelClassName, "w-full p-5 sm:p-6", maxWidthClassName, uiMotionClasses.modalPanelIn)}
-        onPointerDown={(pointerEvent) => pointerEvent.stopPropagation()}
-      >
+  return (
+    <MstvModalSurface onClose={onCancel} layer={elevated ? "elevatedModal" : "modal"} position="center">
+      <MstvModalPanel className={cn("w-full p-5 sm:p-6", maxWidthClassName)}>
         <div className="mb-5">
           <h2 className={cn("text-base font-semibold", uiTextPrimaryClassName)}>{title}</h2>
           {description && <p className={cn("mt-2 text-base font-medium leading-relaxed", uiTextMutedClassName)}>{description}</p>}
@@ -17959,9 +17947,8 @@ function SharedConfirmationDialog({
             {busy ? busyLabel ?? confirmLabel : confirmLabel}
           </button>
         </div>
-      </div>
-    </div>,
-    document.body,
+      </MstvModalPanel>
+    </MstvModalSurface>
   );
 }
 
