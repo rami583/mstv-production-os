@@ -15071,7 +15071,7 @@ function getTaskSurfaceTone(task: AppTask, priorityIndex: number | null) {
 
 function getTaskTone(task: AppTask) {
   return {
-    panel: "bg-[#F2F2F2]",
+    panel: "bg-[var(--app-background)]",
     title: task.status === "done" ? "text-neutral-500 line-through" : "text-neutral-950",
     body: "text-neutral-700",
     meta: "text-neutral-400",
