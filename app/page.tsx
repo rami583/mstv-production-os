@@ -3966,6 +3966,7 @@ export default function Home() {
   const [tasks, setTasks] = useState<AppTask[]>([]);
   const [tasksLoading, setTasksLoading] = useState(false);
   const [tasksError, setTasksError] = useState<string | null>(null);
+  const [tasksNavigationRequest, setTasksNavigationRequest] = useState(0);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [notificationsHydrated, setNotificationsHydrated] = useState(false);
   const [online, setOnline] = useState(() => typeof navigator === "undefined" ? true : navigator.onLine);
@@ -6986,6 +6987,12 @@ export default function Home() {
     setVisibleMonth(new Date(now.getFullYear(), now.getMonth(), 1));
     setSelectedDateKey(formatDateKey(now));
     setScreen("calendar");
+  }
+
+  function openTasksFromHeader() {
+    setCreateMenuOpen(false);
+    setScreen("tasks");
+    setTasksNavigationRequest((request) => request + 1);
   }
 
   function selectYearOverviewMonth(year: number, monthIndex: number) {
@@ -10614,8 +10621,7 @@ export default function Home() {
           onOpenNotification={handleNotificationOpen}
           onDismissNotification={markNotificationRead}
           onOpenTasks={() => {
-            setCreateMenuOpen(false);
-            setScreen("tasks");
+            openTasksFromHeader();
           }}
           onImportQuote={() => {
             if (!headerPermissions.canManageEvents) return;
@@ -10698,6 +10704,7 @@ export default function Home() {
               permissions={permissions}
               loading={tasksLoading}
               error={tasksError}
+              navigationRequest={tasksNavigationRequest}
               onClose={() => setScreen("calendar")}
               onCreateTask={createTask}
               onUpdateTask={updateTask}
@@ -10766,8 +10773,7 @@ export default function Home() {
           onDismissNotification={markNotificationRead}
           onOpenTasks={() => {
             setYearOverviewOpen(false);
-            setCreateMenuOpen(false);
-            setScreen("tasks");
+            openTasksFromHeader();
           }}
           onGoToday={() => {
             goToday();
@@ -11427,6 +11433,7 @@ function TeamTasksSheet({
   permissions,
   loading,
   error,
+  navigationRequest,
   onClose,
   onCreateTask,
   onUpdateTask,
@@ -11441,6 +11448,7 @@ function TeamTasksSheet({
   permissions: AppPermissions;
   loading: boolean;
   error: string | null;
+  navigationRequest: number;
   onClose: () => void;
   onCreateTask: (input: TaskCreateInput) => Promise<AppTask>;
   onUpdateTask: (task: AppTask, patch: TaskUpdatePatch) => Promise<void>;
@@ -11455,6 +11463,7 @@ function TeamTasksSheet({
   const taskDetailViewportRef = useRef<HTMLDivElement | null>(null);
   const taskDetailTransitioningRef = useRef(false);
   const taskDetailTransitionTimeoutRef = useRef<number | null>(null);
+  const lastTasksNavigationRequestRef = useRef(navigationRequest);
   const [selectedProfileId, setSelectedProfileId] = useState<string | null>(() => currentProfile?.id ?? null);
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const [taskDetailPagerOffset, setTaskDetailPagerOffset] = useState(0);
@@ -11525,6 +11534,20 @@ function TeamTasksSheet({
     const nextIds = todoTasks.map((task) => task.id);
     setOrderIds((currentIds) => (currentIds.join("|") === nextIds.join("|") ? currentIds : nextIds));
   }, [draggingId, todoTasks]);
+
+  useEffect(() => {
+    if (navigationRequest === lastTasksNavigationRequestRef.current) return;
+    lastTasksNavigationRequestRef.current = navigationRequest;
+
+    if (selectedTask) {
+      closeSelectedTaskEditor();
+      return;
+    }
+
+    if (currentProfile?.id && taskPeople.some((person) => person.id === currentProfile.id)) {
+      setSelectedProfileId(currentProfile.id);
+    }
+  }, [currentProfile?.id, navigationRequest, selectedTask, taskPeople]);
 
   useEffect(() => {
     return () => {
