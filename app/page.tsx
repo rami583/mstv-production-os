@@ -3451,9 +3451,11 @@ function buildUnreadChangeSummaries(
     const summary = summaries.get(activity.eventId) ?? { count: 0, hasMetadata: false, itemKeys: new Set<string>() };
     const itemKey = getUnreadActivityItemKey(activity, event, tasks);
     const eventReadAt = readAtByEventId.get(activity.eventId);
-    const unreadForEventBadge = !eventReadAt || activity.createdAt > eventReadAt;
+    const itemReadAt = itemKey ? itemReadAtByEventAndKey.get(`${activity.eventId}:${itemKey}`) : null;
+    const targetReadAt = itemKey ? itemReadAt : eventReadAt;
+    const unreadForTarget = !targetReadAt || activity.createdAt > targetReadAt;
 
-    if (unreadForEventBadge) {
+    if (unreadForTarget) {
       const targetKey = itemKey ?? "event:metadata";
       const countedTargets = countedTargetsByEventId.get(activity.eventId) ?? new Set<string>();
       if (!countedTargets.has(targetKey)) {
@@ -3464,8 +3466,7 @@ function buildUnreadChangeSummaries(
       if (!itemKey) summary.hasMetadata = true;
     }
 
-    const itemReadAt = itemKey ? itemReadAtByEventAndKey.get(`${activity.eventId}:${itemKey}`) : null;
-    if (itemKey && (!itemReadAt || activity.createdAt > itemReadAt)) {
+    if (itemKey && unreadForTarget) {
       summary.itemKeys.add(itemKey);
     }
 
@@ -4842,11 +4843,13 @@ export default function Home() {
 
   useEffect(() => {
     if (screen !== "detail" || !selectedEvent || !profile?.id || !online) return;
-    const unreadCount = unreadChangeSummaries.get(selectedEvent.id)?.count ?? 0;
-    if (unreadCount === 0) return;
+    const unreadSummary = unreadChangeSummaries.get(selectedEvent.id);
+    const unreadCount = unreadSummary?.count ?? 0;
+    const unreadItemKeys = unreadSummary ? Array.from(unreadSummary.itemKeys) : [];
+    if (unreadCount === 0 && unreadItemKeys.length === 0) return;
 
     const readTimer = window.setTimeout(() => {
-      void markEventChangesRead(selectedEvent.id);
+      void markEventChangesRead(selectedEvent.id, unreadItemKeys);
     }, 1400);
 
     return () => window.clearTimeout(readTimer);
@@ -6485,15 +6488,25 @@ export default function Home() {
     }
   }
 
-  async function markEventChangesRead(eventId: string) {
+  async function markEventChangesRead(eventId: string, itemKeys: string[] = []) {
     if (!supabase || !profile?.id || !online) return;
     const readAt = new Date().toISOString();
     const read: EventActivityRead = { eventId, profileId: profile.id, readAt };
+    const uniqueItemKeys = Array.from(new Set(itemKeys.filter(Boolean)));
+    const itemReads: EventActivityItemRead[] = uniqueItemKeys.map((itemKey) => ({ eventId, profileId: profile.id, itemKey, readAt }));
 
     setEventActivityReads((current) => {
       const withoutEvent = current.filter((item) => item.eventId !== eventId || item.profileId !== profile.id);
       return [...withoutEvent, read];
     });
+
+    if (itemReads.length > 0) {
+      setEventActivityItemReads((current) => {
+        const itemKeySet = new Set(uniqueItemKeys);
+        const withoutItems = current.filter((item) => item.eventId !== eventId || item.profileId !== profile.id || !itemKeySet.has(item.itemKey));
+        return [...withoutItems, ...itemReads];
+      });
+    }
 
     const { error: readError } = await supabase
       .from("event_activity_reads")
@@ -6506,42 +6519,33 @@ export default function Home() {
         { onConflict: "event_id,profile_id" },
       );
 
+    if (uniqueItemKeys.length > 0) {
+      const { error: itemReadError } = await supabase
+        .from("event_activity_item_reads")
+        .upsert(
+          uniqueItemKeys.map((itemKey) => ({
+            event_id: eventId,
+            profile_id: profile.id,
+            item_key: itemKey,
+            read_at: readAt,
+          })),
+          { onConflict: "event_id,profile_id,item_key" },
+        );
+
+      if (itemReadError) {
+        console.warn("Failed to mark event item changes as read.", {
+          eventId,
+          profileId: profile.id,
+          itemKeys: uniqueItemKeys,
+          error: getDebugError(itemReadError),
+        });
+      }
+    }
+
     if (readError) {
       console.warn("Failed to mark event changes as read.", {
         eventId,
         profileId: profile.id,
-        error: getDebugError(readError),
-      });
-    }
-  }
-
-  async function markEventItemChangesRead(eventId: string, itemKey: string) {
-    if (!supabase || !profile?.id || !online) return;
-    const readAt = new Date().toISOString();
-    const read: EventActivityItemRead = { eventId, profileId: profile.id, itemKey, readAt };
-
-    setEventActivityItemReads((current) => {
-      const withoutItem = current.filter((item) => item.eventId !== eventId || item.profileId !== profile.id || item.itemKey !== itemKey);
-      return [...withoutItem, read];
-    });
-
-    const { error: readError } = await supabase
-      .from("event_activity_item_reads")
-      .upsert(
-        {
-          event_id: eventId,
-          profile_id: profile.id,
-          item_key: itemKey,
-          read_at: readAt,
-        },
-        { onConflict: "event_id,profile_id,item_key" },
-      );
-
-    if (readError) {
-      console.warn("Failed to mark event item changes as read.", {
-        eventId,
-        profileId: profile.id,
-        itemKey,
         error: getDebugError(readError),
       });
     }
@@ -7459,7 +7463,6 @@ export default function Home() {
         tasks={tasks.filter((task) => task.eventId === eventToRender.id)}
         profiles={taskProfiles}
         unreadSummary={unreadChangeSummaries.get(eventToRender.id) ?? null}
-        onMarkItemRead={(itemKey) => void markEventItemChangesRead(eventToRender.id, itemKey)}
         onUpdateTask={updateTask}
         permissions={permissions}
         profile={profile}
@@ -14011,7 +14014,7 @@ function CalendarMonthPage({
           />
         </div>
       </div>
-      <div className="no-scrollbar min-h-0 flex-1 overflow-y-auto overscroll-contain pb-5">
+      <div className="no-scrollbar min-h-0 flex-1 overflow-y-auto overscroll-contain pb-5 pr-2 pt-2">
         <SelectedDayEvents
           markers={selectedMarkers}
           events={selectedEvents}
@@ -14316,7 +14319,7 @@ function UnreadCountBadge({ count }: { count: number }) {
 }
 
 function UnreadDot({ className }: { className?: string }) {
-  return <span aria-hidden="true" className={cn("absolute right-2 top-2 h-3 w-3 rounded-full bg-[#bb2720]", className)} />;
+  return <span aria-hidden="true" className={cn("absolute right-2 top-2 h-3 w-3 rounded-full border-2 border-[#bb2720] bg-white/80", className)} />;
 }
 
 function ExternalCalendarEventRow({
@@ -14555,7 +14558,7 @@ function SwipeableCalendarEventRow({
           isDragging ? "transition-none" : "transition-transform duration-200 ease-out",
         )}
       >
-        {unreadCount > 0 && <span className="pointer-events-none absolute -right-1.5 -top-2 z-20"><UnreadCountBadge count={unreadCount} /></span>}
+        {unreadCount > 0 && <span className="pointer-events-none absolute -right-2 -top-2.5 z-30"><UnreadCountBadge count={unreadCount} /></span>}
         <span style={externalTone.stripeStyle} className={cn("h-full min-h-14 rounded-full", externalLink?.calendarColor ? externalTone.stripe : "bg-[#bb2720]")} />
         <span className="min-w-0">
           <span className="block text-base font-semibold leading-snug text-neutral-950">{display.title}</span>
@@ -14881,7 +14884,6 @@ function ProductionDetail({
   tasks,
   profiles,
   unreadSummary,
-  onMarkItemRead,
   onUpdateTask,
   permissions,
   profile,
@@ -14916,7 +14918,6 @@ function ProductionDetail({
   tasks: AppTask[];
   profiles: UserProfile[];
   unreadSummary: EventUnreadSummary | null;
-  onMarkItemRead: (itemKey: string) => void;
   onUpdateTask: (task: AppTask, patch: TaskUpdatePatch) => Promise<void>;
   permissions: AppPermissions;
   profile: UserProfile | null;
@@ -15034,19 +15035,16 @@ function ProductionDetail({
   }, [event.id]);
 
   function selectOption(option: EventOption) {
-    onMarkItemRead(`option:${option.id}`);
     setContextSelection((current) =>
       current?.type === "option" && current.optionId === option.id ? null : { type: "option", optionId: option.id },
     );
   }
 
   function selectLink(link: EventLink) {
-    onMarkItemRead(`link:${link.id}`);
     setContextSelection((current) => (current?.type === "link" && current.linkId === link.id ? null : { type: "link", linkId: link.id }));
   }
 
   function selectDocumentGroup(group: EventDocumentGroup) {
-    onMarkItemRead(`document:${group.id}`);
     setContextSelection((current) =>
       current?.type === "document" && current.groupId === group.id ? null : { type: "document", groupId: group.id },
     );
