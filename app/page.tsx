@@ -11144,8 +11144,12 @@ function AppHeader({
               <button
                 ref={createMenuButtonRef}
                 onClick={() => setCreateMenuOpen((current) => !current)}
-                className="flex h-10 w-10 items-center justify-center rounded-full bg-[#bb2720] text-base font-semibold leading-none text-white transition hover:bg-[#a7211b]"
+                className={cn(
+                  "flex h-10 w-10 items-center justify-center rounded-full bg-white text-base font-semibold leading-none transition hover:bg-white active:bg-white focus:bg-white focus-visible:bg-white focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#bb2720]/35",
+                  createMenuOpen ? "text-[#bb2720]" : "text-neutral-600",
+                )}
                 aria-label="Créer"
+                aria-pressed={createMenuOpen}
               >
                 +
               </button>
@@ -19123,7 +19127,7 @@ function NotificationMenu({
         type="button"
         onClick={() => setOpen((current) => !current)}
         className={cn(
-          "relative flex h-10 w-10 items-center justify-center rounded-full bg-white transition hover:bg-neutral-50",
+          "relative flex h-10 w-10 items-center justify-center rounded-full bg-white transition hover:bg-white active:bg-white focus:bg-white focus-visible:bg-white focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#bb2720]/35",
           open ? "text-[#bb2720]" : "text-neutral-600",
         )}
         title="Notifications"
@@ -19213,7 +19217,7 @@ function HeaderIcon({ label, icon: Icon, active = false, onClick }: { label: str
       type="button"
       onClick={onClick}
       className={cn(
-        "flex h-10 w-10 items-center justify-center rounded-full bg-white transition hover:bg-neutral-50",
+        "flex h-10 w-10 items-center justify-center rounded-full bg-white transition hover:bg-white active:bg-white focus:bg-white focus-visible:bg-white focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#bb2720]/35",
         active ? "text-[#bb2720]" : "text-neutral-600",
       )}
       title={label}
@@ -19341,7 +19345,7 @@ function AccountMenu({
         type="button"
         onClick={() => setOpen((current) => !current)}
         className={cn(
-          "flex h-10 w-10 items-center justify-center rounded-full bg-white text-sm font-semibold transition hover:bg-neutral-50",
+          "flex h-10 w-10 items-center justify-center rounded-full bg-white text-sm font-semibold transition hover:bg-white active:bg-white focus:bg-white focus-visible:bg-white focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#bb2720]/35",
           open ? "text-[#bb2720]" : "text-neutral-700",
         )}
         aria-label="Compte"
