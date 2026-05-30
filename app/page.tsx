@@ -3452,10 +3452,9 @@ function buildUnreadChangeSummaries(
     const itemKey = getUnreadActivityItemKey(activity, event, tasks);
     const eventReadAt = readAtByEventId.get(activity.eventId);
     const itemReadAt = itemKey ? itemReadAtByEventAndKey.get(`${activity.eventId}:${itemKey}`) : null;
-    const targetReadAt = itemKey ? itemReadAt : eventReadAt;
-    const unreadForTarget = !targetReadAt || activity.createdAt > targetReadAt;
+    const unreadForEventBadge = !eventReadAt || activity.createdAt > eventReadAt;
 
-    if (unreadForTarget) {
+    if (unreadForEventBadge) {
       const targetKey = itemKey ?? "event:metadata";
       const countedTargets = countedTargetsByEventId.get(activity.eventId) ?? new Set<string>();
       if (!countedTargets.has(targetKey)) {
@@ -3466,7 +3465,7 @@ function buildUnreadChangeSummaries(
       if (!itemKey) summary.hasMetadata = true;
     }
 
-    if (itemKey && unreadForTarget) {
+    if (itemKey && (!itemReadAt || activity.createdAt > itemReadAt)) {
       summary.itemKeys.add(itemKey);
     }
 
@@ -4256,6 +4255,8 @@ export default function Home() {
   const selectedIdRef = useRef<string | null>(null);
   const visibleAppleSyncWindowRef = useRef<{ start: Date; end: Date } | null>(null);
   const visibleProductionEventsRef = useRef<ProductionEvent[]>([]);
+  const activeUnreadDetailEventIdRef = useRef<string | null>(null);
+  const unreadItemKeysByDetailEventRef = useRef<Map<string, string[]>>(new Map());
   const onlineRef = useRef(online);
   const processPendingSyncQueueRef = useRef<((options?: { forceOnline?: boolean }) => Promise<void>) | null>(null);
   const googleCalendarBootstrapKeyRef = useRef<string | null>(null);
@@ -4845,15 +4846,36 @@ export default function Home() {
     if (screen !== "detail" || !selectedEvent || !profile?.id || !online) return;
     const unreadSummary = unreadChangeSummaries.get(selectedEvent.id);
     const unreadCount = unreadSummary?.count ?? 0;
-    const unreadItemKeys = unreadSummary ? Array.from(unreadSummary.itemKeys) : [];
-    if (unreadCount === 0 && unreadItemKeys.length === 0) return;
+    if (unreadCount === 0) return;
 
     const readTimer = window.setTimeout(() => {
-      void markEventChangesRead(selectedEvent.id, unreadItemKeys);
+      void markEventChangesRead(selectedEvent.id);
     }, 1400);
 
     return () => window.clearTimeout(readTimer);
   }, [online, profile?.id, screen, selectedEvent?.id, unreadChangeSummaries]);
+
+  useEffect(() => {
+    if (screen !== "detail" || !selectedEvent?.id) return;
+    const unreadSummary = unreadChangeSummaries.get(selectedEvent.id);
+    unreadItemKeysByDetailEventRef.current.set(selectedEvent.id, unreadSummary ? Array.from(unreadSummary.itemKeys) : []);
+  }, [screen, selectedEvent?.id, unreadChangeSummaries]);
+
+  useEffect(() => {
+    const currentDetailEventId = screen === "detail" && selectedEvent?.id ? selectedEvent.id : null;
+    const previousDetailEventId = activeUnreadDetailEventIdRef.current;
+
+    if (previousDetailEventId && previousDetailEventId !== currentDetailEventId) {
+      const remainingItemKeys = unreadItemKeysByDetailEventRef.current.get(previousDetailEventId) ?? [];
+      void markEventChangesRead(previousDetailEventId);
+      if (remainingItemKeys.length > 0) {
+        void markEventItemsRead(previousDetailEventId, remainingItemKeys);
+      }
+      unreadItemKeysByDetailEventRef.current.delete(previousDetailEventId);
+    }
+
+    activeUnreadDetailEventIdRef.current = currentDetailEventId;
+  }, [screen, selectedEvent?.id]);
 
   useEffect(() => {
     if (!trashOpen) return;
@@ -6488,25 +6510,15 @@ export default function Home() {
     }
   }
 
-  async function markEventChangesRead(eventId: string, itemKeys: string[] = []) {
+  async function markEventChangesRead(eventId: string) {
     if (!supabase || !profile?.id || !online) return;
     const readAt = new Date().toISOString();
     const read: EventActivityRead = { eventId, profileId: profile.id, readAt };
-    const uniqueItemKeys = Array.from(new Set(itemKeys.filter(Boolean)));
-    const itemReads: EventActivityItemRead[] = uniqueItemKeys.map((itemKey) => ({ eventId, profileId: profile.id, itemKey, readAt }));
 
     setEventActivityReads((current) => {
       const withoutEvent = current.filter((item) => item.eventId !== eventId || item.profileId !== profile.id);
       return [...withoutEvent, read];
     });
-
-    if (itemReads.length > 0) {
-      setEventActivityItemReads((current) => {
-        const itemKeySet = new Set(uniqueItemKeys);
-        const withoutItems = current.filter((item) => item.eventId !== eventId || item.profileId !== profile.id || !itemKeySet.has(item.itemKey));
-        return [...withoutItems, ...itemReads];
-      });
-    }
 
     const { error: readError } = await supabase
       .from("event_activity_reads")
@@ -6519,34 +6531,47 @@ export default function Home() {
         { onConflict: "event_id,profile_id" },
       );
 
-    if (uniqueItemKeys.length > 0) {
-      const { error: itemReadError } = await supabase
-        .from("event_activity_item_reads")
-        .upsert(
-          uniqueItemKeys.map((itemKey) => ({
-            event_id: eventId,
-            profile_id: profile.id,
-            item_key: itemKey,
-            read_at: readAt,
-          })),
-          { onConflict: "event_id,profile_id,item_key" },
-        );
-
-      if (itemReadError) {
-        console.warn("Failed to mark event item changes as read.", {
-          eventId,
-          profileId: profile.id,
-          itemKeys: uniqueItemKeys,
-          error: getDebugError(itemReadError),
-        });
-      }
-    }
-
     if (readError) {
       console.warn("Failed to mark event changes as read.", {
         eventId,
         profileId: profile.id,
         error: getDebugError(readError),
+      });
+    }
+  }
+
+  async function markEventItemsRead(eventId: string, itemKeys: string[]) {
+    if (!supabase || !profile?.id || !online) return;
+    const uniqueItemKeys = Array.from(new Set(itemKeys.filter(Boolean)));
+    if (uniqueItemKeys.length === 0) return;
+
+    const readAt = new Date().toISOString();
+    const itemReads: EventActivityItemRead[] = uniqueItemKeys.map((itemKey) => ({ eventId, profileId: profile.id, itemKey, readAt }));
+
+    setEventActivityItemReads((current) => {
+      const itemKeySet = new Set(uniqueItemKeys);
+      const withoutItems = current.filter((item) => item.eventId !== eventId || item.profileId !== profile.id || !itemKeySet.has(item.itemKey));
+      return [...withoutItems, ...itemReads];
+    });
+
+    const { error: itemReadError } = await supabase
+      .from("event_activity_item_reads")
+      .upsert(
+        uniqueItemKeys.map((itemKey) => ({
+          event_id: eventId,
+          profile_id: profile.id,
+          item_key: itemKey,
+          read_at: readAt,
+        })),
+        { onConflict: "event_id,profile_id,item_key" },
+      );
+
+    if (itemReadError) {
+      console.warn("Failed to mark event item changes as read.", {
+        eventId,
+        profileId: profile.id,
+        itemKeys: uniqueItemKeys,
+        error: getDebugError(itemReadError),
       });
     }
   }
@@ -7463,6 +7488,7 @@ export default function Home() {
         tasks={tasks.filter((task) => task.eventId === eventToRender.id)}
         profiles={taskProfiles}
         unreadSummary={unreadChangeSummaries.get(eventToRender.id) ?? null}
+        onMarkItemRead={(itemKey) => void markEventItemsRead(eventToRender.id, [itemKey])}
         onUpdateTask={updateTask}
         permissions={permissions}
         profile={profile}
@@ -14884,6 +14910,7 @@ function ProductionDetail({
   tasks,
   profiles,
   unreadSummary,
+  onMarkItemRead,
   onUpdateTask,
   permissions,
   profile,
@@ -14918,6 +14945,7 @@ function ProductionDetail({
   tasks: AppTask[];
   profiles: UserProfile[];
   unreadSummary: EventUnreadSummary | null;
+  onMarkItemRead: (itemKey: string) => void;
   onUpdateTask: (task: AppTask, patch: TaskUpdatePatch) => Promise<void>;
   permissions: AppPermissions;
   profile: UserProfile | null;
@@ -15035,16 +15063,19 @@ function ProductionDetail({
   }, [event.id]);
 
   function selectOption(option: EventOption) {
+    onMarkItemRead(`option:${option.id}`);
     setContextSelection((current) =>
       current?.type === "option" && current.optionId === option.id ? null : { type: "option", optionId: option.id },
     );
   }
 
   function selectLink(link: EventLink) {
+    onMarkItemRead(`link:${link.id}`);
     setContextSelection((current) => (current?.type === "link" && current.linkId === link.id ? null : { type: "link", linkId: link.id }));
   }
 
   function selectDocumentGroup(group: EventDocumentGroup) {
+    onMarkItemRead(`document:${group.id}`);
     setContextSelection((current) =>
       current?.type === "document" && current.groupId === group.id ? null : { type: "document", groupId: group.id },
     );
@@ -15252,7 +15283,7 @@ function ProductionDetail({
                       />
                     ) : (
                       <>
-                        {hasUnreadOptionChanges && <UnreadDot className="left-2 right-auto top-2" />}
+                        {hasUnreadOptionChanges && <UnreadDot className="right-2 top-2" />}
                         <button
                           onClick={() => selectOption(option)}
                           className={cn(
@@ -15338,7 +15369,7 @@ function ProductionDetail({
                       />
                     ) : (
                       <>
-                        {hasUnreadLinkChanges && <UnreadDot className="left-2 right-auto top-2" />}
+                        {hasUnreadLinkChanges && <UnreadDot className="right-2 top-2" />}
                         <button onClick={() => selectLink(link)} className="flex h-full min-w-0 flex-1 items-center gap-1.5 px-2 py-2.5 text-left sm:gap-2 sm:px-3">
                           <Icon className={cn("h-4 w-4 shrink-0 sm:h-5 sm:w-5", linkTone.icon)} />
                           <span className={cn("min-w-0 flex-1 truncate pr-5 text-base font-semibold", linkTone.text)}>{link.label}</span>
@@ -15402,7 +15433,7 @@ function ProductionDetail({
                       />
                     ) : (
                       <>
-                        {hasUnreadDocumentChanges && <UnreadDot className="left-2 right-auto top-2" />}
+                        {hasUnreadDocumentChanges && <UnreadDot className="right-2 top-2" />}
                         <button
                           onClick={() => selectDocumentGroup(group)}
                           className="flex h-full min-w-0 flex-1 items-center gap-1.5 px-2 py-2.5 text-left sm:gap-2 sm:px-3"
