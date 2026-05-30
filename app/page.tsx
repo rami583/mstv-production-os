@@ -12479,7 +12479,7 @@ function ProjectsView({
     if (!project) return <div className="min-h-20" aria-hidden="true" />;
     const isCurrentProject = selectedProject?.id === project.id;
     return (
-      <div className={cn("flex h-full min-h-0 flex-col rounded-3xl bg-white p-3 md:p-4", !isCurrentProject && "pointer-events-none")} aria-hidden={!isCurrentProject}>
+      <div className={cn("flex h-full min-h-0 w-full flex-col rounded-3xl bg-white p-3 md:p-4", !isCurrentProject && "pointer-events-none")} aria-hidden={!isCurrentProject}>
         <ProjectDetailPanel
           key={project.id}
           project={project}
@@ -12618,7 +12618,7 @@ function ProjectsView({
                 }}
               >
                 {[previousProject, selectedProject, nextProject].map((project, index) => (
-                  <div key={project?.id ?? `empty-project-${index}`} className="flex w-1/3 shrink-0">
+                  <div key={project?.id ?? `empty-project-${index}`} className="flex w-1/3 min-w-0 shrink-0">
                     {renderProjectDetail(project)}
                   </div>
                 ))}
