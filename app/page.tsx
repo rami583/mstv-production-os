@@ -12696,7 +12696,7 @@ function SortableTaskRow({
   const style: CSSProperties = {
     transform: CSS.Transform.toString(verticalTransform),
     transition,
-    zIndex: rowIsDragging ? 10 : undefined,
+    zIndex: rowIsDragging ? 50 : undefined,
     position: rowIsDragging ? "relative" : undefined,
   };
   const setTaskRowRef = (node: HTMLDivElement | null) => {
@@ -12776,6 +12776,8 @@ const TaskQueueRow = forwardRef<HTMLDivElement, {
         label: !completed && isTaskUrgent(task) ? "Urgente, créée par un administrateur" : "Créée par un administrateur",
       }
     : null;
+  const rowTranslateX = canSwipe ? visibleOffset : 0;
+  const rowTransform = `translateX(${rowTranslateX}px)${dragging ? " scale(1.01)" : ""}`;
 
   function setTaskQueueRowRef(node: HTMLDivElement | null) {
     rowRef.current = node;
@@ -12913,7 +12915,7 @@ const TaskQueueRow = forwardRef<HTMLDivElement, {
     <div
       ref={setTaskQueueRowRef}
       data-task-swipe-row
-      className="relative mx-0.5 overflow-hidden rounded-xl"
+      className={cn("relative mx-0.5 rounded-xl", dragging ? "z-40 overflow-visible" : "overflow-hidden")}
       {...draggableProps}
       onPointerDown={handlePointerDown}
       onPointerMove={handlePointerMove}
@@ -12971,13 +12973,13 @@ const TaskQueueRow = forwardRef<HTMLDivElement, {
           onOpen();
         }
       }}
-      style={{ transform: `translateX(${canSwipe ? visibleOffset : 0}px)`, touchAction: "pan-y" }}
+      style={{ transform: rowTransform, touchAction: "pan-y" }}
       className={cn(
-        "group relative z-10 flex min-h-11 select-none items-center gap-2 rounded-xl px-3 py-2 transition",
+        "group relative z-10 flex min-h-11 select-none items-center gap-2 rounded-xl px-3 py-2 transition-[transform,box-shadow,opacity]",
         draggable ? "cursor-grab active:cursor-grabbing" : "cursor-pointer",
         taskSurface.row,
-        dragging && "bg-white opacity-95 shadow-[0_10px_24px_rgba(0,0,0,0.12)] ring-1 ring-black/[0.03]",
-        swiping ? "transition-none" : "transition-transform duration-200 ease-out",
+        dragging && "shadow-[0_12px_28px_rgba(0,0,0,0.16)] ring-1 ring-black/[0.04]",
+        swiping ? "transition-none" : "duration-200 ease-out",
       )}
     >
       <span
