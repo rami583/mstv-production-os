@@ -998,6 +998,9 @@ const TASK_DETAIL_SWIPE_AXIS_DOMINANCE = 1.2;
 const TASK_DETAIL_SWIPE_PANEL_GAP_PX = 16;
 const TASK_DETAIL_ACTIVE_EDIT_SELECTOR = "input, textarea, select, [contenteditable='true']";
 const TASK_DETAIL_SWIPE_BLOCK_SELECTOR = "[data-task-swipe-block]";
+const PROJECT_DETAIL_SWIPE_PANEL_GAP_PX = 16;
+const PROJECT_DETAIL_ACTIVE_EDIT_SELECTOR = "input, textarea, select, [contenteditable='true']";
+const PROJECT_DETAIL_SWIPE_BLOCK_SELECTOR = "button, a, input, textarea, select, [contenteditable='true'], [data-project-swipe-block]";
 const TASK_ROW_SWIPE_ACTION_WIDTH = 112;
 const TASK_ROW_FULL_SWIPE_RATIO = 0.65;
 
@@ -1007,6 +1010,10 @@ function getSwipePageStep(viewportWidth: number) {
 
 function getTaskDetailSwipePageStep(viewportWidth: number) {
   return viewportWidth + TASK_DETAIL_SWIPE_PANEL_GAP_PX;
+}
+
+function getProjectDetailSwipePageStep(viewportWidth: number) {
+  return viewportWidth + PROJECT_DETAIL_SWIPE_PANEL_GAP_PX;
 }
 
 function getEventDetailSwipePageStep(viewportWidth: number) {
@@ -12280,7 +12287,13 @@ function ProjectsView({
   onDeleteAction: (action: ProjectAction) => Promise<void>;
 }) {
   const nativeKeyboard = useNativeKeyboardVisibility<HTMLDivElement>();
+  const projectDetailSwipeStartRef = useRef<{ pointerId: number; x: number; y: number; startedAt: number; axis: "horizontal" | "vertical" | null } | null>(null);
+  const projectDetailViewportRef = useRef<HTMLDivElement | null>(null);
+  const projectDetailTransitioningRef = useRef(false);
+  const projectDetailTransitionTimeoutRef = useRef<number | null>(null);
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
+  const [projectDetailPagerOffset, setProjectDetailPagerOffset] = useState(0);
+  const [projectDetailPagerTransitionEnabled, setProjectDetailPagerTransitionEnabled] = useState(false);
   const [creatingProject, setCreatingProject] = useState(false);
   const [creatingAction, setCreatingAction] = useState(false);
   const [localError, setLocalError] = useState<string | null>(null);
@@ -12289,6 +12302,9 @@ function ProjectsView({
   const [actionDeleteCandidate, setActionDeleteCandidate] = useState<ProjectAction | null>(null);
   const [actionDeleting, setActionDeleting] = useState(false);
   const selectedProject = selectedProjectId ? projects.find((project) => project.id === selectedProjectId) ?? null : null;
+  const selectedProjectIndex = selectedProject ? projects.findIndex((project) => project.id === selectedProject.id) : -1;
+  const previousProject = selectedProjectIndex > 0 ? projects[selectedProjectIndex - 1] : null;
+  const nextProject = selectedProjectIndex >= 0 && selectedProjectIndex < projects.length - 1 ? projects[selectedProjectIndex + 1] : null;
   const activeProjects = projects.filter((project) => project.status !== "completed");
   const completedProjects = projects.filter((project) => project.status === "completed");
 
@@ -12299,12 +12315,197 @@ function ProjectsView({
     });
   }, [projects]);
 
+  useEffect(() => {
+    return () => {
+      if (projectDetailTransitionTimeoutRef.current !== null) {
+        window.clearTimeout(projectDetailTransitionTimeoutRef.current);
+      }
+    };
+  }, []);
+
+  function resetProjectDetailSwipe() {
+    projectDetailSwipeStartRef.current = null;
+  }
+
+  function resetProjectDetailPager() {
+    projectDetailTransitioningRef.current = false;
+    projectDetailSwipeStartRef.current = null;
+    if (projectDetailTransitionTimeoutRef.current !== null) {
+      window.clearTimeout(projectDetailTransitionTimeoutRef.current);
+      projectDetailTransitionTimeoutRef.current = null;
+    }
+    setProjectDetailPagerTransitionEnabled(false);
+    setProjectDetailPagerOffset(0);
+  }
+
+  function selectProject(projectId: string | null) {
+    resetProjectDetailPager();
+    setSelectedProjectId(projectId);
+  }
+
+  function shouldBlockProjectDetailSwipeStart(target: EventTarget | null) {
+    if (!(target instanceof HTMLElement)) return false;
+    if (target.closest(PROJECT_DETAIL_SWIPE_BLOCK_SELECTOR)) return true;
+
+    const activeElement = document.activeElement;
+    if (
+      activeElement instanceof HTMLElement &&
+      activeElement.closest(PROJECT_DETAIL_ACTIVE_EDIT_SELECTOR)
+    ) {
+      return true;
+    }
+
+    return false;
+  }
+
+  function finishProjectDetailSwipe(direction: -1 | 1, viewportWidth: number) {
+    const targetProject = direction === 1 ? nextProject : previousProject;
+    if (!targetProject || projectDetailTransitioningRef.current) return;
+    const pageStep = getProjectDetailSwipePageStep(viewportWidth);
+
+    projectDetailTransitioningRef.current = true;
+    projectDetailSwipeStartRef.current = null;
+    setProjectDetailPagerTransitionEnabled(true);
+    setProjectDetailPagerOffset(direction === 1 ? -pageStep : pageStep);
+
+    if (projectDetailTransitionTimeoutRef.current !== null) {
+      window.clearTimeout(projectDetailTransitionTimeoutRef.current);
+    }
+
+    projectDetailTransitionTimeoutRef.current = window.setTimeout(() => {
+      setSelectedProjectId(targetProject.id);
+      setProjectDetailPagerTransitionEnabled(false);
+      setProjectDetailPagerOffset(0);
+      projectDetailTransitioningRef.current = false;
+      projectDetailTransitionTimeoutRef.current = null;
+    }, EVENT_DETAIL_CAROUSEL_TRANSITION_MS);
+  }
+
+  function snapProjectDetailSwipeBack() {
+    setProjectDetailPagerTransitionEnabled(true);
+    setProjectDetailPagerOffset(0);
+    window.setTimeout(() => {
+      if (!projectDetailTransitioningRef.current) {
+        setProjectDetailPagerTransitionEnabled(false);
+      }
+    }, EVENT_DETAIL_CAROUSEL_TRANSITION_MS);
+  }
+
+  function handleProjectDetailSwipePointerDown(pointerEvent: ReactPointerEvent<HTMLDivElement>) {
+    if (projectDetailTransitioningRef.current || projectDetailSwipeStartRef.current || shouldBlockProjectDetailSwipeStart(pointerEvent.target)) return;
+    if (projects.length <= 1) return;
+
+    projectDetailSwipeStartRef.current = {
+      pointerId: pointerEvent.pointerId,
+      x: pointerEvent.clientX,
+      y: pointerEvent.clientY,
+      startedAt: window.performance.now(),
+      axis: null,
+    };
+    setProjectDetailPagerTransitionEnabled(false);
+    setProjectDetailPagerOffset(0);
+    pointerEvent.currentTarget.setPointerCapture(pointerEvent.pointerId);
+  }
+
+  function handleProjectDetailSwipePointerMove(pointerEvent: ReactPointerEvent<HTMLDivElement>) {
+    const swipeStart = projectDetailSwipeStartRef.current;
+    if (!swipeStart || swipeStart.pointerId !== pointerEvent.pointerId) return;
+
+    const deltaX = pointerEvent.clientX - swipeStart.x;
+    const deltaY = pointerEvent.clientY - swipeStart.y;
+    const absDeltaX = Math.abs(deltaX);
+    const absDeltaY = Math.abs(deltaY);
+
+    if (!swipeStart.axis && (absDeltaX > EVENT_SWIPE_AXIS_ACTIVATION_PX || absDeltaY > EVENT_SWIPE_AXIS_ACTIVATION_PX)) {
+      if (absDeltaX > EVENT_SWIPE_AXIS_ACTIVATION_PX && absDeltaX > absDeltaY * TASK_DETAIL_SWIPE_AXIS_DOMINANCE) {
+        swipeStart.axis = "horizontal";
+      } else if (absDeltaY > EVENT_SWIPE_AXIS_ACTIVATION_PX && absDeltaY >= absDeltaX) {
+        swipeStart.axis = "vertical";
+      }
+    }
+
+    if (swipeStart.axis === "vertical") {
+      resetProjectDetailSwipe();
+      return;
+    }
+
+    if (swipeStart.axis !== "horizontal") return;
+    pointerEvent.preventDefault();
+
+    const viewportWidth = projectDetailViewportRef.current?.clientWidth ?? pointerEvent.currentTarget.clientWidth;
+    const pageStep = getProjectDetailSwipePageStep(viewportWidth);
+    const maxOffset = previousProject ? pageStep : viewportWidth * 0.16;
+    const minOffset = nextProject ? -pageStep : -viewportWidth * 0.16;
+    setProjectDetailPagerOffset(Math.max(minOffset, Math.min(maxOffset, deltaX)));
+  }
+
+  function handleProjectDetailSwipePointerUp(pointerEvent: ReactPointerEvent<HTMLDivElement>) {
+    const swipeStart = projectDetailSwipeStartRef.current;
+    if (!swipeStart || swipeStart.pointerId !== pointerEvent.pointerId) return;
+
+    const deltaX = pointerEvent.clientX - swipeStart.x;
+    const deltaY = pointerEvent.clientY - swipeStart.y;
+    const viewportWidth = projectDetailViewportRef.current?.clientWidth ?? pointerEvent.currentTarget.clientWidth;
+    const direction = deltaX < 0 ? 1 : -1;
+    const canNavigate = direction === 1 ? Boolean(nextProject) : Boolean(previousProject);
+    const elapsedMs = Math.max(1, window.performance.now() - swipeStart.startedAt);
+    const horizontalVelocity = Math.abs(deltaX) / elapsedMs;
+    resetProjectDetailSwipe();
+
+    if (swipeStart.axis !== "horizontal") return;
+
+    if (
+      (
+        Math.abs(deltaX) >= TASK_DETAIL_SWIPE_THRESHOLD_PX ||
+        (Math.abs(deltaX) >= TASK_DETAIL_SWIPE_VELOCITY_MIN_DISTANCE_PX && horizontalVelocity >= TASK_DETAIL_SWIPE_VELOCITY_THRESHOLD_PX_PER_MS)
+      ) &&
+      Math.abs(deltaX) >= Math.abs(deltaY) * TASK_DETAIL_SWIPE_HORIZONTAL_DOMINANCE &&
+      canNavigate
+    ) {
+      pointerEvent.preventDefault();
+      finishProjectDetailSwipe(direction, viewportWidth);
+      return;
+    }
+
+    snapProjectDetailSwipeBack();
+  }
+
+  function handleProjectDetailSwipeCancel() {
+    resetProjectDetailSwipe();
+    snapProjectDetailSwipeBack();
+  }
+
+  function renderProjectDetail(project: Project | null) {
+    if (!project) return <div className="min-h-20" aria-hidden="true" />;
+    const isCurrentProject = selectedProject?.id === project.id;
+    return (
+      <div className={cn("flex h-full min-h-0 flex-col rounded-3xl bg-white p-3 md:p-4", !isCurrentProject && "pointer-events-none")} aria-hidden={!isCurrentProject}>
+        <ProjectDetailPanel
+          key={project.id}
+          project={project}
+          profiles={profiles}
+          saving={creatingAction && isCurrentProject}
+          onBack={() => selectProject(null)}
+          onUpdateProject={onUpdateProject}
+          onDeleteProject={() => setProjectDeleteCandidate(project)}
+          onCreateAction={() => {
+            if (!isCurrentProject) return;
+            void createActionForSelectedProject();
+          }}
+          onUpdateAction={onUpdateAction}
+          onDeleteAction={setActionDeleteCandidate}
+          onNativeFieldFocus={nativeKeyboard.handleFieldFocus}
+        />
+      </div>
+    );
+  }
+
   async function createAndSelectProject() {
     setCreatingProject(true);
     setLocalError(null);
     try {
       const project = await onCreateProject();
-      setSelectedProjectId(project.id);
+      selectProject(project.id);
     } catch (createError) {
       setLocalError(getUserFacingErrorMessage(createError, "Impossible de créer le projet."));
     } finally {
@@ -12386,35 +12587,45 @@ function ProjectsView({
                 label="Actifs"
                 projects={activeProjects}
                 selectedProjectId={selectedProjectId}
-                onSelect={setSelectedProjectId}
+                onSelect={selectProject}
               />
               <ProjectListSection
                 label="Terminés"
                 projects={completedProjects}
                 selectedProjectId={selectedProjectId}
-                onSelect={setSelectedProjectId}
+                onSelect={selectProject}
               />
             </div>
           )}
         </aside>
 
-        <section className={cn("min-h-0 flex-col rounded-3xl bg-white p-3 md:flex md:p-4", selectedProject ? "flex" : "hidden md:flex")}>
+        <section className={cn("min-h-0 flex-col overflow-hidden md:flex", selectedProject ? "flex" : "hidden md:flex")}>
           {selectedProject ? (
-            <ProjectDetailPanel
-              key={selectedProject.id}
-              project={selectedProject}
-              profiles={profiles}
-              saving={creatingAction}
-              onBack={() => setSelectedProjectId(null)}
-              onUpdateProject={onUpdateProject}
-              onDeleteProject={() => setProjectDeleteCandidate(selectedProject)}
-              onCreateAction={() => void createActionForSelectedProject()}
-              onUpdateAction={onUpdateAction}
-              onDeleteAction={setActionDeleteCandidate}
-              onNativeFieldFocus={nativeKeyboard.handleFieldFocus}
-            />
+            <div
+              ref={projectDetailViewportRef}
+              className="no-scrollbar min-h-0 flex-1 touch-pan-y overflow-y-auto overflow-x-hidden overscroll-contain"
+              onPointerDownCapture={handleProjectDetailSwipePointerDown}
+              onPointerMoveCapture={handleProjectDetailSwipePointerMove}
+              onPointerUpCapture={handleProjectDetailSwipePointerUp}
+              onPointerCancelCapture={handleProjectDetailSwipeCancel}
+            >
+              <div
+                className="flex min-h-full w-[300%]"
+                style={{
+                  gap: `${PROJECT_DETAIL_SWIPE_PANEL_GAP_PX}px`,
+                  transform: `translate3d(calc(-33.333333% - ${PROJECT_DETAIL_SWIPE_PANEL_GAP_PX}px + ${projectDetailPagerOffset}px), 0, 0)`,
+                  transition: projectDetailPagerTransitionEnabled ? `transform ${EVENT_DETAIL_CAROUSEL_TRANSITION_MS}ms ${EVENT_DETAIL_CAROUSEL_EASING}` : undefined,
+                }}
+              >
+                {[previousProject, selectedProject, nextProject].map((project, index) => (
+                  <div key={project?.id ?? `empty-project-${index}`} className="flex w-1/3 shrink-0">
+                    {renderProjectDetail(project)}
+                  </div>
+                ))}
+              </div>
+            </div>
           ) : (
-            <div className="grid min-h-72 flex-1 place-items-center text-center">
+            <div className="grid min-h-72 flex-1 place-items-center rounded-3xl bg-white text-center">
               <div>
                 <p className="text-base font-semibold text-neutral-400">Sélectionnez un projet</p>
                 <button
