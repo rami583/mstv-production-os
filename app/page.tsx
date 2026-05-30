@@ -12578,7 +12578,13 @@ function TeamTasksSheet({
           ) : taskPeople.length === 0 ? (
             <p className="rounded-2xl bg-neutral-50 px-3 py-4 text-center text-sm font-medium text-neutral-400">Aucun membre disponible.</p>
           ) : (
-            <div className={cn("min-h-0 flex-1 overflow-hidden rounded-b-2xl bg-white px-3", uiMotionClasses.fadeIn)}>
+            <div
+              className={cn(
+                "min-h-0 flex-1 overflow-hidden bg-white px-3",
+                permissions.canManageEvents ? "rounded-b-2xl" : mstvRadiusClassNames.panel,
+                uiMotionClasses.fadeIn,
+              )}
+            >
               <div className="no-scrollbar min-h-0 h-full touch-pan-y overflow-y-auto overflow-x-hidden overscroll-contain pb-4">
                 {orderedTodoTasks.length === 0 ? (
                   <p className="rounded-2xl bg-white px-3 py-4 text-center text-sm font-medium text-neutral-300">Aucune tâche.</p>
