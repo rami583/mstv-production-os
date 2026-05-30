@@ -15283,7 +15283,7 @@ function ProductionDetail({
                       />
                     ) : (
                       <>
-                        {hasUnreadOptionChanges && <UnreadDot className="-bottom-1 -right-1 top-auto" />}
+                        {hasUnreadOptionChanges && <UnreadDot className="bottom-2 right-2 top-auto" />}
                         <button
                           onClick={() => selectOption(option)}
                           className={cn(
@@ -15369,7 +15369,7 @@ function ProductionDetail({
                       />
                     ) : (
                       <>
-                        {hasUnreadLinkChanges && <UnreadDot className="-bottom-1 -right-1 top-auto" />}
+                        {hasUnreadLinkChanges && <UnreadDot className="bottom-2 right-2 top-auto" />}
                         <button onClick={() => selectLink(link)} className="flex h-full min-w-0 flex-1 items-center gap-1.5 px-2 py-2.5 text-left sm:gap-2 sm:px-3">
                           <Icon className={cn("h-4 w-4 shrink-0 sm:h-5 sm:w-5", linkTone.icon)} />
                           <span className={cn("min-w-0 flex-1 truncate pr-5 text-base font-semibold", linkTone.text)}>{link.label}</span>
@@ -15433,7 +15433,7 @@ function ProductionDetail({
                       />
                     ) : (
                       <>
-                        {hasUnreadDocumentChanges && <UnreadDot className="-bottom-1 -right-1 top-auto" />}
+                        {hasUnreadDocumentChanges && <UnreadDot className="bottom-2 right-2 top-auto" />}
                         <button
                           onClick={() => selectDocumentGroup(group)}
                           className="flex h-full min-w-0 flex-1 items-center gap-1.5 px-2 py-2.5 text-left sm:gap-2 sm:px-3"
