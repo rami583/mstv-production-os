@@ -12521,7 +12521,7 @@ function TeamTasksSheet({
                           event.currentTarget.blur();
                         }}
                         className={cn(
-                          "shrink-0 rounded-t-xl border px-3 py-2 text-sm font-semibold transition focus:bg-transparent focus:shadow-none focus:outline-none focus-visible:bg-transparent focus-visible:shadow-none focus-visible:outline-none active:bg-transparent",
+                          "shrink-0 rounded-t-xl border px-3 py-2 text-sm font-semibold transition focus:bg-transparent focus:shadow-none focus:outline-none focus-visible:bg-transparent focus-visible:shadow-none focus-visible:outline-none active:bg-transparent lg:px-4 lg:py-2.5 lg:text-base",
                           active
                             ? "border-neutral-200/80 border-b-white bg-white text-neutral-950 shadow-sm shadow-black/5"
                             : "border-neutral-200/35 bg-transparent text-neutral-300 hover:bg-transparent hover:text-neutral-300 active:bg-transparent active:text-neutral-300 focus:text-neutral-300",
