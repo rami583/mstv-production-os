@@ -12976,7 +12976,7 @@ const TaskQueueRow = forwardRef<HTMLDivElement, {
         "group relative z-10 flex min-h-11 select-none items-center gap-2 rounded-xl px-3 py-2 transition",
         draggable ? "cursor-grab active:cursor-grabbing" : "cursor-pointer",
         taskSurface.row,
-        dragging && "bg-white opacity-90 shadow-sm shadow-black/5",
+        dragging && "bg-white opacity-95 shadow-[0_10px_24px_rgba(0,0,0,0.12)] ring-1 ring-black/[0.03]",
         swiping ? "transition-none" : "transition-transform duration-200 ease-out",
       )}
     >
