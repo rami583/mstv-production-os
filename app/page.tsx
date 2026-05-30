@@ -11098,7 +11098,7 @@ export default function Home() {
           }
           openQuoteImportFromDrop(event.dataTransfer, "app-shell");
         }}
-        className="relative mx-auto flex h-full min-h-0 w-full max-w-7xl flex-col px-4 pb-[calc(1.25rem+env(safe-area-inset-bottom))] pt-[calc(1.25rem+env(safe-area-inset-top)+var(--app-viewport-offset-top))] sm:px-6 sm:pb-[calc(1.5rem+env(safe-area-inset-bottom))] sm:pt-[calc(1.5rem+env(safe-area-inset-top)+var(--app-viewport-offset-top))] lg:px-8"
+        className="relative mx-auto flex h-full min-h-0 w-full max-w-5xl flex-col px-4 pb-[calc(1.25rem+env(safe-area-inset-bottom))] pt-[calc(1.25rem+env(safe-area-inset-top)+var(--app-viewport-offset-top))] sm:px-6 sm:pb-[calc(1.5rem+env(safe-area-inset-bottom))] sm:pt-[calc(1.5rem+env(safe-area-inset-top)+var(--app-viewport-offset-top))] lg:px-8"
       >
         <AppHeader
           screen={screen}
@@ -13584,7 +13584,7 @@ function YearOverviewOverlay({
 
   return (
     <div className="fixed inset-x-0 top-0 z-50 h-[var(--app-height)] overflow-hidden bg-[var(--app-background)] px-4 pb-[calc(1.25rem+env(safe-area-inset-bottom))] pt-[calc(1.25rem+env(safe-area-inset-top)+var(--app-viewport-offset-top))] sm:px-6 sm:pb-[calc(1.5rem+env(safe-area-inset-bottom))] sm:pt-[calc(1.5rem+env(safe-area-inset-top)+var(--app-viewport-offset-top))] lg:px-8">
-      <div className="mx-auto flex h-full min-h-0 w-full max-w-7xl flex-col">
+      <div className="mx-auto flex h-full min-h-0 w-full max-w-5xl flex-col">
         <AppHeader
           screen="calendar"
           setScreen={() => undefined}
@@ -13631,7 +13631,7 @@ function YearOverviewOverlay({
         />
       <div
         ref={yearPagerRef}
-        className="mx-auto min-h-0 w-full max-w-7xl flex-1 overflow-hidden px-0.5 sm:px-1 lg:px-2"
+        className="mx-auto min-h-0 w-full max-w-5xl flex-1 overflow-hidden px-0.5 sm:px-1 lg:px-2"
         style={{
           fontFamily: '"SF Pro Rounded", ui-rounded, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
           touchAction: "none",
