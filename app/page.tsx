@@ -12490,7 +12490,7 @@ function TeamTasksSheet({
   }
 
   return (
-    <section className="mx-auto flex min-h-0 w-full max-w-3xl flex-1 flex-col">
+    <section className="mx-auto flex min-h-0 w-full flex-1 flex-col">
         <div
           ref={nativeKeyboard.scrollContainerRef}
           className="flex min-h-0 flex-1 flex-col overflow-hidden overscroll-contain"
