@@ -12004,7 +12004,7 @@ function TeamTasksSheet({
   const eventsById = useMemo(() => new Map(events.map((event) => [event.id, event])), [events]);
   const taskPeople = useMemo(() => {
     if (!permissions.canManageEvents) return currentProfile ? [currentProfile] : [];
-    return profiles.length > 0 ? profiles : currentProfile ? [currentProfile] : [];
+    return profiles.filter((person) => person.role === "team");
   }, [currentProfile, permissions.canManageEvents, profiles]);
   const activeProfile = taskPeople.find((person) => person.id === selectedProfileId) ?? taskPeople[0] ?? null;
   const activeProfileId = activeProfile?.id ?? null;
