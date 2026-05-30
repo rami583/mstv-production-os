@@ -12994,7 +12994,7 @@ const TaskQueueRow = forwardRef<HTMLDivElement, {
       style={{ transform: rowTransform, touchAction: "pan-y" }}
       className={cn(
         "group relative z-10 flex min-h-11 select-none items-center gap-2 rounded-xl px-3 py-2 transition-[transform,box-shadow,opacity]",
-        draggable ? "cursor-grab active:cursor-grabbing" : "cursor-pointer",
+        dragging ? "cursor-grabbing" : "cursor-pointer",
         taskSurface.row,
         dragging && "opacity-90",
         swiping ? "transition-none" : "duration-200 ease-out",
