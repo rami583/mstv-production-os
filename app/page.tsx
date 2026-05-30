@@ -12662,6 +12662,12 @@ const TaskQueueRow = forwardRef<HTMLDivElement, {
   const visibleOffset = swiping ? swipeOffset : baseOffset;
   const deleteActionVisible = canSwipeDelete && visibleOffset < -1;
   const duplicateActionVisible = canSwipeDuplicate && visibleOffset > 1;
+  const showUrgentStar = !completed && isTaskUrgent(task);
+  const taskStar = showUrgentStar
+    ? { color: "text-[#bb2720]", label: "Urgent" }
+    : createdByAdmin
+      ? { color: "text-[#eab308]", label: "Créée par un administrateur" }
+      : null;
 
   function setTaskQueueRowRef(node: HTMLDivElement | null) {
     rowRef.current = node;
@@ -12874,18 +12880,11 @@ const TaskQueueRow = forwardRef<HTMLDivElement, {
       >
         {task.title}
       </span>
-      {(createdByAdmin || (!completed && isTaskUrgent(task))) && (
-        <span className="ml-auto inline-flex shrink-0 items-center justify-end gap-1.5">
-          {createdByAdmin && (
-            <span className="inline-flex h-3.5 w-3.5 shrink-0 items-center justify-center text-xs font-bold leading-none text-[#eab308]" aria-label="Créée par un administrateur" title="Créée par un administrateur">
-              ★
-            </span>
-          )}
-          {!completed && isTaskUrgent(task) && (
-            <span className="inline-flex h-3.5 w-3.5 shrink-0 items-center justify-center text-xs font-bold leading-none text-[#bb2720]" aria-label="Urgent" title="Urgent">
-              ★
-            </span>
-          )}
+      {taskStar && (
+        <span className="ml-auto inline-flex shrink-0 items-center justify-end">
+          <span className={cn("inline-flex h-3.5 w-3.5 shrink-0 items-center justify-center text-xs font-bold leading-none", taskStar.color)} aria-label={taskStar.label} title={taskStar.label}>
+            ★
+          </span>
         </span>
       )}
       </div>
