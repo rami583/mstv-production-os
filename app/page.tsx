@@ -6484,6 +6484,7 @@ export default function Home() {
     if (!supabase) {
       throw new Error("Configuration Supabase manquante.");
     }
+    const supabaseClient = supabase;
 
     const { data, error: logError } = await supabase
       .from("event_activity_log")
@@ -9334,6 +9335,7 @@ export default function Home() {
     if (!supabase) {
       throw new Error("Configuration Supabase manquante.");
     }
+    const supabaseClient = supabase;
 
     const nextLabel = formatTitleCase(label);
     if (!nextLabel) {
@@ -9387,6 +9389,75 @@ export default function Home() {
       );
     }
 
+    async function createTeamOptionTaskIfNeeded(option: EventOption) {
+      if (permissions.canManageEvents || !profile?.id || option.taskId || option.externalAssigneeName) return option;
+
+      try {
+        const linkedEvent = events.find((event) => event.id === option.eventId) ?? null;
+        const createdTask = await createTask({
+          title: option.label,
+          eventId: option.eventId,
+          assignedProfileId: profile.id,
+          priority: "normal",
+          dueDate: option.taskDueDate ?? linkedEvent?.date ?? null,
+          notes: option.taskNotes,
+        });
+        const updatePayload: Database["public"]["Tables"]["event_options"]["Update"] = {
+          task_id: createdTask.id,
+          task_due_date: createdTask.dueDate,
+          task_notes: createdTask.notes,
+          status: createdTask.status === "done" ? "completed" : "incomplete",
+          completed_by_profile_id: createdTask.status === "done" ? createdTask.assignedProfileId : null,
+          completed_by_label: null,
+          completed_by_initials: null,
+          completed_at: createdTask.status === "done" ? createdTask.completedAt ?? new Date().toISOString() : null,
+        };
+
+        const { error: updateError } = await supabaseClient
+          .from("event_options")
+          .update(updatePayload)
+          .eq("id", option.id);
+
+        if (updateError) throw updateError;
+
+        const linkedOption: EventOption = {
+          ...option,
+          taskId: createdTask.id,
+          taskDueDate: createdTask.dueDate,
+          taskNotes: createdTask.notes,
+          status: updatePayload.status ?? option.status,
+          completedByProfileId: updatePayload.completed_by_profile_id ?? null,
+          completedByLabel: updatePayload.completed_by_label ?? null,
+          completedByInitials: updatePayload.completed_by_initials ?? null,
+          completedAt: updatePayload.completed_at ?? null,
+        };
+
+        setEvents((current) =>
+          current.map((event) =>
+            event.id === option.eventId
+              ? {
+                  ...event,
+                  options: event.options.map((item) => (item.id === option.id ? linkedOption : item)),
+                }
+              : event,
+          ),
+        );
+
+        return linkedOption;
+      } catch (taskLinkError) {
+        console.warn("[MSTV options] unable to create default task for team-created option", {
+          optionId: option.id,
+          eventId: option.eventId,
+          creatorProfileId: profile.id,
+          errorCode: getSupabaseErrorField(taskLinkError, "code"),
+          errorMessage: getSupabaseErrorField(taskLinkError, "message"),
+          errorDetails: getSupabaseErrorField(taskLinkError, "details"),
+          errorHint: getSupabaseErrorField(taskLinkError, "hint"),
+        });
+        return option;
+      }
+    }
+
     if (!online) {
       const option = buildOptimisticOption();
       applyOptimisticOption(option);
@@ -9409,7 +9480,7 @@ export default function Home() {
       return option;
     }
 
-    const { data, error: insertError } = await supabase
+    const { data, error: insertError } = await supabaseClient
       .from("event_options")
       .insert(optionInsertPayload)
       .select()
@@ -9460,7 +9531,7 @@ export default function Home() {
       newValue: { label: option.label, status: option.status },
     });
 
-    return option;
+    return createTeamOptionTaskIfNeeded(option);
   }
 
   async function deleteEventOption(option: EventOption) {
@@ -11959,9 +12030,6 @@ function TeamTasksSheet({
   const urgentTodoTasks = useMemo(() => orderedTodoTasks.filter(isTaskUrgent), [orderedTodoTasks]);
   const normalTodoTasks = useMemo(() => orderedTodoTasks.filter((task) => !isTaskUrgent(task)), [orderedTodoTasks]);
   const selectedTask = selectedTaskId ? tasks.find((task) => task.id === selectedTaskId) ?? null : null;
-  const visualIndexByTaskId = useMemo(() => {
-    return new Map(normalTodoTasks.map((task, index) => [task.id, index]));
-  }, [normalTodoTasks]);
   const selectedTaskNavigationTasks = useMemo(() => {
     if (!selectedTask) return [];
     return selectedTask.status === "done" ? doneTasks : orderedTodoTasks;
@@ -12279,8 +12347,25 @@ function TeamTasksSheet({
     return permissions.canManageEvents || Boolean(currentProfile?.id && task.assignedProfileId === currentProfile.id);
   }
 
+  const optionCreatorByTaskId = useMemo(() => {
+    const creatorByTaskId = new Map<string, string | null>();
+    events.forEach((event) => {
+      event.options.forEach((option) => {
+        if (option.taskId) {
+          creatorByTaskId.set(option.taskId, option.createdByProfileId);
+        }
+      });
+    });
+    return creatorByTaskId;
+  }, [events]);
+
+  function getTaskSourceCreatorId(task: AppTask) {
+    return optionCreatorByTaskId.get(task.id) ?? task.createdBy ?? null;
+  }
+
   function wasCreatedByAdmin(task: AppTask) {
-    return Boolean(task.createdBy && profileRoleById.get(task.createdBy) === "admin");
+    const sourceCreatorId = getTaskSourceCreatorId(task);
+    return Boolean(sourceCreatorId && profileRoleById.get(sourceCreatorId) === "admin");
   }
 
   async function duplicateTask(task: AppTask) {
@@ -12352,7 +12437,7 @@ function TeamTasksSheet({
   }
 
   function renderQueueTask(task: AppTask, completed = false) {
-    const priorityIndex = !completed ? visualIndexByTaskId.get(task.id) ?? null : null;
+    const createdByAdmin = wasCreatedByAdmin(task);
     if (completed || !canSortAnyVisibleTasks || !canMoveTask(task)) {
       return (
         <TaskQueueRow
@@ -12360,8 +12445,7 @@ function TeamTasksSheet({
           task={task}
           selected={selectedTaskId === task.id}
           completed={completed}
-          priorityIndex={priorityIndex}
-          createdByAdmin={wasCreatedByAdmin(task)}
+          createdByAdmin={createdByAdmin}
           canDelete={canDeleteTask(task)}
           canDuplicate={canDuplicateTask(task)}
           onDelete={() => void requestDeleteTask(task)}
@@ -12377,8 +12461,7 @@ function TeamTasksSheet({
         task={task}
         selected={selectedTaskId === task.id}
         dragging={draggingId === task.id}
-        priorityIndex={priorityIndex}
-        createdByAdmin={wasCreatedByAdmin(task)}
+        createdByAdmin={createdByAdmin}
         canDrag={canMoveTask(task)}
         canDelete={canDeleteTask(task)}
         canDuplicate={canDuplicateTask(task)}
@@ -12567,7 +12650,6 @@ function SortableTaskRow({
   task,
   selected,
   dragging = false,
-  priorityIndex,
   createdByAdmin,
   canDrag,
   canDelete,
@@ -12579,7 +12661,6 @@ function SortableTaskRow({
   task: AppTask;
   selected: boolean;
   dragging?: boolean;
-  priorityIndex: number | null;
   createdByAdmin: boolean;
   canDrag: boolean;
   canDelete: boolean;
@@ -12620,7 +12701,6 @@ function SortableTaskRow({
         task={task}
         selected={selected}
         dragging={rowIsDragging}
-        priorityIndex={priorityIndex}
         createdByAdmin={createdByAdmin}
         draggable={canDrag}
         draggableProps={canDrag ? ({ ...attributes, ...listeners } as HTMLAttributes<HTMLDivElement>) : undefined}
@@ -12639,7 +12719,6 @@ const TaskQueueRow = forwardRef<HTMLDivElement, {
   selected: boolean;
   completed?: boolean;
   dragging?: boolean;
-  priorityIndex?: number | null;
   createdByAdmin?: boolean;
   draggable?: boolean;
   draggableProps?: HTMLAttributes<HTMLDivElement>;
@@ -12653,7 +12732,6 @@ const TaskQueueRow = forwardRef<HTMLDivElement, {
   selected,
   completed = false,
   dragging = false,
-  priorityIndex = null,
   createdByAdmin = false,
   draggable = false,
   draggableProps,
@@ -12670,7 +12748,7 @@ const TaskQueueRow = forwardRef<HTMLDivElement, {
   const [swipeOffset, setSwipeOffset] = useState(0);
   const [swiping, setSwiping] = useState(false);
   const [openAction, setOpenAction] = useState<"delete" | "duplicate" | null>(null);
-  const taskSurface = getTaskSurfaceTone(task, priorityIndex);
+  const taskSurface = getTaskSurfaceTone(task, createdByAdmin);
   const canSwipeDelete = canDelete && Boolean(onDelete);
   const canSwipeDuplicate = canDuplicate && Boolean(onDuplicate);
   const canSwipe = canSwipeDelete || canSwipeDuplicate;
@@ -12682,11 +12760,10 @@ const TaskQueueRow = forwardRef<HTMLDivElement, {
   const visibleOffset = swiping ? swipeOffset : baseOffset;
   const deleteActionVisible = canSwipeDelete && visibleOffset < -1;
   const duplicateActionVisible = canSwipeDuplicate && visibleOffset > 1;
-  const showUrgentStar = !completed && isTaskUrgent(task);
-  const taskStar = showUrgentStar
+  const taskStar = !completed && isTaskUrgent(task)
     ? { color: "text-[#bb2720]", label: "Urgent" }
     : createdByAdmin
-      ? { color: "text-[#eab308]", label: "Créée par un administrateur" }
+      ? { color: "text-emerald-600", label: "Créée par un administrateur" }
       : null;
 
   function setTaskQueueRowRef(node: HTMLDivElement | null) {
@@ -12895,7 +12972,7 @@ const TaskQueueRow = forwardRef<HTMLDivElement, {
       <span
         className={cn(
           "min-w-0 flex-1 truncate text-left text-base font-semibold leading-snug transition",
-          completed ? "text-neutral-400 line-through" : "text-neutral-700 group-hover:text-emerald-950",
+          taskSurface.title,
         )}
       >
         {task.title}
@@ -15603,27 +15680,31 @@ function getOptionTone(state: CompletionStatus) {
       };
 }
 
-function getTaskSurfaceTone(task: AppTask, priorityIndex: number | null) {
+function getTaskSurfaceTone(task: AppTask, createdByAdmin: boolean) {
   if (task.status === "done") {
     return {
       row: "bg-white/80 opacity-65 hover:bg-neutral-50/80",
+      title: "text-neutral-400 line-through",
     };
   }
 
   if (isTaskUrgent(task)) {
     return {
       row: "bg-rose-100/90 hover:bg-rose-100",
+      title: "text-neutral-700 group-hover:text-neutral-950",
     };
   }
 
-  if (priorityIndex !== null && priorityIndex < 3) {
+  if (createdByAdmin) {
     return {
-      row: "bg-[#FEF4BD] hover:bg-[#FEF3B2]",
+      row: "bg-emerald-100/95 hover:bg-emerald-100",
+      title: "text-neutral-700 group-hover:text-emerald-950",
     };
   }
 
   return {
-    row: "bg-emerald-100/95 hover:bg-emerald-100",
+    row: "bg-[#DCEAF8] hover:bg-[#D2E3F5]",
+    title: "text-neutral-700 group-hover:text-[#315B83]",
   };
 }
 
