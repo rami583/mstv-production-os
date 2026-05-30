@@ -12776,8 +12776,7 @@ const TaskQueueRow = forwardRef<HTMLDivElement, {
         label: !completed && isTaskUrgent(task) ? "Urgente, créée par un administrateur" : "Créée par un administrateur",
       }
     : null;
-  const rowTranslateX = canSwipe ? visibleOffset : 0;
-  const rowTransform = `translateX(${rowTranslateX}px)${dragging ? " scale(1.01)" : ""}`;
+  const rowTransform = `translateX(${canSwipe ? visibleOffset : 0}px)`;
 
   function setTaskQueueRowRef(node: HTMLDivElement | null) {
     rowRef.current = node;
@@ -12978,7 +12977,7 @@ const TaskQueueRow = forwardRef<HTMLDivElement, {
         "group relative z-10 flex min-h-11 select-none items-center gap-2 rounded-xl px-3 py-2 transition-[transform,box-shadow,opacity]",
         draggable ? "cursor-grab active:cursor-grabbing" : "cursor-pointer",
         taskSurface.row,
-        dragging && "shadow-[0_12px_28px_rgba(0,0,0,0.16)] ring-1 ring-black/[0.04]",
+        dragging && "opacity-90",
         swiping ? "transition-none" : "duration-200 ease-out",
       )}
     >
