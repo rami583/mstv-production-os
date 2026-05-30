@@ -12587,7 +12587,7 @@ function TeamTasksSheet({
             >
               <div className="no-scrollbar min-h-0 h-full touch-pan-y overflow-y-auto overflow-x-hidden overscroll-contain pb-4">
                 {orderedTodoTasks.length === 0 ? (
-                  <p className="rounded-2xl bg-white px-3 py-4 text-center text-sm font-medium text-neutral-300">Aucune tâche.</p>
+                  <p className="rounded-2xl bg-white px-3 py-4 text-center text-sm font-medium text-neutral-300 lg:text-base lg:font-semibold">Aucune tâche.</p>
                 ) : canSortAnyVisibleTasks ? (
                   <DndContext
                     sensors={sensors}
