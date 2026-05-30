@@ -6806,12 +6806,7 @@ export default function Home() {
       (assignedToCurrentProfile && createdByCurrentProfile && patchKeys.every((key) => ownAllowedFields.has(key) && (key !== "sortOrder" || !isTaskUrgent(task))));
     if (!canUpdateTask) throw new Error("Modification de tâche non autorisée.");
     if (patch.priority === "urgent" && !isTaskUrgent(task) && task.status === "todo") {
-      const urgentSiblingCount = tasks.filter((item) => (
-        item.id !== task.id &&
-        item.status === "todo" &&
-        item.assignedProfileId === task.assignedProfileId &&
-        isTaskUrgent(item)
-      )).length;
+      const urgentSiblingCount = task.assignedProfileId ? countActiveUrgentTasksForProfile(tasks, task.assignedProfileId, task.id) : 0;
       if (urgentSiblingCount >= maxUrgentTasksPerPerson) {
         throw new Error(maxUrgentTasksMessage);
       }
@@ -12477,6 +12472,7 @@ function TeamTasksSheet({
       <AdminTaskDetailPanel
         task={task}
         events={events}
+        tasks={tasks}
         linkedEvent={task.eventId ? eventsById.get(task.eventId) ?? null : null}
         currentProfile={currentProfile}
         permissions={permissions}
@@ -12993,6 +12989,7 @@ const TaskQueueRow = forwardRef<HTMLDivElement, {
 function AdminTaskDetailPanel({
   task,
   events,
+  tasks,
   linkedEvent,
   currentProfile,
   permissions,
@@ -13004,6 +13001,7 @@ function AdminTaskDetailPanel({
 }: {
   task: AppTask;
   events: ProductionEvent[];
+  tasks: AppTask[];
   linkedEvent: ProductionEvent | null;
   currentProfile: UserProfile | null;
   permissions: AppPermissions;
@@ -13028,7 +13026,10 @@ function AdminTaskDetailPanel({
   const createdByCurrentProfile = Boolean(currentProfile?.id && task.createdBy === currentProfile.id);
   const canEditContent = permissions.canManageEvents || (assignedToCurrentProfile && createdByCurrentProfile);
   const canToggleStatus = permissions.canManageEvents || assignedToCurrentProfile;
-  const canEditUrgent = permissions.canManageEvents;
+  const canEditUrgent = Boolean(
+    permissions.canManageEvents &&
+    (isTaskUrgent(task) || (task.assignedProfileId && countActiveUrgentTasksForProfile(tasks, task.assignedProfileId, task.id) < maxUrgentTasksPerPerson)),
+  );
   const canEditEventLink = permissions.canManageEvents;
   const canDelete = permissions.canManageEvents || (assignedToCurrentProfile && createdByCurrentProfile);
   const eventCandidates = useMemo(() => {
@@ -16594,6 +16595,11 @@ function ContextDetailBlock({
   const canToggleLinkedOptionTaskStatus = Boolean(linkedOptionTask && (permissions.canManageEvents || linkedTaskAssignedToCurrentProfile));
   const canEditLinkedTaskNotes = Boolean(linkedOptionTask?.assignedProfileId && (permissions.canManageEvents || (linkedTaskAssignedToCurrentProfile && linkedTaskCreatedByCurrentProfile)));
   const canEditOptionTaskNotes = permissions.canManageEvents || canEditLinkedTaskNotes;
+  const canEditLinkedOptionTaskUrgent = Boolean(
+    permissions.canManageEvents &&
+    linkedOptionTask?.assignedProfileId &&
+    (isTaskUrgent(linkedOptionTask) || countActiveUrgentTasksForProfile(tasks, linkedOptionTask.assignedProfileId, linkedOptionTask.id) < maxUrgentTasksPerPerson),
+  );
   const optionTaskDueDate = linkedOptionTask?.dueDate ?? selectedOption.taskDueDate ?? null;
   const optionTaskNotes = linkedOptionTask?.notes ?? selectedOption.taskNotes ?? "";
 
@@ -16626,17 +16632,32 @@ function ContextDetailBlock({
           />
         </div>
         {linkedOptionTask && (
-          <label className="flex h-8 shrink-0 items-center gap-1.5 rounded-full bg-neutral-50 px-2 text-xs font-semibold text-neutral-500 transition hover:bg-neutral-100">
-            <input
-              type="checkbox"
-              checked={linkedOptionTask.status === "done"}
-              disabled={savingCompletedByOverride || !canToggleLinkedOptionTaskStatus}
-              onChange={(event) => void updateLinkedOptionTask({ status: event.target.checked ? "done" : "todo" })}
-              className="h-3.5 w-3.5 rounded border-neutral-300 accent-emerald-600"
-              aria-label={linkedOptionTask.status === "done" ? "Marquer à faire" : "Marquer terminé"}
-            />
-            {linkedOptionTask.status === "done" ? "Terminé" : "À faire"}
-          </label>
+          <div className="flex shrink-0 items-center gap-1.5">
+            {canEditLinkedOptionTaskUrgent && (
+              <label className="flex h-8 shrink-0 items-center gap-1.5 rounded-full bg-[#bb2720]/[0.07] px-2 text-xs font-semibold text-[#bb2720] transition hover:bg-[#bb2720]/[0.11]">
+                <input
+                  type="checkbox"
+                  checked={isTaskUrgent(linkedOptionTask)}
+                  disabled={savingCompletedByOverride}
+                  onChange={(event) => void updateLinkedOptionTask({ priority: event.target.checked ? "urgent" : "normal" })}
+                  className="h-3.5 w-3.5 rounded border-neutral-300 accent-[#bb2720]"
+                  aria-label={isTaskUrgent(linkedOptionTask) ? "Retirer l'urgence" : "Marquer urgent"}
+                />
+                Urgent
+              </label>
+            )}
+            <label className="flex h-8 shrink-0 items-center gap-1.5 rounded-full bg-neutral-50 px-2 text-xs font-semibold text-neutral-500 transition hover:bg-neutral-100">
+              <input
+                type="checkbox"
+                checked={linkedOptionTask.status === "done"}
+                disabled={savingCompletedByOverride || !canToggleLinkedOptionTaskStatus}
+                onChange={(event) => void updateLinkedOptionTask({ status: event.target.checked ? "done" : "todo" })}
+                className="h-3.5 w-3.5 rounded border-neutral-300 accent-emerald-600"
+                aria-label={linkedOptionTask.status === "done" ? "Marquer à faire" : "Marquer terminé"}
+              />
+              {linkedOptionTask.status === "done" ? "Terminé" : "À faire"}
+            </label>
+          </div>
         )}
       </div>
       {titleRenameError && <div className="mt-2 text-base font-medium text-rose-700">{titleRenameError}</div>}
@@ -18165,6 +18186,15 @@ function getNextTaskSortOrder(tasks: AppTask[], assignedProfileId: string | null
 
 function isTaskUrgent(task: AppTask) {
   return task.priority === "urgent";
+}
+
+function countActiveUrgentTasksForProfile(tasks: AppTask[], assignedProfileId: string, excludedTaskId?: string | null) {
+  return tasks.filter((task) => (
+    task.id !== excludedTaskId &&
+    task.status === "todo" &&
+    task.assignedProfileId === assignedProfileId &&
+    isTaskUrgent(task)
+  )).length;
 }
 
 function sortTaskQueue(tasks: AppTask[]) {
