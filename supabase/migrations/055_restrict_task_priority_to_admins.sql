@@ -1,0 +1,91 @@
+create or replace function public.prepare_task_update()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  urgent_task_count integer;
+begin
+  if tg_op = 'INSERT' and not public.current_profile_is_admin() and new.priority is distinct from 'normal' then
+    raise exception 'Seul un admin peut modifier l’urgence d’une tâche.';
+  end if;
+
+  if (
+    (tg_op = 'INSERT' and new.status = 'todo' and new.priority = 'urgent')
+    or (
+      tg_op = 'UPDATE'
+      and new.status = 'todo'
+      and new.priority = 'urgent'
+      and (
+        old.status is distinct from new.status
+        or old.priority is distinct from new.priority
+        or old.assigned_profile_id is distinct from new.assigned_profile_id
+      )
+    )
+  ) then
+    select count(*)
+    into urgent_task_count
+    from public.tasks
+    where status = 'todo'
+      and priority = 'urgent'
+      and assigned_profile_id is not distinct from new.assigned_profile_id
+      and id is distinct from new.id;
+
+    if urgent_task_count >= 3 then
+      raise exception 'Impossible de marquer plus de 3 tâches urgentes pour cette personne.';
+    end if;
+  end if;
+
+  if tg_op = 'UPDATE' and not public.current_profile_is_admin() then
+    if old.assigned_profile_id is distinct from auth.uid() then
+      raise exception 'Modification de tâche non autorisée.';
+    end if;
+
+    if new.priority is distinct from old.priority then
+      raise exception 'Seul un admin peut modifier l’urgence d’une tâche.';
+    end if;
+
+    if old.priority = 'urgent' and new.sort_order is distinct from old.sort_order then
+      raise exception 'Seul un admin peut déplacer une tâche urgente.';
+    end if;
+
+    if old.created_by is distinct from auth.uid() then
+      if new.title is distinct from old.title
+        or new.event_id is distinct from old.event_id
+        or new.assigned_profile_id is distinct from old.assigned_profile_id
+        or new.due_date is distinct from old.due_date
+        or new.notes is distinct from old.notes
+        or new.created_by is distinct from old.created_by
+        or new.created_at is distinct from old.created_at then
+        raise exception 'Seul le statut et l’ordre de cette tâche peuvent être modifiés.';
+      end if;
+    else
+      if new.event_id is distinct from old.event_id
+        or new.assigned_profile_id is distinct from old.assigned_profile_id
+        or new.created_by is distinct from old.created_by
+        or new.created_at is distinct from old.created_at then
+        raise exception 'Vous ne pouvez modifier que vos propres tâches.';
+      end if;
+    end if;
+  end if;
+
+  if tg_op = 'INSERT' and new.status = 'done' and new.completed_at is null then
+    new.completed_at = now();
+  elsif tg_op = 'INSERT' and new.status = 'todo' then
+    new.completed_at = null;
+  elsif tg_op = 'UPDATE' and new.status = 'done' and old.status is distinct from 'done' then
+    new.completed_at = now();
+  elsif tg_op = 'UPDATE' and new.status = 'todo' then
+    new.completed_at = null;
+  end if;
+
+  if tg_op = 'UPDATE' then
+    new.updated_at = now();
+  end if;
+
+  return new;
+end;
+$$;
+
+notify pgrst, 'reload schema';

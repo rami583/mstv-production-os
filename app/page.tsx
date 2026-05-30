@@ -6736,7 +6736,7 @@ export default function Home() {
       event_id: input.eventId ?? null,
       assigned_profile_id: input.assignedProfileId ?? null,
       status: "todo",
-      priority: input.priority ?? "normal",
+      priority: permissions.canManageEvents ? input.priority ?? "normal" : "normal",
       sort_order: nextSortOrder,
       due_date: input.dueDate || null,
       notes: input.notes?.trim() || null,
@@ -13005,7 +13005,7 @@ function AdminTaskDetailPanel({
       </div>
 
       <div className="space-y-2">
-        <div className="grid grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-2">
+        <div className={cn("grid items-center gap-2", canEditUrgent ? "grid-cols-[minmax(0,1fr)_auto_auto]" : "grid-cols-[minmax(0,1fr)_auto]")}>
           <input
             {...iosKeyboardGuardProps}
             value={title}
@@ -13017,19 +13017,18 @@ function AdminTaskDetailPanel({
             }}
             className={cn("h-10 min-w-0 rounded-xl bg-white px-3 text-base font-semibold outline-none transition focus:bg-white", done ? "text-neutral-500 line-through" : taskTone.title)}
           />
-          <label className={cn(
-            "flex h-10 shrink-0 items-center gap-1.5 rounded-xl bg-[#bb2720]/[0.07] px-2 text-xs font-semibold text-[#bb2720] transition hover:bg-[#bb2720]/[0.11] sm:px-3 sm:text-sm",
-            !canEditUrgent && "opacity-70",
-          )}>
-            <input
-              type="checkbox"
-              checked={isTaskUrgent(task)}
-              disabled={saving || !canEditUrgent}
-              onChange={(event) => void updateTaskSafely({ priority: event.target.checked ? "urgent" : "normal" })}
-              className="h-3.5 w-3.5 rounded border-neutral-300 accent-[#bb2720]"
-            />
-            Urgent
-          </label>
+          {canEditUrgent && (
+            <label className="flex h-10 shrink-0 items-center gap-1.5 rounded-xl bg-[#bb2720]/[0.07] px-2 text-xs font-semibold text-[#bb2720] transition hover:bg-[#bb2720]/[0.11] sm:px-3 sm:text-sm">
+              <input
+                type="checkbox"
+                checked={isTaskUrgent(task)}
+                disabled={saving}
+                onChange={(event) => void updateTaskSafely({ priority: event.target.checked ? "urgent" : "normal" })}
+                className="h-3.5 w-3.5 rounded border-neutral-300 accent-[#bb2720]"
+              />
+              Urgent
+            </label>
+          )}
           <label className={cn("flex h-10 shrink-0 items-center gap-1.5 rounded-xl bg-white px-2 text-xs font-semibold transition sm:px-3 sm:text-sm", taskTone.actionText)}>
             <input
               type="checkbox"
