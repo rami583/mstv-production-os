@@ -7481,7 +7481,7 @@ export default function Home() {
         onDeleteDocumentFile={deleteEventDocument}
         onOpenDocument={openEventDocument}
         onDownloadDocument={downloadEventDocument}
-        tasks={tasks.filter((task) => task.eventId === eventToRender.id)}
+        tasks={tasks}
         profiles={taskProfiles}
         unreadSummary={unreadChangeSummaries.get(eventToRender.id) ?? null}
         onMarkItemRead={(itemKey) => void markEventItemsRead(eventToRender.id, [itemKey])}
