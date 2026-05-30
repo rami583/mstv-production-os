@@ -11957,7 +11957,10 @@ function TeamTasksSheet({
     return [...mergedTasks.filter(isTaskUrgent), ...mergedTasks.filter((task) => !isTaskUrgent(task))];
   }, [orderIds, todoTasks, todoTasksById]);
   const selectedTask = selectedTaskId ? tasks.find((task) => task.id === selectedTaskId) ?? null : null;
-  const visualIndexByTaskId = useMemo(() => new Map(orderedTodoTasks.map((task, index) => [task.id, index])), [orderedTodoTasks]);
+  const visualIndexByTaskId = useMemo(() => {
+    const nonUrgentTodoTasks = orderedTodoTasks.filter((task) => !isTaskUrgent(task));
+    return new Map(nonUrgentTodoTasks.map((task, index) => [task.id, index]));
+  }, [orderedTodoTasks]);
   const selectedTaskNavigationTasks = useMemo(() => {
     if (!selectedTask) return [];
     return selectedTask.status === "done" ? doneTasks : orderedTodoTasks;
@@ -12863,16 +12866,6 @@ const TaskQueueRow = forwardRef<HTMLDivElement, {
         swiping ? "transition-none" : "transition-transform duration-200 ease-out",
       )}
     >
-      {createdByAdmin && (
-        <span className="inline-flex h-3.5 w-3.5 shrink-0 items-center justify-center text-xs font-bold leading-none text-[#eab308]" aria-label="Créée par un administrateur" title="Créée par un administrateur">
-          ★
-        </span>
-      )}
-      {!completed && isTaskUrgent(task) && (
-        <span className="inline-flex h-3.5 w-3.5 shrink-0 items-center justify-center text-xs font-bold leading-none text-[#bb2720]" aria-label="Urgent" title="Urgent">
-          !
-        </span>
-      )}
       <span
         className={cn(
           "min-w-0 flex-1 truncate text-left text-base font-semibold leading-snug transition",
@@ -12881,6 +12874,20 @@ const TaskQueueRow = forwardRef<HTMLDivElement, {
       >
         {task.title}
       </span>
+      {(createdByAdmin || (!completed && isTaskUrgent(task))) && (
+        <span className="ml-auto inline-flex shrink-0 items-center justify-end gap-1.5">
+          {createdByAdmin && (
+            <span className="inline-flex h-3.5 w-3.5 shrink-0 items-center justify-center text-xs font-bold leading-none text-[#eab308]" aria-label="Créée par un administrateur" title="Créée par un administrateur">
+              ★
+            </span>
+          )}
+          {!completed && isTaskUrgent(task) && (
+            <span className="inline-flex h-3.5 w-3.5 shrink-0 items-center justify-center text-xs font-bold leading-none text-[#bb2720]" aria-label="Urgent" title="Urgent">
+              ★
+            </span>
+          )}
+        </span>
+      )}
       </div>
     </div>
   );
@@ -15584,19 +15591,13 @@ function getTaskSurfaceTone(task: AppTask, priorityIndex: number | null) {
     };
   }
 
-  if (priorityIndex === 0) {
+  if (isTaskUrgent(task)) {
     return {
       row: "bg-rose-100/90 hover:bg-rose-100",
     };
   }
 
-  if (priorityIndex === 1) {
-    return {
-      row: "bg-[#FEF4BD] hover:bg-[#FEF3B2]",
-    };
-  }
-
-  if (priorityIndex === 2) {
+  if (priorityIndex !== null && priorityIndex < 3) {
     return {
       row: "bg-[#FEF4BD] hover:bg-[#FEF3B2]",
     };
