@@ -12002,7 +12002,10 @@ function TeamTasksSheet({
     }),
   );
   const eventsById = useMemo(() => new Map(events.map((event) => [event.id, event])), [events]);
-  const taskPeople = useMemo(() => (profiles.length > 0 ? profiles : currentProfile ? [currentProfile] : []), [currentProfile, profiles]);
+  const taskPeople = useMemo(() => {
+    if (!permissions.canManageEvents) return currentProfile ? [currentProfile] : [];
+    return profiles.length > 0 ? profiles : currentProfile ? [currentProfile] : [];
+  }, [currentProfile, permissions.canManageEvents, profiles]);
   const activeProfile = taskPeople.find((person) => person.id === selectedProfileId) ?? taskPeople[0] ?? null;
   const activeProfileId = activeProfile?.id ?? null;
   const canCreateForActiveProfile = Boolean(activeProfileId && (permissions.canManageEvents || activeProfileId === currentProfile?.id));
@@ -12015,7 +12018,7 @@ function TeamTasksSheet({
       .slice(0, 12)
   ), [personTasks]);
   const todoTasksById = useMemo(() => new Map(todoTasks.map((task) => [task.id, task])), [todoTasks]);
-  const profileRoleById = useMemo(() => new Map(taskPeople.map((person) => [person.id, person.role])), [taskPeople]);
+  const profileRoleById = useMemo(() => new Map(profiles.map((person) => [person.id, person.role])), [profiles]);
   const orderedTodoTasks = useMemo(() => {
     const knownTasks = orderIds.map((id) => todoTasksById.get(id)).filter((task): task is AppTask => Boolean(task));
     const knownIds = new Set(knownTasks.map((task) => task.id));
@@ -12082,6 +12085,7 @@ function TeamTasksSheet({
   const canSortAnyVisibleTasks = sortableTodoTasks.length > 1;
 
   function selectPerson(profileId: string) {
+    if (!permissions.canManageEvents && profileId !== currentProfile?.id) return;
     setSelectedTaskId(null);
     setLocalError(null);
     setDragError(null);
@@ -12498,35 +12502,39 @@ function TeamTasksSheet({
 
           {!selectedTask && taskPeople.length > 0 && (
             <div className="flex items-end gap-2 border-b border-white/70">
-              <div role="tablist" className="no-scrollbar flex min-w-0 flex-1 items-end gap-0.5 overflow-x-auto">
-                {taskPeople.map((person) => {
-                  const firstName = person.firstName?.trim() || getProfileDisplayName(person)?.split(/\s+/)[0] || "Équipe";
-                  const active = person.id === activeProfileId;
-                  return (
-                    <button
-                      key={person.id}
-                      type="button"
-                      role="tab"
-                      aria-selected={active}
-                      onPointerDown={(event) => event.currentTarget.blur()}
-                      onPointerUp={(event) => event.currentTarget.blur()}
-                      onPointerCancel={(event) => event.currentTarget.blur()}
-                      onClick={(event) => {
-                        selectPerson(person.id);
-                        event.currentTarget.blur();
-                      }}
-                      className={cn(
-                        "shrink-0 rounded-t-xl border px-3 py-2 text-sm font-semibold transition focus:bg-transparent focus:shadow-none focus:outline-none focus-visible:bg-transparent focus-visible:shadow-none focus-visible:outline-none active:bg-transparent",
-                        active
-                          ? "border-neutral-200/80 border-b-white bg-white text-neutral-950 shadow-sm shadow-black/5"
-                          : "border-neutral-200/35 bg-transparent text-neutral-300 hover:bg-transparent hover:text-neutral-300 active:bg-transparent active:text-neutral-300 focus:text-neutral-300",
-                      )}
-                    >
-                      {firstName}
-                    </button>
-                  );
-                })}
-              </div>
+              {permissions.canManageEvents ? (
+                <div role="tablist" className="no-scrollbar flex min-w-0 flex-1 items-end gap-0.5 overflow-x-auto">
+                  {taskPeople.map((person) => {
+                    const firstName = person.firstName?.trim() || getProfileDisplayName(person)?.split(/\s+/)[0] || "Équipe";
+                    const active = person.id === activeProfileId;
+                    return (
+                      <button
+                        key={person.id}
+                        type="button"
+                        role="tab"
+                        aria-selected={active}
+                        onPointerDown={(event) => event.currentTarget.blur()}
+                        onPointerUp={(event) => event.currentTarget.blur()}
+                        onPointerCancel={(event) => event.currentTarget.blur()}
+                        onClick={(event) => {
+                          selectPerson(person.id);
+                          event.currentTarget.blur();
+                        }}
+                        className={cn(
+                          "shrink-0 rounded-t-xl border px-3 py-2 text-sm font-semibold transition focus:bg-transparent focus:shadow-none focus:outline-none focus-visible:bg-transparent focus-visible:shadow-none focus-visible:outline-none active:bg-transparent",
+                          active
+                            ? "border-neutral-200/80 border-b-white bg-white text-neutral-950 shadow-sm shadow-black/5"
+                            : "border-neutral-200/35 bg-transparent text-neutral-300 hover:bg-transparent hover:text-neutral-300 active:bg-transparent active:text-neutral-300 focus:text-neutral-300",
+                        )}
+                      >
+                        {firstName}
+                      </button>
+                    );
+                  })}
+                </div>
+              ) : (
+                <div className="min-w-0 flex-1" />
+              )}
               <button
                 type="button"
                 onClick={() => void createTaskForActiveProfile()}
