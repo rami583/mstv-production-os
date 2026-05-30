@@ -11956,11 +11956,12 @@ function TeamTasksSheet({
     const mergedTasks = [...knownTasks, ...todoTasks.filter((task) => !knownIds.has(task.id))];
     return [...mergedTasks.filter(isTaskUrgent), ...mergedTasks.filter((task) => !isTaskUrgent(task))];
   }, [orderIds, todoTasks, todoTasksById]);
+  const urgentTodoTasks = useMemo(() => orderedTodoTasks.filter(isTaskUrgent), [orderedTodoTasks]);
+  const normalTodoTasks = useMemo(() => orderedTodoTasks.filter((task) => !isTaskUrgent(task)), [orderedTodoTasks]);
   const selectedTask = selectedTaskId ? tasks.find((task) => task.id === selectedTaskId) ?? null : null;
   const visualIndexByTaskId = useMemo(() => {
-    const nonUrgentTodoTasks = orderedTodoTasks.filter((task) => !isTaskUrgent(task));
-    return new Map(nonUrgentTodoTasks.map((task, index) => [task.id, index]));
-  }, [orderedTodoTasks]);
+    return new Map(normalTodoTasks.map((task, index) => [task.id, index]));
+  }, [normalTodoTasks]);
   const selectedTaskNavigationTasks = useMemo(() => {
     if (!selectedTask) return [];
     return selectedTask.status === "done" ? doneTasks : orderedTodoTasks;
@@ -12409,7 +12410,7 @@ function TeamTasksSheet({
     <section className="mx-auto flex min-h-0 w-full max-w-3xl flex-1 flex-col">
         <div
           ref={nativeKeyboard.scrollContainerRef}
-          className="no-scrollbar flex min-h-0 flex-1 flex-col overflow-y-auto overscroll-contain"
+          className="flex min-h-0 flex-1 flex-col overflow-hidden overscroll-contain"
           style={nativeKeyboard.scrollContainerStyle}
         >
           {(error) && <p className="mb-3 text-sm font-semibold text-rose-700">{error}</p>}
@@ -12462,7 +12463,7 @@ function TeamTasksSheet({
           {selectedTask ? (
             <div
               ref={taskDetailViewportRef}
-              className={cn("min-h-full touch-pan-y overflow-hidden", uiMotionClasses.taskSurfaceIn)}
+              className={cn("no-scrollbar min-h-0 flex-1 touch-pan-y overflow-y-auto overflow-x-hidden overscroll-contain", uiMotionClasses.taskSurfaceIn)}
               onPointerDownCapture={handleTaskDetailSwipePointerDown}
               onPointerMoveCapture={handleTaskDetailSwipePointerMove}
               onPointerUpCapture={handleTaskDetailSwipePointerUp}
@@ -12490,8 +12491,8 @@ function TeamTasksSheet({
           ) : taskPeople.length === 0 ? (
             <p className="rounded-2xl bg-neutral-50 px-3 py-4 text-center text-sm font-medium text-neutral-400">Aucun membre disponible.</p>
           ) : (
-            <div className={cn("min-h-0 flex-1 overflow-visible rounded-b-2xl bg-white px-3 pb-4 pt-3", uiMotionClasses.fadeIn)}>
-              <div className="grid gap-2 overflow-visible">
+            <div className={cn("min-h-0 flex-1 overflow-hidden rounded-b-2xl bg-white px-3", uiMotionClasses.fadeIn)}>
+              <div className="no-scrollbar min-h-0 h-full overflow-y-auto overflow-x-visible overscroll-contain pb-4 pt-3">
                 {orderedTodoTasks.length === 0 ? (
                   <p className="rounded-2xl bg-white px-3 py-4 text-center text-sm font-medium text-neutral-300">Aucune tâche.</p>
                 ) : canSortAnyVisibleTasks ? (
@@ -12503,25 +12504,43 @@ function TeamTasksSheet({
                     onDragCancel={handleTaskDragCancel}
                   >
                     <SortableContext items={sortableTaskIds} strategy={verticalListSortingStrategy}>
-                      <div className="grid gap-2 overflow-visible">
-                        {orderedTodoTasks.map((task) => renderQueueTask(task, false))}
+                      <div className="space-y-2 overflow-visible">
+                        {urgentTodoTasks.length > 0 && (
+                          <div className="sticky top-0 z-20 -mx-1 space-y-2 bg-white px-1 pb-2">
+                            {urgentTodoTasks.map((task) => renderQueueTask(task, false))}
+                          </div>
+                        )}
+                        {normalTodoTasks.length > 0 && (
+                          <div className="grid gap-2 overflow-visible">
+                            {normalTodoTasks.map((task) => renderQueueTask(task, false))}
+                          </div>
+                        )}
                       </div>
                     </SortableContext>
                   </DndContext>
                 ) : (
-                  <div className="grid gap-2 overflow-visible">
-                    {orderedTodoTasks.map((task) => renderQueueTask(task, false))}
+                  <div className="space-y-2 overflow-visible">
+                    {urgentTodoTasks.length > 0 && (
+                      <div className="sticky top-0 z-20 -mx-1 space-y-2 bg-white px-1 pb-2">
+                        {urgentTodoTasks.map((task) => renderQueueTask(task, false))}
+                      </div>
+                    )}
+                    {normalTodoTasks.length > 0 && (
+                      <div className="grid gap-2 overflow-visible">
+                        {normalTodoTasks.map((task) => renderQueueTask(task, false))}
+                      </div>
+                    )}
                   </div>
                 )}
-              </div>
-              {dragError && <p className="px-1 text-xs font-semibold text-rose-600">{dragError}</p>}
+                {dragError && <p className="px-1 pt-2 text-xs font-semibold text-rose-600">{dragError}</p>}
 
-              {doneTasks.length > 0 && (
-                <section className="space-y-1 pt-2">
-                  <p className="px-1 text-xs font-semibold uppercase tracking-[0.08em] text-neutral-300">Terminé</p>
-                  <div className="grid gap-1.5 overflow-visible">{doneTasks.map((task) => renderQueueTask(task, true))}</div>
-                </section>
-              )}
+                {doneTasks.length > 0 && (
+                  <section className="space-y-1 pt-2">
+                    <p className="px-1 text-xs font-semibold uppercase tracking-[0.08em] text-neutral-300">Terminé</p>
+                    <div className="grid gap-1.5 overflow-visible">{doneTasks.map((task) => renderQueueTask(task, true))}</div>
+                  </section>
+                )}
+              </div>
             </div>
           )}
           {deleteTaskCandidate && (
