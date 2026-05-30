@@ -11991,7 +11991,7 @@ function TeamTasksSheet({
   const sensors = useSensors(
     useSensor(MouseSensor, {
       activationConstraint: {
-        distance: 5,
+        distance: 10,
       },
     }),
     useSensor(TouchSensor, {
@@ -12803,18 +12803,18 @@ const TaskQueueRow = forwardRef<HTMLDivElement, {
 
   function handlePointerDown(event: ReactPointerEvent<HTMLDivElement>) {
     if ((event.target as HTMLElement).closest("[data-task-row-swipe-action]")) return;
+    pointerStartRef.current = {
+      pointerId: event.pointerId,
+      x: event.clientX,
+      y: event.clientY,
+      axis: null,
+    };
     if (canSwipe) {
-      pointerStartRef.current = {
-        pointerId: event.pointerId,
-        x: event.clientX,
-        y: event.clientY,
-        axis: null,
-      };
       stableRowWidthRef.current = rowRef.current?.offsetWidth ?? event.currentTarget.offsetWidth ?? TASK_ROW_SWIPE_ACTION_WIDTH;
       setSwiping(true);
       setSwipeOffset(baseOffset);
-      event.currentTarget.setPointerCapture(event.pointerId);
     }
+    event.currentTarget.setPointerCapture(event.pointerId);
     callDraggableHandler(draggableProps?.onPointerDown, event);
   }
 
@@ -12852,11 +12852,25 @@ const TaskQueueRow = forwardRef<HTMLDivElement, {
 
   function handlePointerUp(event: ReactPointerEvent<HTMLDivElement>) {
     callDraggableHandler(draggableProps?.onPointerUp, event);
-    if (!canSwipe) return;
     const pointerStart = pointerStartRef.current;
     if (!pointerStart || pointerStart.pointerId !== event.pointerId) return;
 
     const deltaX = event.clientX - pointerStart.x;
+    const deltaY = event.clientY - pointerStart.y;
+    const absDeltaX = Math.abs(deltaX);
+    const absDeltaY = Math.abs(deltaY);
+    const wasHorizontalSwipe = pointerStart.axis === "horizontal";
+    const wasTap = !wasHorizontalSwipe && pointerStart.axis !== "vertical" && absDeltaX < EVENT_SWIPE_AXIS_ACTIVATION_PX && absDeltaY < EVENT_SWIPE_AXIS_ACTIVATION_PX;
+
+    if (!canSwipe) {
+      resetSwipe();
+      if (wasTap && !dragging) {
+        suppressClickRef.current = true;
+        onOpen();
+      }
+      return;
+    }
+
     const rowWidth = stableRowWidthRef.current || rowRef.current?.offsetWidth || TASK_ROW_SWIPE_ACTION_WIDTH;
     const minOffset = canSwipeDelete ? -rowWidth : 0;
     const maxOffset = canSwipeDuplicate ? rowWidth : 0;
@@ -12867,10 +12881,15 @@ const TaskQueueRow = forwardRef<HTMLDivElement, {
     const shouldOpenDelete = canSwipeDelete && finalOffset < -TASK_ROW_SWIPE_ACTION_WIDTH / 2;
     const shouldOpenDuplicate = canSwipeDuplicate && finalOffset > TASK_ROW_SWIPE_ACTION_WIDTH / 2;
 
-    const wasHorizontalSwipe = pointerStart.axis === "horizontal";
     resetSwipe();
 
-    if (!wasHorizontalSwipe) return;
+    if (!wasHorizontalSwipe) {
+      if (wasTap && !dragging) {
+        suppressClickRef.current = true;
+        onOpen();
+      }
+      return;
+    }
 
     window.setTimeout(() => {
       suppressClickRef.current = false;
