@@ -12748,7 +12748,7 @@ const TaskQueueRow = forwardRef<HTMLDivElement, {
   const [swipeOffset, setSwipeOffset] = useState(0);
   const [swiping, setSwiping] = useState(false);
   const [openAction, setOpenAction] = useState<"delete" | "duplicate" | null>(null);
-  const taskSurface = getTaskSurfaceTone(task, createdByAdmin);
+  const taskSurface = getTaskSurfaceTone(task);
   const canSwipeDelete = canDelete && Boolean(onDelete);
   const canSwipeDuplicate = canDuplicate && Boolean(onDuplicate);
   const canSwipe = canSwipeDelete || canSwipeDuplicate;
@@ -12760,11 +12760,12 @@ const TaskQueueRow = forwardRef<HTMLDivElement, {
   const visibleOffset = swiping ? swipeOffset : baseOffset;
   const deleteActionVisible = canSwipeDelete && visibleOffset < -1;
   const duplicateActionVisible = canSwipeDuplicate && visibleOffset > 1;
-  const taskStar = !completed && isTaskUrgent(task)
-    ? { color: "text-[#bb2720]", label: "Urgent" }
-    : createdByAdmin
-      ? { color: "text-emerald-600", label: "Créée par un administrateur" }
-      : null;
+  const taskStar = createdByAdmin
+    ? {
+        color: !completed && isTaskUrgent(task) ? "text-[#bb2720]" : "text-emerald-600",
+        label: !completed && isTaskUrgent(task) ? "Urgente, créée par un administrateur" : "Créée par un administrateur",
+      }
+    : null;
 
   function setTaskQueueRowRef(node: HTMLDivElement | null) {
     rowRef.current = node;
@@ -15680,7 +15681,7 @@ function getOptionTone(state: CompletionStatus) {
       };
 }
 
-function getTaskSurfaceTone(task: AppTask, createdByAdmin: boolean) {
+function getTaskSurfaceTone(task: AppTask) {
   if (task.status === "done") {
     return {
       row: "bg-white/80 opacity-65 hover:bg-neutral-50/80",
@@ -15695,16 +15696,9 @@ function getTaskSurfaceTone(task: AppTask, createdByAdmin: boolean) {
     };
   }
 
-  if (createdByAdmin) {
-    return {
-      row: "bg-emerald-100/95 hover:bg-emerald-100",
-      title: "text-neutral-700 group-hover:text-emerald-950",
-    };
-  }
-
   return {
-    row: "bg-[#DCEAF8] hover:bg-[#D2E3F5]",
-    title: "text-neutral-700 group-hover:text-[#315B83]",
+    row: "bg-emerald-100/95 hover:bg-emerald-100",
+    title: "text-neutral-700 group-hover:text-emerald-950",
   };
 }
 
