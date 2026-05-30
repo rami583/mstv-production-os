@@ -126,7 +126,7 @@ import {
   type LinkStatus,
 } from "@/lib/supabase";
 
-type Screen = "calendar" | "detail" | "tasks";
+type Screen = "calendar" | "detail" | "tasks" | "projects";
 type ItemKind = "option" | "link" | "document";
 
 type EventRow = Database["public"]["Tables"]["events"]["Row"];
@@ -141,12 +141,16 @@ type EventActivityReadRow = Database["public"]["Tables"]["event_activity_reads"]
 type EventActivityItemReadRow = Database["public"]["Tables"]["event_activity_item_reads"]["Row"];
 type NotificationRow = Database["public"]["Tables"]["notifications"]["Row"];
 type TaskRow = Database["public"]["Tables"]["tasks"]["Row"];
+type ProjectRow = Database["public"]["Tables"]["projects"]["Row"];
+type ProjectActionRow = Database["public"]["Tables"]["project_actions"]["Row"];
 type ProfileRow = Database["public"]["Tables"]["profiles"]["Row"];
 type ExternalCalendarRow = Database["public"]["Tables"]["external_calendars"]["Row"];
 type ExternalCalendarEventRow = Database["public"]["Tables"]["external_calendar_events"]["Row"];
 type ExternalEventLinkRow = Database["public"]["Tables"]["external_event_links"]["Row"];
 
 type UserRole = "admin" | "team";
+type ProjectStatus = "active" | "paused" | "completed";
+type ProjectActionStatus = "todo" | "done";
 type ExternalCalendarVisibility = "admin_only" | "team" | "private";
 type ExternalCalendarProviderType = "google" | "microsoft" | "apple_caldav" | "ics_read_only";
 type ExternalCalendarSyncCapability = "read_only" | "bidirectional";
@@ -434,6 +438,33 @@ type AppTask = {
   createdAt: string;
   updatedAt: string;
   completedAt: string | null;
+};
+
+type ProjectAction = {
+  id: string;
+  projectId: string;
+  title: string;
+  notes: string | null;
+  status: ProjectActionStatus;
+  assignedProfileId: string | null;
+  dueDate: string | null;
+  sortOrder: number | null;
+  createdByProfileId: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+type Project = {
+  id: string;
+  name: string;
+  description: string | null;
+  notes: string | null;
+  status: ProjectStatus;
+  ownerProfileId: string | null;
+  createdByProfileId: string;
+  createdAt: string;
+  updatedAt: string;
+  actions: ProjectAction[];
 };
 
 type TaskCreateInput = {
@@ -1556,6 +1587,11 @@ const noCreatableCalendarMessage = "Aucun calendrier synchronisé actif n’est 
 const legacyLocalCalendarImportDisabledMessage = "L’import vers le calendrier local MSTV n’est plus disponible. Choisissez un calendrier Apple ou Google synchronisé.";
 const maxUrgentTasksPerPerson = 3;
 const maxUrgentTasksMessage = "Impossible de marquer plus de 3 tâches urgentes pour cette personne.";
+const projectStatusOptions: Array<{ value: ProjectStatus; label: string }> = [
+  { value: "active", label: "Actif" },
+  { value: "paused", label: "En pause" },
+  { value: "completed", label: "Terminé" },
+];
 const cachedAuthSessionKey = "mstv.cachedAuthSession";
 const cachedProfileKeyPrefix = "mstv.cachedProfile.";
 const cachedProfileMetaKeyPrefix = "mstv.cachedProfileMeta.";
@@ -2925,6 +2961,37 @@ function mapTask(row: TaskRow): AppTask {
   };
 }
 
+function mapProjectAction(row: ProjectActionRow): ProjectAction {
+  return {
+    id: row.id,
+    projectId: row.project_id,
+    title: row.title,
+    notes: row.notes ?? null,
+    status: row.status,
+    assignedProfileId: row.assigned_profile_id ?? null,
+    dueDate: row.due_date ?? null,
+    sortOrder: row.sort_order ?? null,
+    createdByProfileId: row.created_by_profile_id,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function mapProject(row: ProjectRow, actions: ProjectAction[] = []): Project {
+  return {
+    id: row.id,
+    name: row.name,
+    description: row.description ?? null,
+    notes: row.notes ?? null,
+    status: row.status,
+    ownerProfileId: row.owner_profile_id ?? null,
+    createdByProfileId: row.created_by_profile_id,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    actions,
+  };
+}
+
 function getProfileDisplayName(profile: UserProfile | null) {
   if (!profile) return null;
   const fullName = [profile.firstName, profile.lastName].filter(Boolean).join(" ").trim();
@@ -4023,6 +4090,35 @@ async function fetchTasks() {
   return rows.map(mapTask);
 }
 
+async function fetchProjects() {
+  if (!supabase) {
+    throw new Error("Configuration Supabase manquante.");
+  }
+
+  const [projectsResult, actionsResult] = await Promise.all([
+    supabase
+      .from("projects")
+      .select("*")
+      .order("updated_at", { ascending: false }),
+    supabase
+      .from("project_actions")
+      .select("*")
+      .order("sort_order", { ascending: true, nullsFirst: false })
+      .order("created_at", { ascending: true }),
+  ]);
+
+  if (projectsResult.error) throw projectsResult.error;
+  if (actionsResult.error) throw actionsResult.error;
+
+  const actionsByProjectId = new Map<string, ProjectAction[]>();
+  ((actionsResult.data ?? []) as ProjectActionRow[]).forEach((row) => {
+    const action = mapProjectAction(row);
+    actionsByProjectId.set(action.projectId, [...(actionsByProjectId.get(action.projectId) ?? []), action]);
+  });
+
+  return ((projectsResult.data ?? []) as ProjectRow[]).map((row) => mapProject(row, actionsByProjectId.get(row.id) ?? []));
+}
+
 async function fetchUnreadChangeData(profileId: string) {
   if (!supabase) {
     throw new Error("Configuration Supabase manquante.");
@@ -4221,6 +4317,9 @@ export default function Home() {
   const [tasksLoading, setTasksLoading] = useState(false);
   const [tasksError, setTasksError] = useState<string | null>(null);
   const [tasksNavigationRequest, setTasksNavigationRequest] = useState(0);
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [projectsLoading, setProjectsLoading] = useState(false);
+  const [projectsError, setProjectsError] = useState<string | null>(null);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [notificationsHydrated, setNotificationsHydrated] = useState(false);
   const [online, setOnline] = useState(() => typeof navigator === "undefined" ? true : navigator.onLine);
@@ -4557,6 +4656,7 @@ export default function Home() {
         setProfile(null);
         setEvents([]);
         setTasks([]);
+        setProjects([]);
         setTaskProfiles([]);
         setExternalCalendars([]);
         setExternalCalendarEvents([]);
@@ -4889,6 +4989,18 @@ export default function Home() {
       void refreshTaskProfiles();
     }
   }, [screen]);
+
+  useEffect(() => {
+    if (screen !== "projects") return;
+    if (!permissions.canManageEvents) {
+      setScreen("calendar");
+      return;
+    }
+    void refreshProjects({ silent: projects.length > 0 });
+    if (taskProfiles.length === 0) {
+      void refreshTaskProfiles();
+    }
+  }, [permissions.canManageEvents, screen]);
 
   useEffect(() => {
     if (!userManagementOpen || !permissions.canManageUsers) return;
@@ -6716,6 +6828,173 @@ export default function Home() {
     }
   }
 
+  async function refreshProjects(options: { silent?: boolean } = {}) {
+    if (!permissions.canManageEvents || !supabase || !online) return;
+    if (!options.silent) {
+      setProjectsLoading(true);
+    }
+    setProjectsError(null);
+
+    try {
+      setProjects(await fetchProjects());
+    } catch (projectLoadError) {
+      console.error("Failed to load projects.", getDebugError(projectLoadError));
+      setProjectsError(getUserFacingErrorMessage(projectLoadError, "Impossible de charger les projets."));
+    } finally {
+      if (!options.silent) {
+        setProjectsLoading(false);
+      }
+    }
+  }
+
+  function upsertProjectInState(project: Project) {
+    setProjects((current) => {
+      const existingIndex = current.findIndex((item) => item.id === project.id);
+      const nextProjects = existingIndex === -1
+        ? [project, ...current]
+        : current.map((item) => (item.id === project.id ? { ...project, actions: project.actions.length > 0 ? project.actions : item.actions } : item));
+      return nextProjects.sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+    });
+  }
+
+  function upsertProjectActionInState(action: ProjectAction) {
+    setProjects((current) =>
+      current.map((project) => {
+        if (project.id !== action.projectId) return project;
+        const existingIndex = project.actions.findIndex((item) => item.id === action.id);
+        const actions = existingIndex === -1
+          ? [...project.actions, action]
+          : project.actions.map((item) => (item.id === action.id ? action : item));
+        return {
+          ...project,
+          actions: actions.sort((left, right) => {
+            if (left.status !== right.status) return left.status === "todo" ? -1 : 1;
+            const leftOrder = left.sortOrder ?? Number.MAX_SAFE_INTEGER;
+            const rightOrder = right.sortOrder ?? Number.MAX_SAFE_INTEGER;
+            if (leftOrder !== rightOrder) return leftOrder - rightOrder;
+            return left.createdAt.localeCompare(right.createdAt);
+          }),
+        };
+      }),
+    );
+  }
+
+  async function createProject() {
+    if (!permissions.canManageEvents) throw new Error("Création de projet réservée aux admins.");
+    if (!supabase) throw new Error("Configuration Supabase manquante.");
+    const { data, error: insertError } = await supabase
+      .from("projects")
+      .insert({
+        name: "Nouveau projet",
+        description: "",
+        notes: "",
+        status: "active",
+        owner_profile_id: profile?.id ?? null,
+        created_by_profile_id: profile?.id ?? authSession?.user.id,
+      })
+      .select()
+      .single();
+
+    if (insertError) throw insertError;
+    const createdProject = mapProject(data, []);
+    upsertProjectInState(createdProject);
+    return createdProject;
+  }
+
+  async function updateProject(project: Project, patch: Partial<Pick<Project, "name" | "description" | "notes" | "status" | "ownerProfileId">>) {
+    if (!permissions.canManageEvents) throw new Error("Modification de projet réservée aux admins.");
+    if (!supabase) throw new Error("Configuration Supabase manquante.");
+    const payload: Database["public"]["Tables"]["projects"]["Update"] = {};
+    if (patch.name !== undefined) {
+      const name = patch.name.trim();
+      if (!name) throw new Error("Le nom du projet est obligatoire.");
+      payload.name = name;
+    }
+    if (patch.description !== undefined) payload.description = patch.description?.trim() || null;
+    if (patch.notes !== undefined) payload.notes = patch.notes?.trim() || null;
+    if (patch.status !== undefined) payload.status = patch.status;
+    if (patch.ownerProfileId !== undefined) payload.owner_profile_id = patch.ownerProfileId || null;
+
+    const { data, error: updateError } = await supabase
+      .from("projects")
+      .update(payload)
+      .eq("id", project.id)
+      .select()
+      .single();
+
+    if (updateError) throw updateError;
+    upsertProjectInState(mapProject(data, project.actions));
+  }
+
+  async function deleteProject(project: Project) {
+    if (!permissions.canManageEvents) throw new Error("Suppression de projet réservée aux admins.");
+    if (!supabase) throw new Error("Configuration Supabase manquante.");
+    const { error: deleteError } = await supabase.from("projects").delete().eq("id", project.id);
+    if (deleteError) throw deleteError;
+    setProjects((current) => current.filter((item) => item.id !== project.id));
+  }
+
+  async function createProjectAction(project: Project) {
+    if (!permissions.canManageEvents) throw new Error("Création d’action réservée aux admins.");
+    if (!supabase) throw new Error("Configuration Supabase manquante.");
+    const nextSortOrder = (project.actions.reduce((max, action) => Math.max(max, action.sortOrder ?? 0), 0) || 0) + 1;
+    const { data, error: insertError } = await supabase
+      .from("project_actions")
+      .insert({
+        project_id: project.id,
+        title: "Nouvelle action",
+        status: "todo",
+        sort_order: nextSortOrder,
+        created_by_profile_id: profile?.id ?? authSession?.user.id,
+      })
+      .select()
+      .single();
+
+    if (insertError) throw insertError;
+    const createdAction = mapProjectAction(data);
+    upsertProjectActionInState(createdAction);
+    return createdAction;
+  }
+
+  async function updateProjectAction(action: ProjectAction, patch: Partial<Pick<ProjectAction, "title" | "notes" | "status" | "assignedProfileId" | "dueDate">>) {
+    if (!permissions.canManageEvents) throw new Error("Modification d’action réservée aux admins.");
+    if (!supabase) throw new Error("Configuration Supabase manquante.");
+    const payload: Database["public"]["Tables"]["project_actions"]["Update"] = {};
+    if (patch.title !== undefined) {
+      const title = patch.title.trim();
+      if (!title) throw new Error("Le titre de l’action est obligatoire.");
+      payload.title = title;
+    }
+    if (patch.notes !== undefined) payload.notes = patch.notes?.trim() || null;
+    if (patch.status !== undefined) payload.status = patch.status;
+    if (patch.assignedProfileId !== undefined) payload.assigned_profile_id = patch.assignedProfileId || null;
+    if (patch.dueDate !== undefined) payload.due_date = patch.dueDate || null;
+
+    const { data, error: updateError } = await supabase
+      .from("project_actions")
+      .update(payload)
+      .eq("id", action.id)
+      .select()
+      .single();
+
+    if (updateError) throw updateError;
+    upsertProjectActionInState(mapProjectAction(data));
+  }
+
+  async function deleteProjectAction(action: ProjectAction) {
+    if (!permissions.canManageEvents) throw new Error("Suppression d’action réservée aux admins.");
+    if (!supabase) throw new Error("Configuration Supabase manquante.");
+    const { error: deleteError } = await supabase.from("project_actions").delete().eq("id", action.id);
+    if (deleteError) throw deleteError;
+    setProjects((current) =>
+      current.map((project) => (
+        project.id === action.projectId
+          ? { ...project, actions: project.actions.filter((item) => item.id !== action.id) }
+          : project
+      )),
+    );
+  }
+
   function upsertTaskInState(task: AppTask) {
     setTasks((current) => {
       const existingIndex = current.findIndex((item) => item.id === task.id);
@@ -7415,6 +7694,12 @@ export default function Home() {
     setCreateMenuOpen(false);
     setScreen("tasks");
     setTasksNavigationRequest((request) => request + 1);
+  }
+
+  function openProjectsFromHeader() {
+    if (!permissions.canManageEvents) return;
+    setCreateMenuOpen(false);
+    setScreen("projects");
   }
 
   function selectYearOverviewMonth(year: number, monthIndex: number) {
@@ -11010,6 +11295,7 @@ export default function Home() {
     setEvents([]);
     setNotifications([]);
     setTasks([]);
+    setProjects([]);
     setTaskProfiles([]);
     setNotificationsHydrated(false);
     setSelectedId(null);
@@ -11130,6 +11416,8 @@ export default function Home() {
           onOpenTasks={() => {
             openTasksFromHeader();
           }}
+          canOpenProjects={headerPermissions.canManageEvents}
+          onOpenProjects={openProjectsFromHeader}
           onImportQuote={() => {
             if (!headerPermissions.canManageEvents) return;
             openQuoteImport();
@@ -11222,6 +11510,22 @@ export default function Home() {
             />
           )}
 
+          {!loading && screen === "projects" && permissions.canManageEvents && (
+            <ProjectsView
+              projects={projects}
+              profiles={taskProfiles}
+              loading={projectsLoading}
+              error={projectsError}
+              onRefresh={() => refreshProjects()}
+              onCreateProject={createProject}
+              onUpdateProject={updateProject}
+              onDeleteProject={deleteProject}
+              onCreateAction={createProjectAction}
+              onUpdateAction={updateProjectAction}
+              onDeleteAction={deleteProjectAction}
+            />
+          )}
+
           {!loading && screen === "detail" && selectedEvent && (
             <EventDetailCarousel
               currentEvent={selectedEvent}
@@ -11283,6 +11587,11 @@ export default function Home() {
           onOpenTasks={() => {
             setYearOverviewOpen(false);
             openTasksFromHeader();
+          }}
+          canOpenProjects={headerPermissions.canManageEvents}
+          onOpenProjects={() => {
+            setYearOverviewOpen(false);
+            openProjectsFromHeader();
           }}
           onGoToday={() => {
             goToday();
@@ -11559,6 +11868,8 @@ function AppHeader({
   onOpenNotification,
   onDismissNotification,
   onOpenTasks,
+  canOpenProjects,
+  onOpenProjects,
   onImportQuote,
   onImportNativeMstvCalendar,
   onSearch,
@@ -11602,6 +11913,8 @@ function AppHeader({
   onOpenNotification: (notification: AppNotification) => void;
   onDismissNotification: (notification: AppNotification) => void;
   onOpenTasks: () => void;
+  canOpenProjects: boolean;
+  onOpenProjects: () => void;
   onImportQuote: () => void;
   onImportNativeMstvCalendar: () => void;
   onSearch: () => void;
@@ -11636,6 +11949,7 @@ function AppHeader({
         </button>
         <div className="flex shrink-0 items-center gap-1.5 sm:gap-2">
           <HeaderIcon label="Tâches" icon={ListTodo} active={screen === "tasks"} onClick={onOpenTasks} />
+          {canOpenProjects && <HeaderIcon label="Projets" icon={FileStack} active={screen === "projects"} onClick={onOpenProjects} />}
           <HeaderIcon label="Rechercher" icon={Search} active={searchActive} onClick={onSearch} />
           <NotificationMenu
             notifications={notifications}
@@ -11933,6 +12247,531 @@ function EventSearchOverlay({
           )}
         </div>
       </div>
+    </div>
+  );
+}
+
+function getProjectStatusLabel(status: ProjectStatus) {
+  return projectStatusOptions.find((option) => option.value === status)?.label ?? "Actif";
+}
+
+function ProjectsView({
+  projects,
+  profiles,
+  loading,
+  error,
+  onCreateProject,
+  onUpdateProject,
+  onDeleteProject,
+  onCreateAction,
+  onUpdateAction,
+  onDeleteAction,
+}: {
+  projects: Project[];
+  profiles: UserProfile[];
+  loading: boolean;
+  error: string | null;
+  onRefresh: () => Promise<void>;
+  onCreateProject: () => Promise<Project>;
+  onUpdateProject: (project: Project, patch: Partial<Pick<Project, "name" | "description" | "notes" | "status" | "ownerProfileId">>) => Promise<void>;
+  onDeleteProject: (project: Project) => Promise<void>;
+  onCreateAction: (project: Project) => Promise<ProjectAction>;
+  onUpdateAction: (action: ProjectAction, patch: Partial<Pick<ProjectAction, "title" | "notes" | "status" | "assignedProfileId" | "dueDate">>) => Promise<void>;
+  onDeleteAction: (action: ProjectAction) => Promise<void>;
+}) {
+  const nativeKeyboard = useNativeKeyboardVisibility<HTMLDivElement>();
+  const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
+  const [creatingProject, setCreatingProject] = useState(false);
+  const [creatingAction, setCreatingAction] = useState(false);
+  const [localError, setLocalError] = useState<string | null>(null);
+  const [projectDeleteCandidate, setProjectDeleteCandidate] = useState<Project | null>(null);
+  const [projectDeleting, setProjectDeleting] = useState(false);
+  const [actionDeleteCandidate, setActionDeleteCandidate] = useState<ProjectAction | null>(null);
+  const [actionDeleting, setActionDeleting] = useState(false);
+  const selectedProject = selectedProjectId ? projects.find((project) => project.id === selectedProjectId) ?? null : null;
+  const activeProjects = projects.filter((project) => project.status !== "completed");
+  const completedProjects = projects.filter((project) => project.status === "completed");
+
+  useEffect(() => {
+    setSelectedProjectId((currentId) => {
+      if (currentId && projects.some((project) => project.id === currentId)) return currentId;
+      return projects[0]?.id ?? null;
+    });
+  }, [projects]);
+
+  async function createAndSelectProject() {
+    setCreatingProject(true);
+    setLocalError(null);
+    try {
+      const project = await onCreateProject();
+      setSelectedProjectId(project.id);
+    } catch (createError) {
+      setLocalError(getUserFacingErrorMessage(createError, "Impossible de créer le projet."));
+    } finally {
+      setCreatingProject(false);
+    }
+  }
+
+  async function createActionForSelectedProject() {
+    if (!selectedProject) return;
+    setCreatingAction(true);
+    setLocalError(null);
+    try {
+      await onCreateAction(selectedProject);
+    } catch (createError) {
+      setLocalError(getUserFacingErrorMessage(createError, "Impossible de créer l’action."));
+    } finally {
+      setCreatingAction(false);
+    }
+  }
+
+  async function confirmProjectDelete() {
+    if (!projectDeleteCandidate) return;
+    setProjectDeleting(true);
+    setLocalError(null);
+    try {
+      await onDeleteProject(projectDeleteCandidate);
+      setProjectDeleteCandidate(null);
+    } catch (deleteError) {
+      setLocalError(getUserFacingErrorMessage(deleteError, "Impossible de supprimer le projet."));
+    } finally {
+      setProjectDeleting(false);
+    }
+  }
+
+  async function confirmActionDelete() {
+    if (!actionDeleteCandidate) return;
+    setActionDeleting(true);
+    setLocalError(null);
+    try {
+      await onDeleteAction(actionDeleteCandidate);
+      setActionDeleteCandidate(null);
+    } catch (deleteError) {
+      setLocalError(getUserFacingErrorMessage(deleteError, "Impossible de supprimer l’action."));
+    } finally {
+      setActionDeleting(false);
+    }
+  }
+
+  return (
+    <div ref={nativeKeyboard.scrollContainerRef} style={nativeKeyboard.scrollContainerStyle} className="flex min-h-0 flex-1 flex-col">
+      {(error || localError) && <StatusMessage tone="error">{localError ?? error}</StatusMessage>}
+      <div className="grid min-h-0 flex-1 gap-3 md:grid-cols-[280px_minmax(0,1fr)]">
+        <aside className={cn("min-h-0 flex-col rounded-3xl bg-white p-3", selectedProject ? "hidden md:flex" : "flex")}>
+          <div className="mb-3 flex items-center justify-between gap-2">
+            <h1 className="text-lg font-semibold text-neutral-950">Projets</h1>
+            <button
+              type="button"
+              onClick={() => void createAndSelectProject()}
+              disabled={creatingProject}
+              className="flex h-9 w-9 items-center justify-center rounded-full bg-[#bb2720] text-lg font-semibold leading-none text-white transition hover:bg-[#bb2720] disabled:bg-neutral-300"
+              aria-label="Créer un projet"
+            >
+              +
+            </button>
+          </div>
+          {loading && projects.length === 0 ? (
+            <div className="grid min-h-40 place-items-center rounded-2xl bg-neutral-50 text-base font-semibold text-neutral-400">Chargement...</div>
+          ) : projects.length === 0 ? (
+            <button
+              type="button"
+              onClick={() => void createAndSelectProject()}
+              className="grid min-h-40 place-items-center rounded-2xl bg-neutral-50 px-4 text-center text-base font-semibold text-neutral-400 transition hover:bg-neutral-100"
+            >
+              Aucun projet
+            </button>
+          ) : (
+            <div className="no-scrollbar min-h-0 flex-1 overflow-y-auto pr-1">
+              <ProjectListSection
+                label="Actifs"
+                projects={activeProjects}
+                selectedProjectId={selectedProjectId}
+                onSelect={setSelectedProjectId}
+              />
+              <ProjectListSection
+                label="Terminés"
+                projects={completedProjects}
+                selectedProjectId={selectedProjectId}
+                onSelect={setSelectedProjectId}
+              />
+            </div>
+          )}
+        </aside>
+
+        <section className={cn("min-h-0 flex-col rounded-3xl bg-white p-3 md:flex md:p-4", selectedProject ? "flex" : "hidden md:flex")}>
+          {selectedProject ? (
+            <ProjectDetailPanel
+              key={selectedProject.id}
+              project={selectedProject}
+              profiles={profiles}
+              saving={creatingAction}
+              onBack={() => setSelectedProjectId(null)}
+              onUpdateProject={onUpdateProject}
+              onDeleteProject={() => setProjectDeleteCandidate(selectedProject)}
+              onCreateAction={() => void createActionForSelectedProject()}
+              onUpdateAction={onUpdateAction}
+              onDeleteAction={setActionDeleteCandidate}
+              onNativeFieldFocus={nativeKeyboard.handleFieldFocus}
+            />
+          ) : (
+            <div className="grid min-h-72 flex-1 place-items-center text-center">
+              <div>
+                <p className="text-base font-semibold text-neutral-400">Sélectionnez un projet</p>
+                <button
+                  type="button"
+                  onClick={() => void createAndSelectProject()}
+                  disabled={creatingProject}
+                  className="mt-3 rounded-2xl bg-neutral-50 px-4 py-2 text-base font-semibold text-neutral-600 transition hover:bg-neutral-100 disabled:text-neutral-300"
+                >
+                  Nouveau projet
+                </button>
+              </div>
+            </div>
+          )}
+        </section>
+      </div>
+
+      {projectDeleteCandidate && (
+        <SharedConfirmationDialog
+          title="Supprimer ce projet ?"
+          description="Les actions du projet seront également supprimées. Cette opération ne touche pas aux tâches opérationnelles."
+          detailTitle={projectDeleteCandidate.name}
+          confirmLabel="Supprimer"
+          busyLabel="Suppression..."
+          busy={projectDeleting}
+          onCancel={() => setProjectDeleteCandidate(null)}
+          onConfirm={() => void confirmProjectDelete()}
+        />
+      )}
+
+      {actionDeleteCandidate && (
+        <SharedConfirmationDialog
+          title="Supprimer cette action ?"
+          detailTitle={actionDeleteCandidate.title}
+          confirmLabel="Supprimer"
+          busyLabel="Suppression..."
+          busy={actionDeleting}
+          onCancel={() => setActionDeleteCandidate(null)}
+          onConfirm={() => void confirmActionDelete()}
+        />
+      )}
+    </div>
+  );
+}
+
+function ProjectListSection({
+  label,
+  projects,
+  selectedProjectId,
+  onSelect,
+}: {
+  label: string;
+  projects: Project[];
+  selectedProjectId: string | null;
+  onSelect: (projectId: string) => void;
+}) {
+  if (projects.length === 0) return null;
+  return (
+    <div className="mb-4 last:mb-0">
+      <p className="mb-1.5 px-2 text-xs font-semibold uppercase tracking-[0.08em] text-neutral-400">{label}</p>
+      <div className="grid gap-1">
+        {projects.map((project) => {
+          const selected = project.id === selectedProjectId;
+          return (
+            <button
+              key={project.id}
+              type="button"
+              onClick={() => onSelect(project.id)}
+              className={cn(
+                "rounded-2xl px-3 py-2.5 text-left transition",
+                selected ? "bg-neutral-950 text-white" : "bg-white text-neutral-800 hover:bg-neutral-50",
+              )}
+            >
+              <span className="block truncate text-base font-semibold">{project.name}</span>
+              <span className={cn("mt-0.5 block text-sm font-semibold", selected ? "text-white/65" : "text-neutral-400")}>{getProjectStatusLabel(project.status)}</span>
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function ProjectDetailPanel({
+  project,
+  profiles,
+  saving,
+  onBack,
+  onUpdateProject,
+  onDeleteProject,
+  onCreateAction,
+  onUpdateAction,
+  onDeleteAction,
+  onNativeFieldFocus,
+}: {
+  project: Project;
+  profiles: UserProfile[];
+  saving: boolean;
+  onBack: () => void;
+  onUpdateProject: (project: Project, patch: Partial<Pick<Project, "name" | "description" | "notes" | "status" | "ownerProfileId">>) => Promise<void>;
+  onDeleteProject: () => void;
+  onCreateAction: () => void;
+  onUpdateAction: (action: ProjectAction, patch: Partial<Pick<ProjectAction, "title" | "notes" | "status" | "assignedProfileId" | "dueDate">>) => Promise<void>;
+  onDeleteAction: (action: ProjectAction) => void;
+  onNativeFieldFocus?: (target: HTMLElement) => boolean;
+}) {
+  const [name, setName] = useState(project.name);
+  const [description, setDescription] = useState(project.description ?? "");
+  const [notes, setNotes] = useState(project.notes ?? "");
+  const todoActions = project.actions.filter((action) => action.status === "todo");
+  const doneActions = project.actions.filter((action) => action.status === "done");
+
+  useEffect(() => {
+    setName(project.name);
+    setDescription(project.description ?? "");
+    setNotes(project.notes ?? "");
+  }, [project.id, project.name, project.description, project.notes]);
+
+  async function updateProjectSafely(patch: Partial<Pick<Project, "name" | "description" | "notes" | "status" | "ownerProfileId">>) {
+    try {
+      await onUpdateProject(project, patch);
+    } catch (updateError) {
+      console.error("Project update failed", getDebugError(updateError));
+      setName(project.name);
+      setDescription(project.description ?? "");
+      setNotes(project.notes ?? "");
+    }
+  }
+
+  return (
+    <div className="no-scrollbar min-h-0 flex-1 overflow-y-auto overscroll-contain">
+      <div className="mb-3 flex items-center justify-between gap-2">
+        <button type="button" onClick={onBack} className="rounded-xl bg-neutral-50 px-3 py-1.5 text-sm font-semibold text-neutral-600 transition hover:bg-neutral-100 md:hidden">
+          Retour
+        </button>
+        <button type="button" onClick={onDeleteProject} className="ml-auto rounded-xl bg-[#bb2720]/[0.07] px-3 py-1.5 text-sm font-semibold text-[#bb2720] transition hover:bg-[#bb2720]/[0.11]">
+          Supprimer
+        </button>
+      </div>
+
+      <div className="grid gap-3">
+        <div className="grid gap-2 md:grid-cols-[minmax(0,1fr)_180px_180px]">
+          <input
+            {...iosKeyboardGuardProps}
+            value={name}
+            onFocus={(event) => onNativeFieldFocus?.(event.currentTarget)}
+            onChange={(event) => setName(event.target.value)}
+            onBlur={() => {
+              if (name.trim() !== project.name) void updateProjectSafely({ name });
+            }}
+            className="h-11 min-w-0 rounded-2xl bg-neutral-50 px-4 text-lg font-semibold text-neutral-950 outline-none transition focus:bg-neutral-100"
+            placeholder="Nom du projet"
+          />
+          <select
+            {...iosKeyboardGuardProps}
+            value={project.status}
+            onChange={(event) => void updateProjectSafely({ status: event.target.value as ProjectStatus })}
+            className="h-11 rounded-2xl bg-neutral-50 px-3 text-base font-semibold text-neutral-700 outline-none transition focus:bg-neutral-100"
+          >
+            {projectStatusOptions.map((option) => (
+              <option key={option.value} value={option.value}>{option.label}</option>
+            ))}
+          </select>
+          <select
+            {...iosKeyboardGuardProps}
+            value={project.ownerProfileId ?? ""}
+            onChange={(event) => void updateProjectSafely({ ownerProfileId: event.target.value || null })}
+            className="h-11 rounded-2xl bg-neutral-50 px-3 text-base font-semibold text-neutral-700 outline-none transition focus:bg-neutral-100"
+          >
+            <option value="">Responsable</option>
+            {profiles.map((person) => (
+              <option key={person.id} value={person.id}>{getProfileFirstNameLabel(person)}</option>
+            ))}
+          </select>
+        </div>
+
+        <label className="block">
+          <span className="mb-1 block px-1 text-xs font-semibold uppercase tracking-[0.08em] text-neutral-400">Description</span>
+          <textarea
+            {...iosKeyboardGuardProps}
+            value={description}
+            rows={2}
+            onFocus={(event) => onNativeFieldFocus?.(event.currentTarget)}
+            onChange={(event) => setDescription(event.target.value)}
+            onBlur={() => {
+              if (description.trim() !== (project.description ?? "")) void updateProjectSafely({ description });
+            }}
+            className="w-full resize-none rounded-2xl bg-neutral-50 px-4 py-3 text-base font-medium leading-relaxed text-neutral-800 outline-none transition placeholder:text-neutral-300 focus:bg-neutral-100"
+            placeholder="Résumé du projet"
+          />
+        </label>
+
+        <label className="block">
+          <span className="mb-1 block px-1 text-xs font-semibold uppercase tracking-[0.08em] text-neutral-400">Notes</span>
+          <textarea
+            {...iosKeyboardGuardProps}
+            value={notes}
+            rows={5}
+            onFocus={(event) => onNativeFieldFocus?.(event.currentTarget)}
+            onChange={(event) => setNotes(event.target.value)}
+            onBlur={() => {
+              if (notes.trim() !== (project.notes ?? "")) void updateProjectSafely({ notes });
+            }}
+            className="w-full resize-none rounded-2xl bg-neutral-50 px-4 py-3 text-base font-medium leading-relaxed text-neutral-800 outline-none transition placeholder:text-neutral-300 focus:bg-neutral-100"
+            placeholder="Notes, décisions, contexte"
+          />
+        </label>
+
+        <section className="rounded-2xl bg-neutral-50 p-3">
+          <div className="mb-2 flex items-center justify-between gap-2">
+            <h2 className="text-base font-semibold text-neutral-950">Actions</h2>
+            <button type="button" onClick={onCreateAction} disabled={saving} className="rounded-xl bg-white px-3 py-1.5 text-sm font-semibold text-neutral-700 transition hover:bg-neutral-100 disabled:text-neutral-300">
+              + Action
+            </button>
+          </div>
+          <div className="grid gap-2">
+            {todoActions.length === 0 && doneActions.length === 0 && (
+              <div className="rounded-2xl bg-white px-4 py-6 text-center text-base font-semibold text-neutral-400">Aucune action</div>
+            )}
+            {todoActions.map((action) => (
+              <ProjectActionRow
+                key={action.id}
+                action={action}
+                profiles={profiles}
+                onUpdateAction={onUpdateAction}
+                onDeleteAction={onDeleteAction}
+                onNativeFieldFocus={onNativeFieldFocus}
+              />
+            ))}
+            {doneActions.length > 0 && (
+              <div className="pt-2">
+                <p className="mb-1 px-1 text-xs font-semibold uppercase tracking-[0.08em] text-neutral-400">Terminé</p>
+                <div className="grid gap-2">
+                  {doneActions.map((action) => (
+                    <ProjectActionRow
+                      key={action.id}
+                      action={action}
+                      profiles={profiles}
+                      onUpdateAction={onUpdateAction}
+                      onDeleteAction={onDeleteAction}
+                      onNativeFieldFocus={onNativeFieldFocus}
+                    />
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+          {/* Future: an action project could be converted into an operational team task from here. */}
+        </section>
+      </div>
+    </div>
+  );
+}
+
+function ProjectActionRow({
+  action,
+  profiles,
+  onUpdateAction,
+  onDeleteAction,
+  onNativeFieldFocus,
+}: {
+  action: ProjectAction;
+  profiles: UserProfile[];
+  onUpdateAction: (action: ProjectAction, patch: Partial<Pick<ProjectAction, "title" | "notes" | "status" | "assignedProfileId" | "dueDate">>) => Promise<void>;
+  onDeleteAction: (action: ProjectAction) => void;
+  onNativeFieldFocus?: (target: HTMLElement) => boolean;
+}) {
+  const [title, setTitle] = useState(action.title);
+  const [notes, setNotes] = useState(action.notes ?? "");
+  const [datePickerOpen, setDatePickerOpen] = useState(false);
+  const done = action.status === "done";
+
+  useEffect(() => {
+    setTitle(action.title);
+    setNotes(action.notes ?? "");
+  }, [action.id, action.title, action.notes]);
+
+  async function updateActionSafely(patch: Partial<Pick<ProjectAction, "title" | "notes" | "status" | "assignedProfileId" | "dueDate">>) {
+    try {
+      await onUpdateAction(action, patch);
+    } catch (updateError) {
+      console.error("Project action update failed", getDebugError(updateError));
+      setTitle(action.title);
+      setNotes(action.notes ?? "");
+    }
+  }
+
+  return (
+    <div className={cn("rounded-2xl bg-white px-3 py-3", done && "opacity-65")}>
+      <div className="grid gap-2 md:grid-cols-[auto_minmax(0,1fr)_150px_140px_auto] md:items-center">
+        <label className="flex items-center gap-2 text-sm font-semibold text-neutral-500">
+          <input
+            type="checkbox"
+            checked={done}
+            onChange={(event) => void updateActionSafely({ status: event.target.checked ? "done" : "todo" })}
+            className="h-4 w-4 rounded border-neutral-300 accent-neutral-700"
+          />
+          <span className="md:hidden">Terminé</span>
+        </label>
+        <input
+          {...iosKeyboardGuardProps}
+          value={title}
+          onFocus={(event) => onNativeFieldFocus?.(event.currentTarget)}
+          onChange={(event) => setTitle(event.target.value)}
+          onBlur={() => {
+            if (title.trim() !== action.title) void updateActionSafely({ title });
+          }}
+          className={cn("h-10 min-w-0 rounded-xl bg-neutral-50 px-3 text-base font-semibold outline-none transition focus:bg-neutral-100", done ? "text-neutral-400 line-through" : "text-neutral-900")}
+          placeholder="Action"
+        />
+        <select
+          {...iosKeyboardGuardProps}
+          value={action.assignedProfileId ?? ""}
+          onChange={(event) => void updateActionSafely({ assignedProfileId: event.target.value || null })}
+          className="h-10 rounded-xl bg-neutral-50 px-3 text-base font-semibold text-neutral-600 outline-none transition focus:bg-neutral-100"
+        >
+          <option value="">Assigné à</option>
+          {profiles.map((person) => (
+            <option key={person.id} value={person.id}>{getProfileFirstNameLabel(person)}</option>
+          ))}
+        </select>
+        <button
+          type="button"
+          onClick={() => setDatePickerOpen(true)}
+          className="h-10 rounded-xl bg-neutral-50 px-3 text-left text-base font-semibold text-neutral-600 transition hover:bg-neutral-100"
+        >
+          {action.dueDate ? formatShortDateWithYear(action.dueDate) : "Échéance"}
+        </button>
+        <button
+          type="button"
+          onClick={() => onDeleteAction(action)}
+          className="h-10 rounded-xl px-3 text-sm font-semibold text-neutral-400 transition hover:bg-[#bb2720]/[0.07] hover:text-[#bb2720]"
+        >
+          Supprimer
+        </button>
+      </div>
+      <textarea
+        {...iosKeyboardGuardProps}
+        value={notes}
+        rows={2}
+        onFocus={(event) => onNativeFieldFocus?.(event.currentTarget)}
+        onChange={(event) => setNotes(event.target.value)}
+        onBlur={() => {
+          if (notes.trim() !== (action.notes ?? "")) void updateActionSafely({ notes });
+        }}
+        className="mt-2 w-full resize-none rounded-xl bg-neutral-50 px-3 py-2 text-base font-medium leading-relaxed text-neutral-700 outline-none transition placeholder:text-neutral-300 focus:bg-neutral-100"
+        placeholder="Notes"
+      />
+      {datePickerOpen && (
+        <MstvDatePicker
+          selectedDate={action.dueDate ?? formatDateKey(new Date())}
+          onClose={() => setDatePickerOpen(false)}
+          onSelectDate={(nextDate) => {
+            setDatePickerOpen(false);
+            void updateActionSafely({ dueDate: nextDate });
+          }}
+        />
+      )}
     </div>
   );
 }
@@ -13344,6 +14183,8 @@ function YearOverviewOverlay({
   onOpenNotification,
   onDismissNotification,
   onOpenTasks,
+  canOpenProjects,
+  onOpenProjects,
   onGoToday,
   onImportQuote,
   onImportNativeMstvCalendar,
@@ -13383,6 +14224,8 @@ function YearOverviewOverlay({
   onOpenNotification: (notification: AppNotification) => void;
   onDismissNotification: (notification: AppNotification) => void;
   onOpenTasks: () => void;
+  canOpenProjects: boolean;
+  onOpenProjects: () => void;
   onGoToday: () => void;
   onImportQuote: () => void;
   onImportNativeMstvCalendar: () => void;
@@ -13632,6 +14475,8 @@ function YearOverviewOverlay({
           onOpenNotification={onOpenNotification}
           onDismissNotification={onDismissNotification}
           onOpenTasks={onOpenTasks}
+          canOpenProjects={canOpenProjects}
+          onOpenProjects={onOpenProjects}
           onImportQuote={onImportQuote}
           onImportNativeMstvCalendar={onImportNativeMstvCalendar}
           onSearch={onSearch}

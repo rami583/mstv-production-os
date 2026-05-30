@@ -357,6 +357,62 @@ export type Database = {
         Update: Partial<Database["public"]["Tables"]["tasks"]["Insert"]>;
         Relationships: [];
       };
+      projects: {
+        Row: {
+          id: string;
+          name: string;
+          description: string | null;
+          notes: string | null;
+          status: "active" | "paused" | "completed";
+          owner_profile_id: string | null;
+          created_by_profile_id: string;
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: {
+          id?: string;
+          name: string;
+          description?: string | null;
+          notes?: string | null;
+          status?: "active" | "paused" | "completed";
+          owner_profile_id?: string | null;
+          created_by_profile_id?: string;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Update: Partial<Database["public"]["Tables"]["projects"]["Insert"]>;
+        Relationships: [];
+      };
+      project_actions: {
+        Row: {
+          id: string;
+          project_id: string;
+          title: string;
+          notes: string | null;
+          status: "todo" | "done";
+          assigned_profile_id: string | null;
+          due_date: string | null;
+          sort_order: number | null;
+          created_by_profile_id: string;
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: {
+          id?: string;
+          project_id: string;
+          title: string;
+          notes?: string | null;
+          status?: "todo" | "done";
+          assigned_profile_id?: string | null;
+          due_date?: string | null;
+          sort_order?: number | null;
+          created_by_profile_id?: string;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Update: Partial<Database["public"]["Tables"]["project_actions"]["Insert"]>;
+        Relationships: [];
+      };
       profiles: {
         Row: {
           id: string;
