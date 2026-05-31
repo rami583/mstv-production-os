@@ -415,6 +415,26 @@ export type Database = {
         Update: Partial<Database["public"]["Tables"]["project_actions"]["Insert"]>;
         Relationships: [];
       };
+      project_participants: {
+        Row: {
+          id: string;
+          project_id: string;
+          profile_id: string | null;
+          external_name: string | null;
+          sort_order: number | null;
+          created_at: string;
+        };
+        Insert: {
+          id?: string;
+          project_id: string;
+          profile_id?: string | null;
+          external_name?: string | null;
+          sort_order?: number | null;
+          created_at?: string;
+        };
+        Update: Partial<Database["public"]["Tables"]["project_participants"]["Insert"]>;
+        Relationships: [];
+      };
       profiles: {
         Row: {
           id: string;

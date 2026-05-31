@@ -146,6 +146,7 @@ type NotificationRow = Database["public"]["Tables"]["notifications"]["Row"];
 type TaskRow = Database["public"]["Tables"]["tasks"]["Row"];
 type ProjectRow = Database["public"]["Tables"]["projects"]["Row"];
 type ProjectActionRow = Database["public"]["Tables"]["project_actions"]["Row"];
+type ProjectParticipantRow = Database["public"]["Tables"]["project_participants"]["Row"];
 type ProfileRow = Database["public"]["Tables"]["profiles"]["Row"];
 type ExternalCalendarRow = Database["public"]["Tables"]["external_calendars"]["Row"];
 type ExternalCalendarEventRow = Database["public"]["Tables"]["external_calendar_events"]["Row"];
@@ -457,6 +458,20 @@ type ProjectAction = {
   updatedAt: string;
 };
 
+type ProjectParticipant = {
+  id: string;
+  projectId: string;
+  profileId: string | null;
+  externalName: string | null;
+  sortOrder: number;
+  createdAt: string;
+};
+
+type ProjectParticipantInput = {
+  profileId?: string | null;
+  externalName?: string | null;
+};
+
 type Project = {
   id: string;
   name: string;
@@ -468,6 +483,7 @@ type Project = {
   createdByProfileId: string;
   createdAt: string;
   updatedAt: string;
+  participants: ProjectParticipant[];
   actions: ProjectAction[];
 };
 
@@ -2990,7 +3006,25 @@ function mapProjectAction(row: ProjectActionRow): ProjectAction {
   };
 }
 
-function mapProject(row: ProjectRow, actions: ProjectAction[] = []): Project {
+function mapProjectParticipant(row: ProjectParticipantRow): ProjectParticipant {
+  return {
+    id: row.id,
+    projectId: row.project_id,
+    profileId: row.profile_id ?? null,
+    externalName: row.external_name ?? null,
+    sortOrder: row.sort_order ?? 0,
+    createdAt: row.created_at,
+  };
+}
+
+function sortProjectParticipants(participants: ProjectParticipant[]) {
+  return [...participants].sort((left, right) => {
+    if (left.sortOrder !== right.sortOrder) return left.sortOrder - right.sortOrder;
+    return left.createdAt.localeCompare(right.createdAt);
+  });
+}
+
+function mapProject(row: ProjectRow, actions: ProjectAction[] = [], participants: ProjectParticipant[] = []): Project {
   return {
     id: row.id,
     name: row.name,
@@ -3002,6 +3036,7 @@ function mapProject(row: ProjectRow, actions: ProjectAction[] = []): Project {
     createdByProfileId: row.created_by_profile_id,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+    participants: sortProjectParticipants(participants),
     actions,
   };
 }
@@ -4109,7 +4144,7 @@ async function fetchProjects() {
     throw new Error("Configuration Supabase manquante.");
   }
 
-  const [projectsResult, actionsResult] = await Promise.all([
+  const [projectsResult, actionsResult, participantsResult] = await Promise.all([
     supabase
       .from("projects")
       .select("*")
@@ -4120,10 +4155,16 @@ async function fetchProjects() {
       .select("*")
       .order("sort_order", { ascending: true, nullsFirst: false })
       .order("created_at", { ascending: true }),
+    supabase
+      .from("project_participants")
+      .select("*")
+      .order("sort_order", { ascending: true, nullsFirst: false })
+      .order("created_at", { ascending: true }),
   ]);
 
   if (projectsResult.error) throw projectsResult.error;
   if (actionsResult.error) throw actionsResult.error;
+  if (participantsResult.error) throw participantsResult.error;
 
   const actionsByProjectId = new Map<string, ProjectAction[]>();
   ((actionsResult.data ?? []) as ProjectActionRow[]).forEach((row) => {
@@ -4131,7 +4172,13 @@ async function fetchProjects() {
     actionsByProjectId.set(action.projectId, [...(actionsByProjectId.get(action.projectId) ?? []), action]);
   });
 
-  return ((projectsResult.data ?? []) as ProjectRow[]).map((row) => mapProject(row, actionsByProjectId.get(row.id) ?? []));
+  const participantsByProjectId = new Map<string, ProjectParticipant[]>();
+  ((participantsResult.data ?? []) as ProjectParticipantRow[]).forEach((row) => {
+    const participant = mapProjectParticipant(row);
+    participantsByProjectId.set(participant.projectId, [...(participantsByProjectId.get(participant.projectId) ?? []), participant]);
+  });
+
+  return ((projectsResult.data ?? []) as ProjectRow[]).map((row) => mapProject(row, actionsByProjectId.get(row.id) ?? [], participantsByProjectId.get(row.id) ?? []));
 }
 
 async function fetchUnreadChangeData(profileId: string) {
@@ -4466,6 +4513,7 @@ export default function Home() {
   const headerSession = authSession;
   const headerPermissions = useMemo(() => getPermissionsForRole(headerProfile?.role ?? "team"), [headerProfile?.role]);
   const headerCanOpenTrash = headerPermissions.canRestoreEvents || headerPermissions.canPermanentDeleteEvents;
+  const canOpenProjects = headerPermissions.canManageEvents || projects.length > 0;
   const actorName = getProfileDisplayName(profile);
   const externalCalendarVisibilityState = useMemo(
     () => buildExternalCalendarVisibilityState(externalCalendars, getCalendarVisibilityViewer(profile, authSession?.user.id ?? null)),
@@ -5007,7 +5055,7 @@ export default function Home() {
 
   useEffect(() => {
     if (screen !== "projects") return;
-    if (!permissions.canManageEvents) {
+    if (!canOpenProjects) {
       setScreen("calendar");
       return;
     }
@@ -5015,7 +5063,12 @@ export default function Home() {
     if (taskProfiles.length === 0) {
       void refreshTaskProfiles();
     }
-  }, [permissions.canManageEvents, screen]);
+  }, [canOpenProjects, projects.length, screen, taskProfiles.length]);
+
+  useEffect(() => {
+    if (!profile?.id || permissions.canManageEvents) return;
+    void refreshProjects({ silent: true });
+  }, [permissions.canManageEvents, profile?.id]);
 
   useEffect(() => {
     if (!userManagementOpen || !permissions.canManageUsers) return;
@@ -6844,7 +6897,7 @@ export default function Home() {
   }
 
   async function refreshProjects(options: { silent?: boolean } = {}) {
-    if (!permissions.canManageEvents || !supabase || !online) return;
+    if (!profile?.id || !supabase || !online) return;
     if (!options.silent) {
       setProjectsLoading(true);
     }
@@ -6913,7 +6966,7 @@ export default function Home() {
       .single();
 
     if (insertError) throw insertError;
-    const createdProject = mapProject(data, []);
+    const createdProject = mapProject(data, [], []);
     upsertProjectInState(createdProject);
     return createdProject;
   }
@@ -6939,6 +6992,22 @@ export default function Home() {
 
     if (insertError) throw insertError;
 
+    let duplicatedParticipants: ProjectParticipant[] = [];
+    if (project.participants.length > 0) {
+      const { data: participantRows, error: participantsError } = await supabase
+        .from("project_participants")
+        .insert(project.participants.map((participant, index) => ({
+          project_id: data.id,
+          profile_id: participant.profileId,
+          external_name: participant.externalName,
+          sort_order: participant.sortOrder || index + 1,
+        })))
+        .select();
+
+      if (participantsError) throw participantsError;
+      duplicatedParticipants = ((participantRows ?? []) as ProjectParticipantRow[]).map(mapProjectParticipant);
+    }
+
     let duplicatedActions: ProjectAction[] = [];
     if (project.actions.length > 0) {
       const { data: actionRows, error: actionsError } = await supabase
@@ -6959,7 +7028,7 @@ export default function Home() {
       duplicatedActions = ((actionRows ?? []) as ProjectActionRow[]).map(mapProjectAction);
     }
 
-    const duplicatedProject = mapProject(data, duplicatedActions);
+    const duplicatedProject = mapProject(data, duplicatedActions, duplicatedParticipants);
     upsertProjectInState(duplicatedProject);
     return duplicatedProject;
   }
@@ -6986,7 +7055,55 @@ export default function Home() {
       .single();
 
     if (updateError) throw updateError;
-    upsertProjectInState(mapProject(data, project.actions));
+    upsertProjectInState(mapProject(data, project.actions, project.participants));
+  }
+
+  async function updateProjectParticipants(project: Project, nextParticipants: ProjectParticipantInput[]) {
+    if (!permissions.canManageEvents) throw new Error("Modification des participants réservée aux admins.");
+    if (!supabase) throw new Error("Configuration Supabase manquante.");
+
+    const normalizedParticipants = nextParticipants
+      .map((participant) => ({
+        profileId: participant.profileId ?? null,
+        externalName: participant.externalName?.trim() || null,
+      }))
+      .filter((participant) => participant.profileId || participant.externalName);
+
+    const firstInternalParticipant = normalizedParticipants.find((participant) => participant.profileId)?.profileId ?? null;
+
+    const { error: deleteError } = await supabase
+      .from("project_participants")
+      .delete()
+      .eq("project_id", project.id);
+
+    if (deleteError) throw deleteError;
+
+    let participants: ProjectParticipant[] = [];
+    if (normalizedParticipants.length > 0) {
+      const { data, error: insertError } = await supabase
+        .from("project_participants")
+        .insert(normalizedParticipants.map((participant, index) => ({
+          project_id: project.id,
+          profile_id: participant.profileId,
+          external_name: participant.externalName,
+          sort_order: index + 1,
+        })))
+        .select();
+
+      if (insertError) throw insertError;
+      participants = ((data ?? []) as ProjectParticipantRow[]).map(mapProjectParticipant);
+    }
+
+    const { data: updatedProjectRow, error: updateError } = await supabase
+      .from("projects")
+      .update({ owner_profile_id: firstInternalParticipant })
+      .eq("id", project.id)
+      .select()
+      .single();
+
+    if (updateError) throw updateError;
+
+    upsertProjectInState(mapProject(updatedProjectRow, project.actions, participants));
   }
 
   async function deleteProject(project: Project) {
@@ -7792,7 +7909,7 @@ export default function Home() {
   }
 
   function openProjectsFromHeader() {
-    if (!permissions.canManageEvents) return;
+    if (!canOpenProjects) return;
     setCreateMenuOpen(false);
     setScreen("projects");
   }
@@ -11511,7 +11628,7 @@ export default function Home() {
           onOpenTasks={() => {
             openTasksFromHeader();
           }}
-          canOpenProjects={headerPermissions.canManageEvents}
+          canOpenProjects={canOpenProjects}
           onOpenProjects={openProjectsFromHeader}
           onImportQuote={() => {
             if (!headerPermissions.canManageEvents) return;
@@ -11605,10 +11722,11 @@ export default function Home() {
             />
           )}
 
-          {!loading && screen === "projects" && permissions.canManageEvents && (
+          {!loading && screen === "projects" && (permissions.canManageEvents || projects.length > 0) && (
             <ProjectsView
               projects={projects}
               profiles={taskProfiles}
+              canManageProjects={permissions.canManageEvents}
               loading={projectsLoading}
               error={projectsError}
               onRefresh={() => refreshProjects()}
@@ -11617,6 +11735,7 @@ export default function Home() {
               onDeleteProject={deleteProject}
               onDuplicateProject={duplicateProject}
               onReorderProjects={reorderProjects}
+              onUpdateParticipants={updateProjectParticipants}
               onCreateAction={createProjectAction}
               onUpdateAction={updateProjectAction}
               onDeleteAction={deleteProjectAction}
@@ -11685,7 +11804,7 @@ export default function Home() {
             setYearOverviewOpen(false);
             openTasksFromHeader();
           }}
-          canOpenProjects={headerPermissions.canManageEvents}
+          canOpenProjects={canOpenProjects}
           onOpenProjects={() => {
             setYearOverviewOpen(false);
             openProjectsFromHeader();
@@ -12390,6 +12509,7 @@ function getProjectSurfaceTone(project: Project) {
 function ProjectsView({
   projects,
   profiles,
+  canManageProjects,
   loading,
   error,
   onCreateProject,
@@ -12397,12 +12517,14 @@ function ProjectsView({
   onDeleteProject,
   onDuplicateProject,
   onReorderProjects,
+  onUpdateParticipants,
   onCreateAction,
   onUpdateAction,
   onDeleteAction,
 }: {
   projects: Project[];
   profiles: UserProfile[];
+  canManageProjects: boolean;
   loading: boolean;
   error: string | null;
   onRefresh: () => Promise<void>;
@@ -12411,6 +12533,7 @@ function ProjectsView({
   onDeleteProject: (project: Project) => Promise<void>;
   onDuplicateProject: (project: Project) => Promise<Project>;
   onReorderProjects: (orderedProjects: Project[]) => Promise<void>;
+  onUpdateParticipants: (project: Project, participants: ProjectParticipantInput[]) => Promise<void>;
   onCreateAction: (project: Project) => Promise<ProjectAction>;
   onUpdateAction: (action: ProjectAction, patch: Partial<Pick<ProjectAction, "title" | "notes" | "status" | "assignedProfileId" | "dueDate">>) => Promise<void>;
   onDeleteAction: (action: ProjectAction) => Promise<void>;
@@ -12461,7 +12584,7 @@ function ProjectsView({
   const previousProject = selectedProjectIndex > 0 ? selectedProjectNavigationProjects[selectedProjectIndex - 1] : null;
   const nextProject = selectedProjectIndex >= 0 && selectedProjectIndex < selectedProjectNavigationProjects.length - 1 ? selectedProjectNavigationProjects[selectedProjectIndex + 1] : null;
   const sortableProjectIds = orderedListProjects.map((project) => project.id);
-  const canSortProjects = orderedListProjects.length > 1;
+  const canSortProjects = canManageProjects && orderedListProjects.length > 1;
 
   useEffect(() => {
     setSelectedProjectId((currentId) => {
@@ -12645,9 +12768,11 @@ function ProjectsView({
           key={project.id}
           project={project}
           profiles={profiles}
+          canManageProjects={canManageProjects}
           saving={creatingAction && isCurrentProject}
           onBack={() => selectProject(null)}
           onUpdateProject={onUpdateProject}
+          onUpdateParticipants={onUpdateParticipants}
           onDeleteProject={() => setProjectDeleteCandidate(project)}
           onCreateAction={() => {
             if (!isCurrentProject) return;
@@ -12769,8 +12894,8 @@ function ProjectsView({
         <ProjectQueueRow
           key={project.id}
           project={project}
-          canDelete
-          canDuplicate
+          canDelete={canManageProjects}
+          canDuplicate={canManageProjects}
           onDelete={() => setProjectDeleteCandidate(project)}
           onDuplicate={() => void duplicateProjectFromList(project)}
           onOpen={() => selectProject(project.id)}
@@ -12783,9 +12908,9 @@ function ProjectsView({
         key={project.id}
         project={project}
         dragging={draggingProjectId === project.id}
-        canDrag
-        canDelete
-        canDuplicate
+        canDrag={canManageProjects}
+        canDelete={canManageProjects}
+        canDuplicate={canManageProjects}
         onDelete={() => setProjectDeleteCandidate(project)}
         onDuplicate={() => void duplicateProjectFromList(project)}
         onOpen={() => selectProject(project.id)}
@@ -12826,23 +12951,28 @@ function ProjectsView({
         <section className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-3xl bg-white p-3 md:p-4">
           <div className="mb-3 flex items-center justify-between gap-2">
             <h1 className="text-lg font-semibold text-neutral-950">Projets</h1>
-            <button
-              type="button"
-              onClick={() => void createAndSelectProject()}
-              disabled={creatingProject}
-              className="flex h-9 w-9 items-center justify-center rounded-full bg-[#bb2720] text-lg font-semibold leading-none text-white transition hover:bg-[#bb2720] disabled:bg-neutral-300"
-              aria-label="Créer un projet"
-            >
-              +
-            </button>
+            {canManageProjects && (
+              <button
+                type="button"
+                onClick={() => void createAndSelectProject()}
+                disabled={creatingProject}
+                className="flex h-9 w-9 items-center justify-center rounded-full bg-[#bb2720] text-lg font-semibold leading-none text-white transition hover:bg-[#bb2720] disabled:bg-neutral-300"
+                aria-label="Créer un projet"
+              >
+                +
+              </button>
+            )}
           </div>
           {loading && projects.length === 0 ? (
             <div className="grid min-h-40 place-items-center rounded-2xl bg-neutral-50 text-base font-semibold text-neutral-400">Chargement...</div>
           ) : projects.length === 0 ? (
             <button
               type="button"
-              onClick={() => void createAndSelectProject()}
-              className="grid min-h-40 w-full place-items-center rounded-2xl bg-neutral-50 px-4 text-center text-base font-semibold text-neutral-400 transition hover:bg-neutral-100"
+              onClick={() => {
+                if (canManageProjects) void createAndSelectProject();
+              }}
+              disabled={!canManageProjects}
+              className="grid min-h-40 w-full place-items-center rounded-2xl bg-neutral-50 px-4 text-center text-base font-semibold text-neutral-400 transition hover:bg-neutral-100 disabled:hover:bg-neutral-50"
             >
               Aucun projet
             </button>
@@ -13255,9 +13385,11 @@ const ProjectQueueRow = forwardRef<HTMLDivElement, {
 function ProjectDetailPanel({
   project,
   profiles,
+  canManageProjects,
   saving,
   onBack,
   onUpdateProject,
+  onUpdateParticipants,
   onDeleteProject,
   onCreateAction,
   onUpdateAction,
@@ -13266,9 +13398,11 @@ function ProjectDetailPanel({
 }: {
   project: Project;
   profiles: UserProfile[];
+  canManageProjects: boolean;
   saving: boolean;
   onBack: () => void;
   onUpdateProject: (project: Project, patch: Partial<Pick<Project, "name" | "description" | "notes" | "status" | "ownerProfileId">>) => Promise<void>;
+  onUpdateParticipants: (project: Project, participants: ProjectParticipantInput[]) => Promise<void>;
   onDeleteProject: () => void;
   onCreateAction: () => void;
   onUpdateAction: (action: ProjectAction, patch: Partial<Pick<ProjectAction, "title" | "notes" | "status" | "assignedProfileId" | "dueDate">>) => Promise<void>;
@@ -13288,6 +13422,7 @@ function ProjectDetailPanel({
   }, [project.id, project.name, project.description, project.notes]);
 
   async function updateProjectSafely(patch: Partial<Pick<Project, "name" | "description" | "notes" | "status" | "ownerProfileId">>) {
+    if (!canManageProjects) return;
     try {
       await onUpdateProject(project, patch);
     } catch (updateError) {
@@ -13304,46 +13439,47 @@ function ProjectDetailPanel({
         <button type="button" onClick={onBack} className="rounded-xl bg-neutral-50 px-3 py-1.5 text-sm font-semibold text-neutral-600 transition hover:bg-neutral-100">
           Retour
         </button>
-        <button type="button" onClick={onDeleteProject} className="ml-auto rounded-xl bg-[#bb2720]/[0.07] px-3 py-1.5 text-sm font-semibold text-[#bb2720] transition hover:bg-[#bb2720]/[0.11]">
-          Supprimer
-        </button>
+        {canManageProjects && (
+          <button type="button" onClick={onDeleteProject} className="ml-auto rounded-xl bg-[#bb2720]/[0.07] px-3 py-1.5 text-sm font-semibold text-[#bb2720] transition hover:bg-[#bb2720]/[0.11]">
+            Supprimer
+          </button>
+        )}
       </div>
 
       <div className="grid gap-3">
-        <div className="grid gap-2 md:grid-cols-[minmax(0,1fr)_180px_180px]">
+        <div className="grid gap-2 md:grid-cols-[minmax(0,1fr)_180px]">
           <input
             {...iosKeyboardGuardProps}
             value={name}
+            disabled={!canManageProjects}
             onFocus={(event) => onNativeFieldFocus?.(event.currentTarget)}
             onChange={(event) => setName(event.target.value)}
             onBlur={() => {
               if (name.trim() !== project.name) void updateProjectSafely({ name });
             }}
-            className="h-11 min-w-0 rounded-2xl bg-neutral-50 px-4 text-lg font-semibold text-neutral-950 outline-none transition focus:bg-neutral-100"
+            className="h-11 min-w-0 rounded-2xl bg-neutral-50 px-4 text-lg font-semibold text-neutral-950 outline-none transition focus:bg-neutral-100 disabled:opacity-100"
             placeholder="Nom du projet"
           />
           <select
             {...iosKeyboardGuardProps}
             value={project.status}
+            disabled={!canManageProjects}
             onChange={(event) => void updateProjectSafely({ status: event.target.value as ProjectStatus })}
-            className="h-11 rounded-2xl bg-neutral-50 px-3 text-base font-semibold text-neutral-700 outline-none transition focus:bg-neutral-100"
+            className="h-11 rounded-2xl bg-neutral-50 px-3 text-base font-semibold text-neutral-700 outline-none transition focus:bg-neutral-100 disabled:opacity-100"
           >
             {projectStatusOptions.map((option) => (
               <option key={option.value} value={option.value}>{option.label}</option>
             ))}
           </select>
-          <select
-            {...iosKeyboardGuardProps}
-            value={project.ownerProfileId ?? ""}
-            onChange={(event) => void updateProjectSafely({ ownerProfileId: event.target.value || null })}
-            className="h-11 rounded-2xl bg-neutral-50 px-3 text-base font-semibold text-neutral-700 outline-none transition focus:bg-neutral-100"
-          >
-            <option value="">Responsable</option>
-            {profiles.map((person) => (
-              <option key={person.id} value={person.id}>{getProfileFirstNameLabel(person)}</option>
-            ))}
-          </select>
         </div>
+
+        <ProjectParticipantsEditor
+          project={project}
+          profiles={profiles}
+          canManageProjects={canManageProjects}
+          onUpdateParticipants={onUpdateParticipants}
+          onNativeFieldFocus={onNativeFieldFocus}
+        />
 
         <label className="block">
           <span className="mb-1 block px-1 text-xs font-semibold uppercase tracking-[0.08em] text-neutral-400">Description</span>
@@ -13351,12 +13487,13 @@ function ProjectDetailPanel({
             {...iosKeyboardGuardProps}
             value={description}
             rows={2}
+            disabled={!canManageProjects}
             onFocus={(event) => onNativeFieldFocus?.(event.currentTarget)}
             onChange={(event) => setDescription(event.target.value)}
             onBlur={() => {
               if (description.trim() !== (project.description ?? "")) void updateProjectSafely({ description });
             }}
-            className="w-full resize-none rounded-2xl bg-neutral-50 px-4 py-3 text-base font-medium leading-relaxed text-neutral-800 outline-none transition placeholder:text-neutral-300 focus:bg-neutral-100"
+            className="w-full resize-none rounded-2xl bg-neutral-50 px-4 py-3 text-base font-medium leading-relaxed text-neutral-800 outline-none transition placeholder:text-neutral-300 focus:bg-neutral-100 disabled:opacity-100"
             placeholder="Résumé du projet"
           />
         </label>
@@ -13367,12 +13504,13 @@ function ProjectDetailPanel({
             {...iosKeyboardGuardProps}
             value={notes}
             rows={5}
+            disabled={!canManageProjects}
             onFocus={(event) => onNativeFieldFocus?.(event.currentTarget)}
             onChange={(event) => setNotes(event.target.value)}
             onBlur={() => {
               if (notes.trim() !== (project.notes ?? "")) void updateProjectSafely({ notes });
             }}
-            className="w-full resize-none rounded-2xl bg-neutral-50 px-4 py-3 text-base font-medium leading-relaxed text-neutral-800 outline-none transition placeholder:text-neutral-300 focus:bg-neutral-100"
+            className="w-full resize-none rounded-2xl bg-neutral-50 px-4 py-3 text-base font-medium leading-relaxed text-neutral-800 outline-none transition placeholder:text-neutral-300 focus:bg-neutral-100 disabled:opacity-100"
             placeholder="Notes, décisions, contexte"
           />
         </label>
@@ -13380,9 +13518,11 @@ function ProjectDetailPanel({
         <section className="rounded-2xl bg-neutral-50 p-3">
           <div className="mb-2 flex items-center justify-between gap-2">
             <h2 className="text-base font-semibold text-neutral-950">Actions</h2>
-            <button type="button" onClick={onCreateAction} disabled={saving} className="rounded-xl bg-white px-3 py-1.5 text-sm font-semibold text-neutral-700 transition hover:bg-neutral-100 disabled:text-neutral-300">
-              + Action
-            </button>
+            {canManageProjects && (
+              <button type="button" onClick={onCreateAction} disabled={saving} className="rounded-xl bg-white px-3 py-1.5 text-sm font-semibold text-neutral-700 transition hover:bg-neutral-100 disabled:text-neutral-300">
+                + Action
+              </button>
+            )}
           </div>
           <div className="grid gap-2">
             {todoActions.length === 0 && doneActions.length === 0 && (
@@ -13393,6 +13533,7 @@ function ProjectDetailPanel({
                 key={action.id}
                 action={action}
                 profiles={profiles}
+                canEdit={canManageProjects}
                 onUpdateAction={onUpdateAction}
                 onDeleteAction={onDeleteAction}
                 onNativeFieldFocus={onNativeFieldFocus}
@@ -13407,6 +13548,7 @@ function ProjectDetailPanel({
                       key={action.id}
                       action={action}
                       profiles={profiles}
+                      canEdit={canManageProjects}
                       onUpdateAction={onUpdateAction}
                       onDeleteAction={onDeleteAction}
                       onNativeFieldFocus={onNativeFieldFocus}
@@ -13423,15 +13565,183 @@ function ProjectDetailPanel({
   );
 }
 
+function ProjectParticipantsEditor({
+  project,
+  profiles,
+  canManageProjects,
+  onUpdateParticipants,
+  onNativeFieldFocus,
+}: {
+  project: Project;
+  profiles: UserProfile[];
+  canManageProjects: boolean;
+  onUpdateParticipants: (project: Project, participants: ProjectParticipantInput[]) => Promise<void>;
+  onNativeFieldFocus?: (target: HTMLElement) => boolean;
+}) {
+  const [externalName, setExternalName] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const teamProfiles = useMemo(() => profiles.filter((person) => person.role === "team"), [profiles]);
+  const profileById = useMemo(() => new Map(profiles.map((person) => [person.id, person])), [profiles]);
+  const selectedProfileIds = new Set(project.participants.map((participant) => participant.profileId).filter((id): id is string => Boolean(id)));
+
+  function getParticipantInput(participant: ProjectParticipant): ProjectParticipantInput {
+    return {
+      profileId: participant.profileId,
+      externalName: participant.externalName,
+    };
+  }
+
+  async function updateParticipants(nextParticipants: ProjectParticipantInput[]) {
+    if (!canManageProjects) return;
+    setError(null);
+    try {
+      await onUpdateParticipants(project, nextParticipants);
+      setExternalName("");
+    } catch (updateError) {
+      setError(getUserFacingErrorMessage(updateError, "Impossible de modifier les participants."));
+    }
+  }
+
+  function toggleInternalParticipant(person: UserProfile) {
+    const existing = project.participants.find((participant) => participant.profileId === person.id);
+    const nextParticipants = existing
+      ? project.participants.filter((participant) => participant.id !== existing.id).map(getParticipantInput)
+      : [...project.participants.map(getParticipantInput), { profileId: person.id, externalName: null }];
+    void updateParticipants(nextParticipants);
+  }
+
+  function removeParticipant(participant: ProjectParticipant) {
+    void updateParticipants(project.participants.filter((item) => item.id !== participant.id).map(getParticipantInput));
+  }
+
+  function makeResponsible(participant: ProjectParticipant) {
+    if (project.participants[0]?.id === participant.id) return;
+    const nextParticipants = [
+      participant,
+      ...project.participants.filter((item) => item.id !== participant.id),
+    ].map(getParticipantInput);
+    void updateParticipants(nextParticipants);
+  }
+
+  function addExternalParticipant() {
+    const name = externalName.trim();
+    if (!name) return;
+    void updateParticipants([...project.participants.map(getParticipantInput), { profileId: null, externalName: name }]);
+  }
+
+  function getParticipantLabel(participant: ProjectParticipant) {
+    if (participant.profileId) {
+      const participantProfile = profileById.get(participant.profileId);
+      return participantProfile ? getProfileFirstNameLabel(participantProfile) : "Utilisateur";
+    }
+    return participant.externalName ?? "Externe";
+  }
+
+  return (
+    <section className="rounded-2xl bg-neutral-50 p-3">
+      <div className="mb-2 flex items-center justify-between gap-2">
+        <h2 className="text-base font-semibold text-neutral-950">Participants</h2>
+        {project.participants[0] && (
+          <span className="truncate text-sm font-semibold text-neutral-400">
+            Responsable : {getParticipantLabel(project.participants[0])}
+          </span>
+        )}
+      </div>
+
+      {project.participants.length > 0 ? (
+        <div className="mb-3 flex flex-wrap gap-1.5">
+          {project.participants.map((participant, index) => (
+            <span key={participant.id} className="inline-flex max-w-full items-center gap-1 rounded-xl bg-white px-2.5 py-1.5 text-sm font-semibold text-neutral-700">
+              {canManageProjects ? (
+                <button
+                  type="button"
+                  onClick={() => makeResponsible(participant)}
+                  className="min-w-0 truncate"
+                  title={index === 0 ? "Responsable" : "Définir comme responsable"}
+                >
+                  {getParticipantLabel(participant)}
+                </button>
+              ) : (
+                <span className="min-w-0 truncate">{getParticipantLabel(participant)}</span>
+              )}
+              {index === 0 && <span className="text-xs font-semibold text-neutral-300">resp.</span>}
+              {canManageProjects && (
+                <button
+                  type="button"
+                  onClick={() => removeParticipant(participant)}
+                  className="ml-1 text-neutral-300 transition hover:text-[#bb2720]"
+                  aria-label={`Retirer ${getParticipantLabel(participant)}`}
+                >
+                  ×
+                </button>
+              )}
+            </span>
+          ))}
+        </div>
+      ) : (
+        <p className="mb-3 rounded-2xl bg-white px-3 py-3 text-sm font-semibold text-neutral-400">Aucun participant</p>
+      )}
+
+      {canManageProjects && (
+        <div className="grid gap-2">
+          <div className="flex flex-wrap gap-1.5">
+            {teamProfiles.map((person) => {
+              const selected = selectedProfileIds.has(person.id);
+              return (
+                <button
+                  key={person.id}
+                  type="button"
+                  onClick={() => toggleInternalParticipant(person)}
+                  className={cn(
+                    "rounded-xl px-2.5 py-1.5 text-sm font-semibold transition",
+                    selected ? "bg-neutral-900 text-white" : "bg-white text-neutral-500 hover:text-neutral-800",
+                  )}
+                >
+                  {getProfileFirstNameLabel(person)}
+                </button>
+              );
+            })}
+          </div>
+          <div className="flex gap-2">
+            <input
+              {...iosKeyboardGuardProps}
+              value={externalName}
+              onFocus={(event) => onNativeFieldFocus?.(event.currentTarget)}
+              onChange={(event) => setExternalName(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key !== "Enter") return;
+                event.preventDefault();
+                addExternalParticipant();
+              }}
+              className="h-10 min-w-0 flex-1 rounded-xl bg-white px-3 text-base font-semibold text-neutral-700 outline-none placeholder:text-neutral-300"
+              placeholder="Prénom externe"
+            />
+            <button
+              type="button"
+              onClick={addExternalParticipant}
+              className="h-10 rounded-xl bg-white px-3 text-sm font-semibold text-neutral-600 transition hover:bg-neutral-100"
+            >
+              Ajouter
+            </button>
+          </div>
+        </div>
+      )}
+      {error && <p className="mt-2 px-1 text-xs font-semibold text-rose-600">{error}</p>}
+    </section>
+  );
+}
+
 function ProjectActionRow({
   action,
   profiles,
+  canEdit,
   onUpdateAction,
   onDeleteAction,
   onNativeFieldFocus,
 }: {
   action: ProjectAction;
   profiles: UserProfile[];
+  canEdit: boolean;
   onUpdateAction: (action: ProjectAction, patch: Partial<Pick<ProjectAction, "title" | "notes" | "status" | "assignedProfileId" | "dueDate">>) => Promise<void>;
   onDeleteAction: (action: ProjectAction) => void;
   onNativeFieldFocus?: (target: HTMLElement) => boolean;
@@ -13447,6 +13757,7 @@ function ProjectActionRow({
   }, [action.id, action.title, action.notes]);
 
   async function updateActionSafely(patch: Partial<Pick<ProjectAction, "title" | "notes" | "status" | "assignedProfileId" | "dueDate">>) {
+    if (!canEdit) return;
     try {
       await onUpdateAction(action, patch);
     } catch (updateError) {
@@ -13463,6 +13774,7 @@ function ProjectActionRow({
           <input
             type="checkbox"
             checked={done}
+            disabled={!canEdit}
             onChange={(event) => void updateActionSafely({ status: event.target.checked ? "done" : "todo" })}
             className="h-4 w-4 rounded border-neutral-300 accent-neutral-700"
           />
@@ -13471,19 +13783,21 @@ function ProjectActionRow({
         <input
           {...iosKeyboardGuardProps}
           value={title}
+          readOnly={!canEdit}
           onFocus={(event) => onNativeFieldFocus?.(event.currentTarget)}
           onChange={(event) => setTitle(event.target.value)}
           onBlur={() => {
             if (title.trim() !== action.title) void updateActionSafely({ title });
           }}
-          className={cn("h-10 min-w-0 rounded-xl bg-neutral-50 px-3 text-base font-semibold outline-none transition focus:bg-neutral-100", done ? "text-neutral-400 line-through" : "text-neutral-900")}
+          className={cn("h-10 min-w-0 rounded-xl bg-neutral-50 px-3 text-base font-semibold outline-none transition focus:bg-neutral-100 read-only:focus:bg-neutral-50", done ? "text-neutral-400 line-through" : "text-neutral-900")}
           placeholder="Action"
         />
         <select
           {...iosKeyboardGuardProps}
           value={action.assignedProfileId ?? ""}
+          disabled={!canEdit}
           onChange={(event) => void updateActionSafely({ assignedProfileId: event.target.value || null })}
-          className="h-10 rounded-xl bg-neutral-50 px-3 text-base font-semibold text-neutral-600 outline-none transition focus:bg-neutral-100"
+          className="h-10 rounded-xl bg-neutral-50 px-3 text-base font-semibold text-neutral-600 outline-none transition focus:bg-neutral-100 disabled:opacity-100"
         >
           <option value="">Assigné à</option>
           {profiles.map((person) => (
@@ -13492,32 +13806,38 @@ function ProjectActionRow({
         </select>
         <button
           type="button"
-          onClick={() => setDatePickerOpen(true)}
-          className="h-10 rounded-xl bg-neutral-50 px-3 text-left text-base font-semibold text-neutral-600 transition hover:bg-neutral-100"
+          onClick={() => {
+            if (canEdit) setDatePickerOpen(true);
+          }}
+          className="h-10 rounded-xl bg-neutral-50 px-3 text-left text-base font-semibold text-neutral-600 transition hover:bg-neutral-100 disabled:hover:bg-neutral-50"
+          disabled={!canEdit}
         >
           {action.dueDate ? formatShortDateWithYear(action.dueDate) : "Échéance"}
         </button>
-        <button
-          type="button"
-          onClick={() => onDeleteAction(action)}
-          className="h-10 rounded-xl px-3 text-sm font-semibold text-neutral-400 transition hover:bg-[#bb2720]/[0.07] hover:text-[#bb2720]"
-        >
-          Supprimer
-        </button>
+        {canEdit && (
+          <button
+            type="button"
+            onClick={() => onDeleteAction(action)}
+            className="h-10 rounded-xl px-3 text-sm font-semibold text-neutral-400 transition hover:bg-[#bb2720]/[0.07] hover:text-[#bb2720]"
+          >
+            Supprimer
+          </button>
+        )}
       </div>
       <textarea
         {...iosKeyboardGuardProps}
         value={notes}
         rows={2}
+        readOnly={!canEdit}
         onFocus={(event) => onNativeFieldFocus?.(event.currentTarget)}
         onChange={(event) => setNotes(event.target.value)}
         onBlur={() => {
           if (notes.trim() !== (action.notes ?? "")) void updateActionSafely({ notes });
         }}
-        className="mt-2 w-full resize-none rounded-xl bg-neutral-50 px-3 py-2 text-base font-medium leading-relaxed text-neutral-700 outline-none transition placeholder:text-neutral-300 focus:bg-neutral-100"
+        className="mt-2 w-full resize-none rounded-xl bg-neutral-50 px-3 py-2 text-base font-medium leading-relaxed text-neutral-700 outline-none transition placeholder:text-neutral-300 focus:bg-neutral-100 read-only:focus:bg-neutral-50"
         placeholder="Notes"
       />
-      {datePickerOpen && (
+      {datePickerOpen && canEdit && (
         <MstvDatePicker
           selectedDate={action.dueDate ?? formatDateKey(new Date())}
           onClose={() => setDatePickerOpen(false)}
