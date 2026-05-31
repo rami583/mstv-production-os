@@ -13635,25 +13635,29 @@ function ProjectParticipantsEditor({
   const [externalName, setExternalName] = useState("");
   const [externalInputOpen, setExternalInputOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [updatingParticipants, setUpdatingParticipants] = useState(false);
   const profileById = useMemo(() => new Map(profiles.map((person) => [person.id, person])), [profiles]);
-  const orderedParticipantProfileButtons = useMemo(() => {
-    const selectedIndexByProfileId = new Map<string, number>();
-    project.participants.forEach((participant, index) => {
-      if (participant.profileId) selectedIndexByProfileId.set(participant.profileId, index);
-    });
-    return [...profiles].sort((left, right) => {
-      const leftSelectedIndex = selectedIndexByProfileId.get(left.id);
-      const rightSelectedIndex = selectedIndexByProfileId.get(right.id);
-      const leftRank = leftSelectedIndex === 0 ? 0 : leftSelectedIndex !== undefined ? 1 : 2;
-      const rightRank = rightSelectedIndex === 0 ? 0 : rightSelectedIndex !== undefined ? 1 : 2;
-      if (leftRank !== rightRank) return leftRank - rightRank;
-      if (leftSelectedIndex !== undefined && rightSelectedIndex !== undefined) return leftSelectedIndex - rightSelectedIndex;
-      const leftLabel = getProfileFirstNameLabel(left);
-      const rightLabel = getProfileFirstNameLabel(right);
-      return leftLabel.localeCompare(rightLabel, "fr", { sensitivity: "base" });
-    });
-  }, [profiles, project.participants]);
-  const selectedExternalParticipants = useMemo(() => project.participants.filter((participant) => !participant.profileId), [project.participants]);
+  const orderedParticipantButtons = useMemo(() => {
+    const selectedProfileIds = new Set(project.participants.map((participant) => participant.profileId).filter((profileId): profileId is string => Boolean(profileId)));
+    const selectedItems = project.participants
+      .map((participant, index) => {
+        if (participant.profileId) {
+          const participantProfile = profileById.get(participant.profileId);
+          if (!participantProfile) return null;
+          return { type: "selected-profile" as const, participant, profile: participantProfile, index };
+        }
+        return { type: "selected-external" as const, participant, profile: null, index };
+      })
+      .filter((item): item is (
+        | { type: "selected-profile"; participant: ProjectParticipant; profile: UserProfile; index: number }
+        | { type: "selected-external"; participant: ProjectParticipant; profile: null; index: number }
+      ) => Boolean(item));
+    const unselectedItems = profiles
+      .filter((person) => !selectedProfileIds.has(person.id))
+      .sort((left, right) => getProfileFirstNameLabel(left).localeCompare(getProfileFirstNameLabel(right), "fr", { sensitivity: "base" }))
+      .map((profile) => ({ type: "unselected-profile" as const, participant: null, profile, index: null }));
+    return [...selectedItems, ...unselectedItems];
+  }, [profileById, profiles, project.participants]);
 
   useEffect(() => {
     setExternalName("");
@@ -13669,18 +13673,33 @@ function ProjectParticipantsEditor({
   }
 
   async function updateParticipants(nextParticipants: ProjectParticipantInput[]) {
-    if (!canManageProjects) return;
+    if (!canManageProjects || updatingParticipants) return;
+    const dedupedParticipants: ProjectParticipantInput[] = [];
+    const seenParticipantKeys = new Set<string>();
+    nextParticipants.forEach((participant) => {
+      const profileId = participant.profileId ?? null;
+      const externalName = participant.externalName?.trim() || null;
+      if (!profileId && !externalName) return;
+      const participantKey = profileId ? `profile:${profileId}` : `external:${normalizeLabel(externalName ?? "")}`;
+      if (seenParticipantKeys.has(participantKey)) return;
+      seenParticipantKeys.add(participantKey);
+      dedupedParticipants.push({ profileId, externalName });
+    });
     setError(null);
+    setUpdatingParticipants(true);
     try {
-      await onUpdateParticipants(project, nextParticipants);
+      await onUpdateParticipants(project, dedupedParticipants);
       setExternalName("");
       setExternalInputOpen(false);
     } catch (updateError) {
       setError(getUserFacingErrorMessage(updateError, "Impossible de modifier les participants."));
+    } finally {
+      setUpdatingParticipants(false);
     }
   }
 
   function toggleInternalParticipant(person: UserProfile) {
+    if (updatingParticipants) return;
     const existing = project.participants.find((participant) => participant.profileId === person.id);
     const nextParticipants = existing
       ? project.participants.filter((participant) => participant.id !== existing.id).map(getParticipantInput)
@@ -13689,10 +13708,12 @@ function ProjectParticipantsEditor({
   }
 
   function removeParticipant(participant: ProjectParticipant) {
+    if (updatingParticipants) return;
     void updateParticipants(project.participants.filter((item) => item.id !== participant.id).map(getParticipantInput));
   }
 
   function addExternalParticipant() {
+    if (updatingParticipants) return;
     const name = externalName.trim();
     if (!name) return;
     void updateParticipants([...project.participants.map(getParticipantInput), { profileId: null, externalName: name }]);
@@ -13731,17 +13752,38 @@ function ProjectParticipantsEditor({
         <div className="flex flex-wrap gap-1.5">
           {canManageProjects ? (
             <>
-              {orderedParticipantProfileButtons.map((person) => {
-                const selectedParticipant = project.participants.find((participant) => participant.profileId === person.id) ?? null;
-                const selectedIndex = selectedParticipant ? project.participants.findIndex((participant) => participant.id === selectedParticipant.id) : null;
+              {orderedParticipantButtons.map((item) => {
+                if (item.type === "selected-external") {
+                  const label = getParticipantLabel(item.participant);
+                  return (
+                    <button
+                      key={item.participant.id}
+                      type="button"
+                      onClick={() => removeParticipant(item.participant)}
+                      disabled={updatingParticipants}
+                      aria-pressed="true"
+                      className={cn(
+                        "inline-flex max-w-full items-center gap-1 rounded-xl px-2.5 py-1.5 text-sm font-semibold transition disabled:opacity-60",
+                        getParticipantButtonClass(item.index),
+                      )}
+                      title={`Retirer ${label}`}
+                    >
+                      {renderSelectedLabel(label, item.index)}
+                    </button>
+                  );
+                }
+                const person = item.profile;
+                const selectedParticipant = item.type === "selected-profile" ? item.participant : null;
+                const selectedIndex = item.type === "selected-profile" ? item.index : null;
                 return (
                   <button
                     key={person.id}
                     type="button"
                     onClick={() => toggleInternalParticipant(person)}
+                    disabled={updatingParticipants}
                     aria-pressed={Boolean(selectedParticipant)}
                     className={cn(
-                      "inline-flex max-w-full items-center gap-1 rounded-xl px-2.5 py-1.5 text-sm font-semibold transition",
+                      "inline-flex max-w-full items-center gap-1 rounded-xl px-2.5 py-1.5 text-sm font-semibold transition disabled:opacity-60",
                       getParticipantButtonClass(selectedIndex),
                     )}
                   >
@@ -13749,30 +13791,12 @@ function ProjectParticipantsEditor({
                   </button>
                 );
               })}
-              {selectedExternalParticipants.map((participant) => {
-                const selectedIndex = project.participants.findIndex((item) => item.id === participant.id);
-                const label = getParticipantLabel(participant);
-                return (
-                  <button
-                    key={participant.id}
-                    type="button"
-                    onClick={() => removeParticipant(participant)}
-                    aria-pressed="true"
-                    className={cn(
-                      "inline-flex max-w-full items-center gap-1 rounded-xl px-2.5 py-1.5 text-sm font-semibold transition",
-                      getParticipantButtonClass(selectedIndex),
-                    )}
-                    title={`Retirer ${label}`}
-                  >
-                    {renderSelectedLabel(label, selectedIndex)}
-                  </button>
-                );
-              })}
               <button
                 type="button"
                 onClick={() => setExternalInputOpen((open) => !open)}
+                disabled={updatingParticipants}
                 className={cn(
-                  "rounded-xl px-2.5 py-1.5 text-sm font-semibold transition",
+                  "rounded-xl px-2.5 py-1.5 text-sm font-semibold transition disabled:opacity-60",
                   externalInputOpen ? "bg-neutral-900 text-white" : "bg-white text-neutral-500 hover:text-neutral-800",
                 )}
               >
@@ -13798,6 +13822,7 @@ function ProjectParticipantsEditor({
             <input
               {...iosKeyboardGuardProps}
               value={externalName}
+              disabled={updatingParticipants}
               onFocus={(event) => onNativeFieldFocus?.(event.currentTarget)}
               onChange={(event) => setExternalName(event.target.value)}
               onKeyDown={(event) => {
@@ -13805,13 +13830,14 @@ function ProjectParticipantsEditor({
                 event.preventDefault();
                 addExternalParticipant();
               }}
-              className="h-10 min-w-0 flex-1 rounded-xl bg-white px-3 text-base font-semibold text-neutral-700 outline-none placeholder:text-neutral-300"
+              className="h-10 min-w-0 flex-1 rounded-xl bg-white px-3 text-base font-semibold text-neutral-700 outline-none placeholder:text-neutral-300 disabled:opacity-60"
               placeholder="Prénom externe"
             />
             <button
               type="button"
               onClick={addExternalParticipant}
-              className="h-10 rounded-xl bg-white px-3 text-sm font-semibold text-neutral-600 transition hover:bg-neutral-100"
+              disabled={updatingParticipants}
+              className="h-10 rounded-xl bg-white px-3 text-sm font-semibold text-neutral-600 transition hover:bg-neutral-100 disabled:opacity-60"
             >
               Ajouter
             </button>
