@@ -329,6 +329,7 @@ export type Database = {
           title: string;
           event_id: string | null;
           project_id: string | null;
+          project_action_id: string | null;
           assigned_profile_id: string | null;
           status: "todo" | "done";
           priority: "urgent" | "normal" | "low";
@@ -345,6 +346,7 @@ export type Database = {
           title: string;
           event_id?: string | null;
           project_id?: string | null;
+          project_action_id?: string | null;
           assigned_profile_id?: string | null;
           status?: "todo" | "done";
           priority?: "urgent" | "normal" | "low";
