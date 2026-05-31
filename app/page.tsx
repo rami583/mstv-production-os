@@ -12372,15 +12372,15 @@ function getProjectSurfaceTone(project: Project) {
   if (project.status === "paused") {
     return {
       row: "bg-[#f6e7a6] text-neutral-950",
-      title: "text-neutral-950",
-      icon: { label: "En pause", symbol: "⏸", className: "text-neutral-700" },
+      title: "text-neutral-700 group-hover:text-neutral-950",
+      icon: { label: "En pause", kind: "pause", className: "text-[#b58a12]" },
     };
   }
 
   return {
     row: "bg-[#cfe7f5] text-neutral-950",
-    title: "text-neutral-950",
-    icon: { label: "Actif", symbol: "●", className: "text-[#3d7f9d]" },
+    title: "text-neutral-700 group-hover:text-neutral-950",
+    icon: { label: "Actif", kind: "play", className: "text-[#5b7f98]" },
   };
 }
 
@@ -13236,8 +13236,15 @@ const ProjectQueueRow = forwardRef<HTMLDivElement, {
           {project.name}
         </span>
         {projectSurface.icon && (
-          <span className={cn("ml-auto inline-flex h-4 min-w-4 shrink-0 items-center justify-center text-xs font-bold leading-none", projectSurface.icon.className)} aria-label={projectSurface.icon.label} title={projectSurface.icon.label}>
-            {projectSurface.icon.symbol}
+          <span className={cn("ml-auto inline-flex h-3.5 w-3.5 shrink-0 items-center justify-center", projectSurface.icon.className)} aria-label={projectSurface.icon.label} title={projectSurface.icon.label}>
+            {projectSurface.icon.kind === "play" ? (
+              <span className="ml-0.5 block h-0 w-0 border-y-[4px] border-l-[7px] border-y-transparent border-l-current" aria-hidden="true" />
+            ) : (
+              <span className="flex h-2.5 w-2 items-center justify-between" aria-hidden="true">
+                <span className="h-2.5 w-[2px] rounded-full bg-current" />
+                <span className="h-2.5 w-[2px] rounded-full bg-current" />
+              </span>
+            )}
           </span>
         )}
       </div>
