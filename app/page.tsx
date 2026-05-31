@@ -42,12 +42,15 @@ import {
   Link,
   MonitorPlay,
   Palette,
+  Pause,
   Pencil,
+  Play,
   Presentation,
   Radio,
   Scissors,
   Search,
   ShieldCheck,
+  Star,
   Timer,
   Trash2,
   Wifi,
@@ -13238,12 +13241,9 @@ const ProjectQueueRow = forwardRef<HTMLDivElement, {
         {projectSurface.icon && (
           <span className={cn("ml-auto inline-flex h-3.5 w-3.5 shrink-0 items-center justify-center", projectSurface.icon.className)} aria-label={projectSurface.icon.label} title={projectSurface.icon.label}>
             {projectSurface.icon.kind === "play" ? (
-              <span className="ml-0.5 block h-0 w-0 border-y-[4px] border-l-[7px] border-y-transparent border-l-current" aria-hidden="true" />
+              <Play className="h-3.5 w-3.5" strokeWidth={2.35} aria-hidden="true" />
             ) : (
-              <span className="flex h-2.5 w-2 items-center justify-between" aria-hidden="true">
-                <span className="h-2.5 w-[2px] rounded-full bg-current" />
-                <span className="h-2.5 w-[2px] rounded-full bg-current" />
-              </span>
+              <Pause className="h-3.5 w-3.5" strokeWidth={2.35} aria-hidden="true" />
             )}
           </span>
         )}
@@ -14604,8 +14604,8 @@ const TaskQueueRow = forwardRef<HTMLDivElement, {
       </span>
       {taskStar && (
         <span className="ml-auto inline-flex shrink-0 items-center justify-end">
-          <span className={cn("inline-flex h-3.5 w-3.5 shrink-0 items-center justify-center text-xs font-bold leading-none", taskStar.color)} aria-label={taskStar.label} title={taskStar.label}>
-            ★
+          <span className={cn("inline-flex h-3.5 w-3.5 shrink-0 items-center justify-center", taskStar.color)} aria-label={taskStar.label} title={taskStar.label}>
+            <Star className="h-3.5 w-3.5" strokeWidth={2.35} aria-hidden="true" />
           </span>
         </span>
       )}
