@@ -13488,13 +13488,16 @@ function ProjectDetailPanel({
           </select>
         </div>
 
-        <ProjectParticipantsEditor
-          project={project}
-          profiles={profiles}
-          canManageProjects={canManageProjects}
-          onUpdateParticipants={onUpdateParticipants}
-          onNativeFieldFocus={onNativeFieldFocus}
-        />
+        <div>
+          <span className="mb-1 block px-1 text-xs font-semibold uppercase tracking-[0.08em] text-neutral-400">Participants</span>
+          <ProjectParticipantsEditor
+            project={project}
+            profiles={profiles}
+            canManageProjects={canManageProjects}
+            onUpdateParticipants={onUpdateParticipants}
+            onNativeFieldFocus={onNativeFieldFocus}
+          />
+        </div>
 
         <label className="block">
           <span className="mb-1 block px-1 text-xs font-semibold uppercase tracking-[0.08em] text-neutral-400">Description</span>
@@ -13530,51 +13533,53 @@ function ProjectDetailPanel({
           />
         </label>
 
-        <section className="rounded-2xl bg-neutral-50 p-3">
-          <div className="mb-2 flex items-center justify-between gap-2">
-            <h2 className="text-base font-semibold text-neutral-950">Actions</h2>
+        <div>
+          <div className="mb-1 flex items-center justify-between gap-2 px-1">
+            <span className="block text-xs font-semibold uppercase tracking-[0.08em] text-neutral-400">Actions</span>
             {canManageProjects && (
-              <button type="button" onClick={onCreateAction} disabled={saving} className="rounded-xl bg-white px-3 py-1.5 text-sm font-semibold text-neutral-700 transition hover:bg-neutral-100 disabled:text-neutral-300">
+              <button type="button" onClick={onCreateAction} disabled={saving} className="rounded-xl bg-neutral-50 px-3 py-1.5 text-sm font-semibold text-neutral-700 transition hover:bg-neutral-100 disabled:text-neutral-300">
                 + Action
               </button>
             )}
           </div>
-          <div className="grid gap-2">
-            {todoActions.length === 0 && doneActions.length === 0 && (
-              <div className="rounded-2xl bg-white px-4 py-6 text-center text-base font-semibold text-neutral-400">Aucune action</div>
-            )}
-            {todoActions.map((action) => (
-              <ProjectActionRow
-                key={action.id}
-                action={action}
-                profiles={profiles}
-                canEdit={canManageProjects}
-                onUpdateAction={onUpdateAction}
-                onDeleteAction={onDeleteAction}
-                onNativeFieldFocus={onNativeFieldFocus}
-              />
-            ))}
-            {doneActions.length > 0 && (
-              <div className="pt-2">
-                <p className="mb-1 px-1 text-xs font-semibold uppercase tracking-[0.08em] text-neutral-400">Terminé</p>
-                <div className="grid gap-2">
-                  {doneActions.map((action) => (
-                    <ProjectActionRow
-                      key={action.id}
-                      action={action}
-                      profiles={profiles}
-                      canEdit={canManageProjects}
-                      onUpdateAction={onUpdateAction}
-                      onDeleteAction={onDeleteAction}
-                      onNativeFieldFocus={onNativeFieldFocus}
-                    />
-                  ))}
+          <section className="rounded-2xl bg-neutral-50 p-3">
+            <div className="grid gap-2">
+              {todoActions.length === 0 && doneActions.length === 0 && (
+                <div className="rounded-2xl bg-white px-4 py-6 text-center text-base font-semibold text-neutral-400">Aucune action</div>
+              )}
+              {todoActions.map((action) => (
+                <ProjectActionRow
+                  key={action.id}
+                  action={action}
+                  profiles={profiles}
+                  canEdit={canManageProjects}
+                  onUpdateAction={onUpdateAction}
+                  onDeleteAction={onDeleteAction}
+                  onNativeFieldFocus={onNativeFieldFocus}
+                />
+              ))}
+              {doneActions.length > 0 && (
+                <div className="pt-2">
+                  <p className="mb-1 px-1 text-xs font-semibold uppercase tracking-[0.08em] text-neutral-400">Terminé</p>
+                  <div className="grid gap-2">
+                    {doneActions.map((action) => (
+                      <ProjectActionRow
+                        key={action.id}
+                        action={action}
+                        profiles={profiles}
+                        canEdit={canManageProjects}
+                        onUpdateAction={onUpdateAction}
+                        onDeleteAction={onDeleteAction}
+                        onNativeFieldFocus={onNativeFieldFocus}
+                      />
+                    ))}
+                  </div>
                 </div>
-              </div>
-            )}
-          </div>
-          {/* Future: an action project could be converted into an operational team task from here. */}
-        </section>
+              )}
+            </div>
+            {/* Future: an action project could be converted into an operational team task from here. */}
+          </section>
+        </div>
       </div>
     </div>
   );
@@ -13598,7 +13603,6 @@ function ProjectParticipantsEditor({
   const [error, setError] = useState<string | null>(null);
   const participantProfiles = useMemo(() => profiles, [profiles]);
   const profileById = useMemo(() => new Map(profiles.map((person) => [person.id, person])), [profiles]);
-  const selectedProfileIds = new Set(project.participants.map((participant) => participant.profileId).filter((id): id is string => Boolean(id)));
 
   useEffect(() => {
     setExternalName("");
@@ -13637,15 +13641,6 @@ function ProjectParticipantsEditor({
     void updateParticipants(project.participants.filter((item) => item.id !== participant.id).map(getParticipantInput));
   }
 
-  function makeResponsible(participant: ProjectParticipant) {
-    if (project.participants[0]?.id === participant.id) return;
-    const nextParticipants = [
-      participant,
-      ...project.participants.filter((item) => item.id !== participant.id),
-    ].map(getParticipantInput);
-    void updateParticipants(nextParticipants);
-  }
-
   function addExternalParticipant() {
     const name = externalName.trim();
     if (!name) return;
@@ -13660,105 +13655,118 @@ function ProjectParticipantsEditor({
     return participant.externalName ?? "Externe";
   }
 
+  function getParticipantButtonClass(index: number | null) {
+    if (index === 0) {
+      return "bg-[#cfe7f5] text-[#4f748c]";
+    }
+    if (index !== null) {
+      return "bg-[#f6e7a6] text-[#8f6d0d]";
+    }
+    return "bg-white text-neutral-500 hover:text-neutral-800";
+  }
+
+  function renderSelectedLabel(label: string, index: number | null) {
+    return (
+      <>
+        <span className="truncate">{label}</span>
+        {index === 0 && <span className="shrink-0 text-xs font-semibold opacity-70">resp.</span>}
+      </>
+    );
+  }
+
   return (
     <section className="rounded-2xl bg-neutral-50 p-3">
-      <div className="mb-2 flex items-center justify-between gap-2 px-1">
-        <span className="block text-xs font-semibold uppercase tracking-[0.08em] text-neutral-400">Participants</span>
-        {project.participants[0] && (
-          <span className="truncate text-sm font-semibold text-neutral-400">
-            Responsable : {getParticipantLabel(project.participants[0])}
-          </span>
-        )}
-      </div>
-
-      {project.participants.length > 0 ? (
-        <div className="mb-3 flex flex-wrap gap-1.5">
-          {project.participants.map((participant, index) => (
-            <span key={participant.id} className="inline-flex max-w-full items-center gap-1 rounded-xl bg-white px-2.5 py-1.5 text-sm font-semibold text-neutral-700">
-              {canManageProjects ? (
-                <button
-                  type="button"
-                  onClick={() => makeResponsible(participant)}
-                  className="min-w-0 truncate"
-                  title={index === 0 ? "Responsable" : "Définir comme responsable"}
-                >
-                  {getParticipantLabel(participant)}
-                </button>
-              ) : (
-                <span className="min-w-0 truncate">{getParticipantLabel(participant)}</span>
-              )}
-              {index === 0 && <span className="text-xs font-semibold text-neutral-300">resp.</span>}
-              {canManageProjects && (
-                <button
-                  type="button"
-                  onClick={() => removeParticipant(participant)}
-                  className="ml-1 text-neutral-300 transition hover:text-[#bb2720]"
-                  aria-label={`Retirer ${getParticipantLabel(participant)}`}
-                >
-                  ×
-                </button>
-              )}
-            </span>
-          ))}
-        </div>
-      ) : null}
-
-      {canManageProjects && (
-        <div className="grid gap-2">
-          <div className="flex flex-wrap gap-1.5">
-            {participantProfiles.map((person) => {
-              const selected = selectedProfileIds.has(person.id);
-              return (
-                <button
-                  key={person.id}
-                  type="button"
-                  onClick={() => toggleInternalParticipant(person)}
-                  className={cn(
-                    "rounded-xl px-2.5 py-1.5 text-sm font-semibold transition",
-                    selected ? "bg-neutral-900 text-white" : "bg-white text-neutral-500 hover:text-neutral-800",
-                  )}
-                >
-                  {getProfileFirstNameLabel(person)}
-                </button>
-              );
-            })}
-            <button
-              type="button"
-              onClick={() => setExternalInputOpen((open) => !open)}
-              className={cn(
-                "rounded-xl px-2.5 py-1.5 text-sm font-semibold transition",
-                externalInputOpen ? "bg-neutral-900 text-white" : "bg-white text-neutral-500 hover:text-neutral-800",
-              )}
-            >
-              Externe
-            </button>
-          </div>
-          {externalInputOpen && (
-            <div className="flex gap-2">
-              <input
-                {...iosKeyboardGuardProps}
-                value={externalName}
-                onFocus={(event) => onNativeFieldFocus?.(event.currentTarget)}
-                onChange={(event) => setExternalName(event.target.value)}
-                onKeyDown={(event) => {
-                  if (event.key !== "Enter") return;
-                  event.preventDefault();
-                  addExternalParticipant();
-                }}
-                className="h-10 min-w-0 flex-1 rounded-xl bg-white px-3 text-base font-semibold text-neutral-700 outline-none placeholder:text-neutral-300"
-                placeholder="Prénom externe"
-              />
+      <div className="grid gap-2">
+        <div className="flex flex-wrap gap-1.5">
+          {canManageProjects ? (
+            <>
+              {participantProfiles.map((person) => {
+                const selectedParticipant = project.participants.find((participant) => participant.profileId === person.id) ?? null;
+                const selectedIndex = selectedParticipant ? project.participants.findIndex((participant) => participant.id === selectedParticipant.id) : null;
+                return (
+                  <button
+                    key={person.id}
+                    type="button"
+                    onClick={() => toggleInternalParticipant(person)}
+                    aria-pressed={Boolean(selectedParticipant)}
+                    className={cn(
+                      "inline-flex max-w-full items-center gap-1 rounded-xl px-2.5 py-1.5 text-sm font-semibold transition",
+                      getParticipantButtonClass(selectedIndex),
+                    )}
+                  >
+                    {renderSelectedLabel(getProfileFirstNameLabel(person), selectedIndex)}
+                  </button>
+                );
+              })}
+              {project.participants.filter((participant) => !participant.profileId).map((participant) => {
+                const selectedIndex = project.participants.findIndex((item) => item.id === participant.id);
+                const label = getParticipantLabel(participant);
+                return (
+                  <button
+                    key={participant.id}
+                    type="button"
+                    onClick={() => removeParticipant(participant)}
+                    aria-pressed="true"
+                    className={cn(
+                      "inline-flex max-w-full items-center gap-1 rounded-xl px-2.5 py-1.5 text-sm font-semibold transition",
+                      getParticipantButtonClass(selectedIndex),
+                    )}
+                    title={`Retirer ${label}`}
+                  >
+                    {renderSelectedLabel(label, selectedIndex)}
+                  </button>
+                );
+              })}
               <button
                 type="button"
-                onClick={addExternalParticipant}
-                className="h-10 rounded-xl bg-white px-3 text-sm font-semibold text-neutral-600 transition hover:bg-neutral-100"
+                onClick={() => setExternalInputOpen((open) => !open)}
+                className={cn(
+                  "rounded-xl px-2.5 py-1.5 text-sm font-semibold transition",
+                  externalInputOpen ? "bg-neutral-900 text-white" : "bg-white text-neutral-500 hover:text-neutral-800",
+                )}
               >
-                Ajouter
+                Externe
               </button>
-            </div>
+            </>
+          ) : (
+            project.participants.map((participant, index) => (
+              <span
+                key={participant.id}
+                className={cn(
+                  "inline-flex max-w-full items-center gap-1 rounded-xl px-2.5 py-1.5 text-sm font-semibold",
+                  getParticipantButtonClass(index),
+                )}
+              >
+                {renderSelectedLabel(getParticipantLabel(participant), index)}
+              </span>
+            ))
           )}
         </div>
-      )}
+        {canManageProjects && externalInputOpen && (
+          <div className="flex gap-2">
+            <input
+              {...iosKeyboardGuardProps}
+              value={externalName}
+              onFocus={(event) => onNativeFieldFocus?.(event.currentTarget)}
+              onChange={(event) => setExternalName(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key !== "Enter") return;
+                event.preventDefault();
+                addExternalParticipant();
+              }}
+              className="h-10 min-w-0 flex-1 rounded-xl bg-white px-3 text-base font-semibold text-neutral-700 outline-none placeholder:text-neutral-300"
+              placeholder="Prénom externe"
+            />
+            <button
+              type="button"
+              onClick={addExternalParticipant}
+              className="h-10 rounded-xl bg-white px-3 text-sm font-semibold text-neutral-600 transition hover:bg-neutral-100"
+            >
+              Ajouter
+            </button>
+          </div>
+        )}
+      </div>
       {error && <p className="mt-2 px-1 text-xs font-semibold text-rose-600">{error}</p>}
     </section>
   );
