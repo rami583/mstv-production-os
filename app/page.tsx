@@ -11760,7 +11760,10 @@ export default function Home() {
           {!loading && screen === "projects" && canOpenProjects && (
             <ProjectsView
               projects={projects}
+              tasks={tasks}
               profiles={taskProfiles}
+              currentProfile={profile}
+              permissions={permissions}
               canManageProjects={permissions.canManageEvents}
               loading={projectsLoading}
               error={projectsError}
@@ -11776,6 +11779,9 @@ export default function Home() {
               onCreateAction={createProjectAction}
               onUpdateAction={updateProjectAction}
               onDeleteAction={deleteProjectAction}
+              onCreateTask={createTask}
+              onUpdateTask={updateTask}
+              onDeleteTask={deleteTask}
             />
           )}
 
@@ -12545,7 +12551,10 @@ function getProjectSurfaceTone(project: Project) {
 
 function ProjectsView({
   projects,
+  tasks,
   profiles,
+  currentProfile,
+  permissions,
   canManageProjects,
   loading,
   error,
@@ -12560,9 +12569,15 @@ function ProjectsView({
   onCreateAction,
   onUpdateAction,
   onDeleteAction,
+  onCreateTask,
+  onUpdateTask,
+  onDeleteTask,
 }: {
   projects: Project[];
+  tasks: AppTask[];
   profiles: UserProfile[];
+  currentProfile: UserProfile | null;
+  permissions: AppPermissions;
   canManageProjects: boolean;
   loading: boolean;
   error: string | null;
@@ -12578,6 +12593,9 @@ function ProjectsView({
   onCreateAction: (project: Project) => Promise<ProjectAction>;
   onUpdateAction: (action: ProjectAction, patch: Partial<Pick<ProjectAction, "title" | "notes" | "status" | "assignedProfileId" | "dueDate">>) => Promise<void>;
   onDeleteAction: (action: ProjectAction) => Promise<void>;
+  onCreateTask: (input: TaskCreateInput) => Promise<AppTask>;
+  onUpdateTask: (task: AppTask, patch: TaskUpdatePatch) => Promise<void>;
+  onDeleteTask: (task: AppTask) => Promise<void>;
 }) {
   const nativeKeyboard = useNativeKeyboardVisibility<HTMLDivElement>();
   const projectDetailSwipeStartRef = useRef<{ pointerId: number; x: number; y: number; startedAt: number; axis: "horizontal" | "vertical" | null } | null>(null);
@@ -12823,7 +12841,10 @@ function ProjectsView({
         <ProjectDetailPanel
           key={project.id}
           project={project}
+          tasks={tasks.filter((task) => task.projectId === project.id)}
           profiles={profiles}
+          currentProfile={currentProfile}
+          permissions={permissions}
           canManageProjects={canManageProjects}
           saving={creatingAction && isCurrentProject}
           onBack={() => selectProject(null)}
@@ -12836,6 +12857,9 @@ function ProjectsView({
           }}
           onUpdateAction={onUpdateAction}
           onDeleteAction={setActionDeleteCandidate}
+          onCreateTask={onCreateTask}
+          onUpdateTask={onUpdateTask}
+          onDeleteTask={onDeleteTask}
           onNativeFieldFocus={nativeKeyboard.handleFieldFocus}
         />
       </div>
@@ -13440,7 +13464,10 @@ const ProjectQueueRow = forwardRef<HTMLDivElement, {
 
 function ProjectDetailPanel({
   project,
+  tasks,
   profiles,
+  currentProfile,
+  permissions,
   canManageProjects,
   saving,
   onBack,
@@ -13450,10 +13477,16 @@ function ProjectDetailPanel({
   onCreateAction,
   onUpdateAction,
   onDeleteAction,
+  onCreateTask,
+  onUpdateTask,
+  onDeleteTask,
   onNativeFieldFocus,
 }: {
   project: Project;
+  tasks: AppTask[];
   profiles: UserProfile[];
+  currentProfile: UserProfile | null;
+  permissions: AppPermissions;
   canManageProjects: boolean;
   saving: boolean;
   onBack: () => void;
@@ -13463,19 +13496,38 @@ function ProjectDetailPanel({
   onCreateAction: () => void;
   onUpdateAction: (action: ProjectAction, patch: Partial<Pick<ProjectAction, "title" | "notes" | "status" | "assignedProfileId" | "dueDate">>) => Promise<void>;
   onDeleteAction: (action: ProjectAction) => void;
+  onCreateTask: (input: TaskCreateInput) => Promise<AppTask>;
+  onUpdateTask: (task: AppTask, patch: TaskUpdatePatch) => Promise<void>;
+  onDeleteTask: (task: AppTask) => Promise<void>;
   onNativeFieldFocus?: (target: HTMLElement) => boolean;
 }) {
   const [name, setName] = useState(project.name);
   const [description, setDescription] = useState(project.description ?? "");
   const [notes, setNotes] = useState(project.notes ?? "");
-  const todoActions = project.actions.filter((action) => action.status === "todo");
-  const doneActions = project.actions.filter((action) => action.status === "done");
+  const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
+  const [creatingTask, setCreatingTask] = useState(false);
+  const [localTaskError, setLocalTaskError] = useState<string | null>(null);
+  const todoTasks = useMemo(() => sortTaskQueue(tasks.filter((task) => task.status === "todo")), [tasks]);
+  const doneTasks = useMemo(() => (
+    [...tasks]
+      .filter((task) => task.status === "done")
+      .sort((left, right) => (right.completedAt ?? right.updatedAt).localeCompare(left.completedAt ?? left.updatedAt))
+  ), [tasks]);
+  const selectedTask = selectedTaskId ? tasks.find((task) => task.id === selectedTaskId) ?? null : null;
+  const profileRoleById = useMemo(() => new Map(profiles.map((person) => [person.id, person.role])), [profiles]);
 
   useEffect(() => {
     setName(project.name);
     setDescription(project.description ?? "");
     setNotes(project.notes ?? "");
   }, [project.id, project.name, project.description, project.notes]);
+
+  useEffect(() => {
+    setSelectedTaskId((currentId) => {
+      if (!currentId || tasks.some((task) => task.id === currentId)) return currentId;
+      return null;
+    });
+  }, [tasks]);
 
   async function updateProjectSafely(patch: Partial<Pick<Project, "name" | "description" | "notes" | "status" | "ownerProfileId">>) {
     if (!canManageProjects) return;
@@ -13487,6 +13539,73 @@ function ProjectDetailPanel({
       setDescription(project.description ?? "");
       setNotes(project.notes ?? "");
     }
+  }
+
+  async function createProjectTask() {
+    if (!canManageProjects) return;
+    const defaultAssignee = project.participants.find((participant) => participant.profileId)?.profileId ?? null;
+    setCreatingTask(true);
+    setLocalTaskError(null);
+    try {
+      const createdTask = await onCreateTask({
+        title: "Nouvelle tâche",
+        projectId: project.id,
+        assignedProfileId: defaultAssignee,
+        sortOrder: getNextTaskSortOrder(tasks, defaultAssignee),
+      });
+      setSelectedTaskId(createdTask.id);
+    } catch (createError) {
+      setLocalTaskError(getTaskCreateUserMessage(createError));
+    } finally {
+      setCreatingTask(false);
+    }
+  }
+
+  function isProjectTaskCreatedByAdmin(task: AppTask) {
+    return Boolean(task.createdBy && profileRoleById.get(task.createdBy) === "admin");
+  }
+
+  function renderProjectTask(task: AppTask, completed = false) {
+    return (
+      <TaskQueueRow
+        key={task.id}
+        task={task}
+        selected={selectedTaskId === task.id}
+        completed={completed}
+        createdByAdmin={isProjectTaskCreatedByAdmin(task)}
+        canDelete={canManageProjects}
+        canDuplicate={false}
+        onDelete={() => void onDeleteTask(task)}
+        onDuplicate={() => undefined}
+        onOpen={() => setSelectedTaskId(task.id)}
+      />
+    );
+  }
+
+  if (selectedTask) {
+    return (
+      <div className="no-scrollbar min-h-0 flex-1 overflow-y-auto overscroll-contain">
+        <AdminTaskDetailPanel
+          task={selectedTask}
+          events={[]}
+          tasks={tasks}
+          linkedEvent={null}
+          profiles={profiles}
+          currentProfile={currentProfile}
+          permissions={permissions}
+          hideEventLink
+          showAssigneeField
+          onUpdateTask={onUpdateTask}
+          onDeleteTask={async (task) => {
+            await onDeleteTask(task);
+            setSelectedTaskId(null);
+          }}
+          onOpenEvent={() => undefined}
+          onNativeFieldFocus={onNativeFieldFocus}
+          onClose={() => setSelectedTaskId(null)}
+        />
+      </div>
+    );
   }
 
   return (
@@ -13576,49 +13695,29 @@ function ProjectDetailPanel({
 
         <div>
           <div className="mb-1 flex items-center justify-between gap-2 px-1">
-            <span className="block text-xs font-semibold uppercase tracking-[0.08em] text-neutral-400">Actions</span>
+            <span className="block text-xs font-semibold uppercase tracking-[0.08em] text-neutral-400">Tâches</span>
             {canManageProjects && (
-              <button type="button" onClick={onCreateAction} disabled={saving} className="rounded-xl bg-neutral-50 px-3 py-1.5 text-sm font-semibold text-neutral-700 transition hover:bg-neutral-100 disabled:text-neutral-300">
+              <button type="button" onClick={() => void createProjectTask()} disabled={saving || creatingTask} className="rounded-xl bg-neutral-50 px-3 py-1.5 text-sm font-semibold text-neutral-700 transition hover:bg-neutral-100 disabled:text-neutral-300">
                 +
               </button>
             )}
           </div>
           <section className="rounded-2xl bg-neutral-50 p-3">
             <div className="grid gap-2">
-              {todoActions.length === 0 && doneActions.length === 0 && (
-                <div className="rounded-2xl bg-white px-4 py-6 text-center text-base font-semibold text-neutral-400">Aucune action</div>
+              {todoTasks.length === 0 && doneTasks.length === 0 && (
+                <div className="rounded-2xl bg-white px-4 py-6 text-center text-base font-semibold text-neutral-400">Aucune tâche</div>
               )}
-              {todoActions.map((action) => (
-                <ProjectActionRow
-                  key={action.id}
-                  action={action}
-                  profiles={profiles}
-                  canEdit={canManageProjects}
-                  onUpdateAction={onUpdateAction}
-                  onDeleteAction={onDeleteAction}
-                  onNativeFieldFocus={onNativeFieldFocus}
-                />
-              ))}
-              {doneActions.length > 0 && (
+              {todoTasks.map((task) => renderProjectTask(task, false))}
+              {doneTasks.length > 0 && (
                 <div className="pt-2">
                   <p className="mb-1 px-1 text-xs font-semibold uppercase tracking-[0.08em] text-neutral-400">Terminé</p>
                   <div className="grid gap-2">
-                    {doneActions.map((action) => (
-                      <ProjectActionRow
-                        key={action.id}
-                        action={action}
-                        profiles={profiles}
-                        canEdit={canManageProjects}
-                        onUpdateAction={onUpdateAction}
-                        onDeleteAction={onDeleteAction}
-                        onNativeFieldFocus={onNativeFieldFocus}
-                      />
-                    ))}
+                    {doneTasks.map((task) => renderProjectTask(task, true))}
                   </div>
                 </div>
               )}
+              {localTaskError && <p className="px-1 text-xs font-semibold text-rose-600">{localTaskError}</p>}
             </div>
-            {/* Future: an action project could be converted into an operational team task from here. */}
           </section>
         </div>
       </div>
@@ -15071,8 +15170,11 @@ function AdminTaskDetailPanel({
   events,
   tasks,
   linkedEvent,
+  profiles = [],
   currentProfile,
   permissions,
+  hideEventLink = false,
+  showAssigneeField = false,
   onUpdateTask,
   onDeleteTask,
   onOpenEvent,
@@ -15083,8 +15185,11 @@ function AdminTaskDetailPanel({
   events: ProductionEvent[];
   tasks: AppTask[];
   linkedEvent: ProductionEvent | null;
+  profiles?: UserProfile[];
   currentProfile: UserProfile | null;
   permissions: AppPermissions;
+  hideEventLink?: boolean;
+  showAssigneeField?: boolean;
   onUpdateTask: (task: AppTask, patch: TaskUpdatePatch) => Promise<void>;
   onDeleteTask: (task: AppTask) => Promise<void>;
   onOpenEvent: (eventId: string) => void;
@@ -15105,15 +15210,14 @@ function AdminTaskDetailPanel({
   const projectMirrorTask = isProjectMirrorTask(task);
   const assignedToCurrentProfile = Boolean(currentProfile?.id && task.assignedProfileId === currentProfile.id);
   const createdByCurrentProfile = Boolean(currentProfile?.id && task.createdBy === currentProfile.id);
-  const canEditContent = !projectMirrorTask && (permissions.canManageEvents || (assignedToCurrentProfile && createdByCurrentProfile));
+  const canEditContent = permissions.canManageEvents || (assignedToCurrentProfile && createdByCurrentProfile);
   const canToggleStatus = permissions.canManageEvents || assignedToCurrentProfile;
   const canEditUrgent = Boolean(
-    !projectMirrorTask &&
     permissions.canManageEvents &&
     (isTaskUrgent(task) || (task.assignedProfileId && countActiveUrgentTasksForProfile(tasks, task.assignedProfileId, task.id) < maxUrgentTasksPerPerson)),
   );
-  const canEditEventLink = !projectMirrorTask && permissions.canManageEvents;
-  const canDelete = !projectMirrorTask && (permissions.canManageEvents || (assignedToCurrentProfile && createdByCurrentProfile));
+  const canEditEventLink = !hideEventLink && permissions.canManageEvents;
+  const canDelete = permissions.canManageEvents || (assignedToCurrentProfile && createdByCurrentProfile);
   const eventCandidates = useMemo(() => {
     const query = normalizeLabel(eventQuery);
     if (query.length < 2) return [];
@@ -15139,7 +15243,7 @@ function AdminTaskDetailPanel({
     const patchKeys = Object.keys(patch);
     const canApplyPatch = permissions.canManageEvents ||
       (assignedToCurrentProfile && patchKeys.every((key) => key === "status")) ||
-      (canEditContent && patchKeys.every((key) => ["title", "dueDate", "notes", "status", "sortOrder"].includes(key)));
+      (canEditContent && patchKeys.every((key) => ["title", "assignedProfileId", "dueDate", "notes", "status", "sortOrder"].includes(key)));
     if (!canApplyPatch) return;
     if (projectMirrorTask && patch.status !== undefined && patch.status !== task.status) {
       const confirmed = window.confirm(
@@ -15236,6 +15340,24 @@ function AdminTaskDetailPanel({
           </label>
         </div>
 
+        {showAssigneeField && (
+          <label className="block">
+            <span className={cn("mb-1 block px-1 text-xs font-semibold uppercase tracking-[0.08em]", taskTone.meta)}>Assigné à</span>
+            <select
+              {...iosKeyboardGuardProps}
+              value={task.assignedProfileId ?? ""}
+              disabled={saving || !permissions.canManageEvents}
+              onChange={(event) => void updateTaskSafely({ assignedProfileId: event.target.value || null })}
+              className={cn("h-10 w-full rounded-xl bg-white px-3 text-base font-semibold outline-none transition focus:bg-white disabled:text-neutral-300", taskTone.actionText)}
+            >
+              <option value="">Personne</option>
+              {profiles.map((person) => (
+                <option key={person.id} value={person.id}>{getProfileFirstNameLabel(person)}</option>
+              ))}
+            </select>
+          </label>
+        )}
+
         <label className="block">
           <span className={cn("mb-1 block px-1 text-xs font-semibold uppercase tracking-[0.08em]", taskTone.meta)}>Échéance</span>
           <button
@@ -15266,6 +15388,7 @@ function AdminTaskDetailPanel({
         </label>
       </div>
 
+      {!hideEventLink && (
       <div className="mt-2 rounded-xl bg-white px-3 py-2">
         <div className="mb-1 flex items-center justify-between gap-2">
           <span className={cn("text-xs font-semibold uppercase tracking-[0.08em]", taskTone.meta)}>Événement lié</span>
@@ -15340,6 +15463,7 @@ function AdminTaskDetailPanel({
           </div>
         )}
       </div>
+      )}
       {localError && <p className="mt-2 text-xs font-semibold text-rose-700">{localError}</p>}
     </div>
     {dueDatePickerOpen && (
@@ -20285,7 +20409,7 @@ function isTaskUrgent(task: AppTask) {
 }
 
 function isProjectMirrorTask(task: AppTask) {
-  return Boolean(task.projectActionId);
+  return false;
 }
 
 function countActiveUrgentTasksForProfile(tasks: AppTask[], assignedProfileId: string, excludedTaskId?: string | null) {
