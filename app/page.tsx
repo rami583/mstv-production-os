@@ -4382,6 +4382,7 @@ export default function Home() {
   const [projects, setProjects] = useState<Project[]>([]);
   const [projectsLoading, setProjectsLoading] = useState(false);
   const [projectsError, setProjectsError] = useState<string | null>(null);
+  const [projectsNavigationRequest, setProjectsNavigationRequest] = useState(0);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [notificationsHydrated, setNotificationsHydrated] = useState(false);
   const [online, setOnline] = useState(() => typeof navigator === "undefined" ? true : navigator.onLine);
@@ -7911,6 +7912,10 @@ export default function Home() {
   function openProjectsFromHeader() {
     if (!canOpenProjects) return;
     setCreateMenuOpen(false);
+    if (screen === "projects") {
+      setProjectsNavigationRequest((request) => request + 1);
+      return;
+    }
     setScreen("projects");
   }
 
@@ -11729,6 +11734,7 @@ export default function Home() {
               canManageProjects={permissions.canManageEvents}
               loading={projectsLoading}
               error={projectsError}
+              navigationRequest={projectsNavigationRequest}
               onRefresh={() => refreshProjects()}
               onCreateProject={createProject}
               onUpdateProject={updateProject}
@@ -12227,7 +12233,7 @@ function AppHeader({
 
       <div className="flex min-h-10 items-center justify-between gap-2">
         <div className="flex min-w-0 items-center gap-2">
-          {(screen === "calendar" || screen === "detail" || screen === "tasks") && (
+          {(screen === "calendar" || screen === "detail" || screen === "tasks" || screen === "projects") && (
             <button
               type="button"
               onClick={onOpenYearOverview}
@@ -12244,7 +12250,7 @@ function AppHeader({
             syncing={syncingPendingActions}
             error={pendingSyncError}
           />
-          {(screen === "calendar" || screen === "detail" || screen === "tasks") && (
+          {(screen === "calendar" || screen === "detail" || screen === "tasks" || screen === "projects") && (
             <button
               onClick={goToday}
               className={cn(
@@ -12512,6 +12518,7 @@ function ProjectsView({
   canManageProjects,
   loading,
   error,
+  navigationRequest,
   onCreateProject,
   onUpdateProject,
   onDeleteProject,
@@ -12527,6 +12534,7 @@ function ProjectsView({
   canManageProjects: boolean;
   loading: boolean;
   error: string | null;
+  navigationRequest: number;
   onRefresh: () => Promise<void>;
   onCreateProject: () => Promise<Project>;
   onUpdateProject: (project: Project, patch: Partial<Pick<Project, "name" | "description" | "notes" | "status" | "ownerProfileId">>) => Promise<void>;
@@ -12543,6 +12551,7 @@ function ProjectsView({
   const projectDetailViewportRef = useRef<HTMLDivElement | null>(null);
   const projectDetailTransitioningRef = useRef(false);
   const projectDetailTransitionTimeoutRef = useRef<number | null>(null);
+  const lastNavigationRequestRef = useRef(navigationRequest);
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
   const [projectDetailPagerOffset, setProjectDetailPagerOffset] = useState(0);
   const [projectDetailPagerTransitionEnabled, setProjectDetailPagerTransitionEnabled] = useState(false);
@@ -12592,6 +12601,12 @@ function ProjectsView({
       return null;
     });
   }, [projects]);
+
+  useEffect(() => {
+    if (navigationRequest === lastNavigationRequestRef.current) return;
+    lastNavigationRequestRef.current = navigationRequest;
+    selectProject(null);
+  }, [navigationRequest]);
 
   useEffect(() => {
     if (draggingProjectId) return;
@@ -13447,7 +13462,7 @@ function ProjectDetailPanel({
       </div>
 
       <div className="grid gap-3">
-        <div className="grid gap-2 md:grid-cols-[minmax(0,1fr)_180px]">
+        <div className="grid grid-cols-[minmax(0,1fr)_minmax(112px,142px)] gap-2 md:grid-cols-[minmax(0,1fr)_180px]">
           <input
             {...iosKeyboardGuardProps}
             value={name}
@@ -13579,10 +13594,17 @@ function ProjectParticipantsEditor({
   onNativeFieldFocus?: (target: HTMLElement) => boolean;
 }) {
   const [externalName, setExternalName] = useState("");
+  const [externalInputOpen, setExternalInputOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const teamProfiles = useMemo(() => profiles.filter((person) => person.role === "team"), [profiles]);
+  const participantProfiles = useMemo(() => profiles, [profiles]);
   const profileById = useMemo(() => new Map(profiles.map((person) => [person.id, person])), [profiles]);
   const selectedProfileIds = new Set(project.participants.map((participant) => participant.profileId).filter((id): id is string => Boolean(id)));
+
+  useEffect(() => {
+    setExternalName("");
+    setExternalInputOpen(false);
+    setError(null);
+  }, [project.id]);
 
   function getParticipantInput(participant: ProjectParticipant): ProjectParticipantInput {
     return {
@@ -13597,6 +13619,7 @@ function ProjectParticipantsEditor({
     try {
       await onUpdateParticipants(project, nextParticipants);
       setExternalName("");
+      setExternalInputOpen(false);
     } catch (updateError) {
       setError(getUserFacingErrorMessage(updateError, "Impossible de modifier les participants."));
     }
@@ -13639,8 +13662,8 @@ function ProjectParticipantsEditor({
 
   return (
     <section className="rounded-2xl bg-neutral-50 p-3">
-      <div className="mb-2 flex items-center justify-between gap-2">
-        <h2 className="text-base font-semibold text-neutral-950">Participants</h2>
+      <div className="mb-2 flex items-center justify-between gap-2 px-1">
+        <span className="block text-xs font-semibold uppercase tracking-[0.08em] text-neutral-400">Participants</span>
         {project.participants[0] && (
           <span className="truncate text-sm font-semibold text-neutral-400">
             Responsable : {getParticipantLabel(project.participants[0])}
@@ -13678,14 +13701,12 @@ function ProjectParticipantsEditor({
             </span>
           ))}
         </div>
-      ) : (
-        <p className="mb-3 rounded-2xl bg-white px-3 py-3 text-sm font-semibold text-neutral-400">Aucun participant</p>
-      )}
+      ) : null}
 
       {canManageProjects && (
         <div className="grid gap-2">
           <div className="flex flex-wrap gap-1.5">
-            {teamProfiles.map((person) => {
+            {participantProfiles.map((person) => {
               const selected = selectedProfileIds.has(person.id);
               return (
                 <button
@@ -13701,29 +13722,41 @@ function ProjectParticipantsEditor({
                 </button>
               );
             })}
-          </div>
-          <div className="flex gap-2">
-            <input
-              {...iosKeyboardGuardProps}
-              value={externalName}
-              onFocus={(event) => onNativeFieldFocus?.(event.currentTarget)}
-              onChange={(event) => setExternalName(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key !== "Enter") return;
-                event.preventDefault();
-                addExternalParticipant();
-              }}
-              className="h-10 min-w-0 flex-1 rounded-xl bg-white px-3 text-base font-semibold text-neutral-700 outline-none placeholder:text-neutral-300"
-              placeholder="Prénom externe"
-            />
             <button
               type="button"
-              onClick={addExternalParticipant}
-              className="h-10 rounded-xl bg-white px-3 text-sm font-semibold text-neutral-600 transition hover:bg-neutral-100"
+              onClick={() => setExternalInputOpen((open) => !open)}
+              className={cn(
+                "rounded-xl px-2.5 py-1.5 text-sm font-semibold transition",
+                externalInputOpen ? "bg-neutral-900 text-white" : "bg-white text-neutral-500 hover:text-neutral-800",
+              )}
             >
-              Ajouter
+              Externe
             </button>
           </div>
+          {externalInputOpen && (
+            <div className="flex gap-2">
+              <input
+                {...iosKeyboardGuardProps}
+                value={externalName}
+                onFocus={(event) => onNativeFieldFocus?.(event.currentTarget)}
+                onChange={(event) => setExternalName(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key !== "Enter") return;
+                  event.preventDefault();
+                  addExternalParticipant();
+                }}
+                className="h-10 min-w-0 flex-1 rounded-xl bg-white px-3 text-base font-semibold text-neutral-700 outline-none placeholder:text-neutral-300"
+                placeholder="Prénom externe"
+              />
+              <button
+                type="button"
+                onClick={addExternalParticipant}
+                className="h-10 rounded-xl bg-white px-3 text-sm font-semibold text-neutral-600 transition hover:bg-neutral-100"
+              >
+                Ajouter
+              </button>
+            </div>
+          )}
         </div>
       )}
       {error && <p className="mt-2 px-1 text-xs font-semibold text-rose-600">{error}</p>}
