@@ -13572,7 +13572,7 @@ function ProjectDetailPanel({
             <span className="block text-xs font-semibold uppercase tracking-[0.08em] text-neutral-400">Actions</span>
             {canManageProjects && (
               <button type="button" onClick={onCreateAction} disabled={saving} className="rounded-xl bg-neutral-50 px-3 py-1.5 text-sm font-semibold text-neutral-700 transition hover:bg-neutral-100 disabled:text-neutral-300">
-                + Action
+                +
               </button>
             )}
           </div>
@@ -13635,8 +13635,25 @@ function ProjectParticipantsEditor({
   const [externalName, setExternalName] = useState("");
   const [externalInputOpen, setExternalInputOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const participantProfiles = useMemo(() => profiles, [profiles]);
   const profileById = useMemo(() => new Map(profiles.map((person) => [person.id, person])), [profiles]);
+  const orderedParticipantProfileButtons = useMemo(() => {
+    const selectedIndexByProfileId = new Map<string, number>();
+    project.participants.forEach((participant, index) => {
+      if (participant.profileId) selectedIndexByProfileId.set(participant.profileId, index);
+    });
+    return [...profiles].sort((left, right) => {
+      const leftSelectedIndex = selectedIndexByProfileId.get(left.id);
+      const rightSelectedIndex = selectedIndexByProfileId.get(right.id);
+      const leftRank = leftSelectedIndex === 0 ? 0 : leftSelectedIndex !== undefined ? 1 : 2;
+      const rightRank = rightSelectedIndex === 0 ? 0 : rightSelectedIndex !== undefined ? 1 : 2;
+      if (leftRank !== rightRank) return leftRank - rightRank;
+      if (leftSelectedIndex !== undefined && rightSelectedIndex !== undefined) return leftSelectedIndex - rightSelectedIndex;
+      const leftLabel = getProfileFirstNameLabel(left);
+      const rightLabel = getProfileFirstNameLabel(right);
+      return leftLabel.localeCompare(rightLabel, "fr", { sensitivity: "base" });
+    });
+  }, [profiles, project.participants]);
+  const selectedExternalParticipants = useMemo(() => project.participants.filter((participant) => !participant.profileId), [project.participants]);
 
   useEffect(() => {
     setExternalName("");
@@ -13714,7 +13731,7 @@ function ProjectParticipantsEditor({
         <div className="flex flex-wrap gap-1.5">
           {canManageProjects ? (
             <>
-              {participantProfiles.map((person) => {
+              {orderedParticipantProfileButtons.map((person) => {
                 const selectedParticipant = project.participants.find((participant) => participant.profileId === person.id) ?? null;
                 const selectedIndex = selectedParticipant ? project.participants.findIndex((participant) => participant.id === selectedParticipant.id) : null;
                 return (
@@ -13732,7 +13749,7 @@ function ProjectParticipantsEditor({
                   </button>
                 );
               })}
-              {project.participants.filter((participant) => !participant.profileId).map((participant) => {
+              {selectedExternalParticipants.map((participant) => {
                 const selectedIndex = project.participants.findIndex((item) => item.id === participant.id);
                 const label = getParticipantLabel(participant);
                 return (
