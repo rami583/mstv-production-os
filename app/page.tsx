@@ -461,6 +461,7 @@ type Project = {
   notes: string | null;
   status: ProjectStatus;
   ownerProfileId: string | null;
+  sortOrder: number | null;
   createdByProfileId: string;
   createdAt: string;
   updatedAt: string;
@@ -1003,6 +1004,8 @@ const PROJECT_DETAIL_ACTIVE_EDIT_SELECTOR = "input, textarea, select, [contented
 const PROJECT_DETAIL_SWIPE_BLOCK_SELECTOR = "button, a, input, textarea, select, [contenteditable='true'], [data-project-swipe-block]";
 const TASK_ROW_SWIPE_ACTION_WIDTH = 112;
 const TASK_ROW_FULL_SWIPE_RATIO = 0.65;
+const PROJECT_ROW_SWIPE_ACTION_WIDTH = TASK_ROW_SWIPE_ACTION_WIDTH;
+const PROJECT_ROW_FULL_SWIPE_RATIO = TASK_ROW_FULL_SWIPE_RATIO;
 
 function getSwipePageStep(viewportWidth: number) {
   return viewportWidth + PAGE_GAP;
@@ -2992,6 +2995,7 @@ function mapProject(row: ProjectRow, actions: ProjectAction[] = []): Project {
     notes: row.notes ?? null,
     status: row.status,
     ownerProfileId: row.owner_profile_id ?? null,
+    sortOrder: row.sort_order ?? null,
     createdByProfileId: row.created_by_profile_id,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -4106,7 +4110,8 @@ async function fetchProjects() {
     supabase
       .from("projects")
       .select("*")
-      .order("updated_at", { ascending: false }),
+      .order("sort_order", { ascending: true, nullsFirst: false })
+      .order("created_at", { ascending: true }),
     supabase
       .from("project_actions")
       .select("*")
@@ -6860,7 +6865,7 @@ export default function Home() {
       const nextProjects = existingIndex === -1
         ? [project, ...current]
         : current.map((item) => (item.id === project.id ? { ...project, actions: project.actions.length > 0 ? project.actions : item.actions } : item));
-      return nextProjects.sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+      return sortProjectsForList(nextProjects);
     });
   }
 
@@ -6889,6 +6894,7 @@ export default function Home() {
   async function createProject() {
     if (!permissions.canManageEvents) throw new Error("Création de projet réservée aux admins.");
     if (!supabase) throw new Error("Configuration Supabase manquante.");
+    const nextSortOrder = getNextProjectSortOrder(projects);
     const { data, error: insertError } = await supabase
       .from("projects")
       .insert({
@@ -6898,6 +6904,7 @@ export default function Home() {
         status: "active",
         owner_profile_id: profile?.id ?? null,
         created_by_profile_id: profile?.id ?? authSession?.user.id,
+        sort_order: nextSortOrder,
       })
       .select()
       .single();
@@ -6906,6 +6913,52 @@ export default function Home() {
     const createdProject = mapProject(data, []);
     upsertProjectInState(createdProject);
     return createdProject;
+  }
+
+  async function duplicateProject(project: Project) {
+    if (!permissions.canManageEvents) throw new Error("Duplication de projet réservée aux admins.");
+    if (!supabase) throw new Error("Configuration Supabase manquante.");
+
+    const createdByProfileId = profile?.id ?? authSession?.user.id;
+    const { data, error: insertError } = await supabase
+      .from("projects")
+      .insert({
+        name: `${project.name} copie`,
+        description: project.description,
+        notes: project.notes,
+        status: "active",
+        owner_profile_id: project.ownerProfileId,
+        created_by_profile_id: createdByProfileId,
+        sort_order: getNextProjectSortOrder(projects),
+      })
+      .select()
+      .single();
+
+    if (insertError) throw insertError;
+
+    let duplicatedActions: ProjectAction[] = [];
+    if (project.actions.length > 0) {
+      const { data: actionRows, error: actionsError } = await supabase
+        .from("project_actions")
+        .insert(project.actions.map((action, index) => ({
+          project_id: data.id,
+          title: action.title,
+          notes: action.notes,
+          status: action.status,
+          assigned_profile_id: action.assignedProfileId,
+          due_date: action.dueDate,
+          sort_order: action.sortOrder ?? index + 1,
+          created_by_profile_id: createdByProfileId,
+        })))
+        .select();
+
+      if (actionsError) throw actionsError;
+      duplicatedActions = ((actionRows ?? []) as ProjectActionRow[]).map(mapProjectAction);
+    }
+
+    const duplicatedProject = mapProject(data, duplicatedActions);
+    upsertProjectInState(duplicatedProject);
+    return duplicatedProject;
   }
 
   async function updateProject(project: Project, patch: Partial<Pick<Project, "name" | "description" | "notes" | "status" | "ownerProfileId">>) {
@@ -6939,6 +6992,38 @@ export default function Home() {
     const { error: deleteError } = await supabase.from("projects").delete().eq("id", project.id);
     if (deleteError) throw deleteError;
     setProjects((current) => current.filter((item) => item.id !== project.id));
+  }
+
+  async function reorderProjects(orderedProjects: Project[]) {
+    if (!permissions.canManageEvents) throw new Error("Réorganisation de projet réservée aux admins.");
+    if (!supabase) throw new Error("Configuration Supabase manquante.");
+    const supabaseClient = supabase;
+    const updates = orderedProjects.map((project, index) => ({
+      id: project.id,
+      sortOrder: index + 1,
+    }));
+    const updateById = new Map(updates.map((item) => [item.id, item.sortOrder]));
+    const previousProjects = projects;
+
+    setProjects((current) => sortProjectsForList(current.map((project) => (
+      updateById.has(project.id)
+        ? { ...project, sortOrder: updateById.get(project.id) ?? project.sortOrder }
+        : project
+    ))));
+
+    const results = await Promise.all(
+      updates.map((item) =>
+        supabaseClient
+          .from("projects")
+          .update({ sort_order: item.sortOrder })
+          .eq("id", item.id),
+      ),
+    );
+    const updateError = results.find((result) => result.error)?.error;
+    if (updateError) {
+      setProjects(previousProjects);
+      throw updateError;
+    }
   }
 
   async function createProjectAction(project: Project) {
@@ -11527,6 +11612,8 @@ export default function Home() {
               onCreateProject={createProject}
               onUpdateProject={updateProject}
               onDeleteProject={deleteProject}
+              onDuplicateProject={duplicateProject}
+              onReorderProjects={reorderProjects}
               onCreateAction={createProjectAction}
               onUpdateAction={updateProjectAction}
               onDeleteAction={deleteProjectAction}
@@ -12258,8 +12345,43 @@ function EventSearchOverlay({
   );
 }
 
-function getProjectStatusLabel(status: ProjectStatus) {
-  return projectStatusOptions.find((option) => option.value === status)?.label ?? "Actif";
+function compareProjectsByOrder(left: Project, right: Project) {
+  const leftOrder = left.sortOrder ?? Number.MAX_SAFE_INTEGER;
+  const rightOrder = right.sortOrder ?? Number.MAX_SAFE_INTEGER;
+  if (leftOrder !== rightOrder) return leftOrder - rightOrder;
+  return left.createdAt.localeCompare(right.createdAt);
+}
+
+function sortProjectsForList(projects: Project[]) {
+  return [...projects].sort(compareProjectsByOrder);
+}
+
+function getNextProjectSortOrder(projects: Project[]) {
+  return projects.reduce((max, project) => Math.max(max, project.sortOrder ?? 0), 0) + 1;
+}
+
+function getProjectSurfaceTone(project: Project) {
+  if (project.status === "completed") {
+    return {
+      row: "bg-neutral-50 text-neutral-400",
+      title: "text-neutral-400 line-through",
+      icon: null,
+    };
+  }
+
+  if (project.status === "paused") {
+    return {
+      row: "bg-[#f6e7a6] text-neutral-950",
+      title: "text-neutral-950",
+      icon: { label: "En pause", symbol: "⏸", className: "text-neutral-700" },
+    };
+  }
+
+  return {
+    row: "bg-[#cfe7f5] text-neutral-950",
+    title: "text-neutral-950",
+    icon: { label: "Actif", symbol: "●", className: "text-[#3d7f9d]" },
+  };
 }
 
 function ProjectsView({
@@ -12270,6 +12392,8 @@ function ProjectsView({
   onCreateProject,
   onUpdateProject,
   onDeleteProject,
+  onDuplicateProject,
+  onReorderProjects,
   onCreateAction,
   onUpdateAction,
   onDeleteAction,
@@ -12282,6 +12406,8 @@ function ProjectsView({
   onCreateProject: () => Promise<Project>;
   onUpdateProject: (project: Project, patch: Partial<Pick<Project, "name" | "description" | "notes" | "status" | "ownerProfileId">>) => Promise<void>;
   onDeleteProject: (project: Project) => Promise<void>;
+  onDuplicateProject: (project: Project) => Promise<Project>;
+  onReorderProjects: (orderedProjects: Project[]) => Promise<void>;
   onCreateAction: (project: Project) => Promise<ProjectAction>;
   onUpdateAction: (action: ProjectAction, patch: Partial<Pick<ProjectAction, "title" | "notes" | "status" | "assignedProfileId" | "dueDate">>) => Promise<void>;
   onDeleteAction: (action: ProjectAction) => Promise<void>;
@@ -12294,26 +12420,58 @@ function ProjectsView({
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
   const [projectDetailPagerOffset, setProjectDetailPagerOffset] = useState(0);
   const [projectDetailPagerTransitionEnabled, setProjectDetailPagerTransitionEnabled] = useState(false);
+  const [projectOrderIds, setProjectOrderIds] = useState<string[]>([]);
+  const [draggingProjectId, setDraggingProjectId] = useState<string | null>(null);
   const [creatingProject, setCreatingProject] = useState(false);
   const [creatingAction, setCreatingAction] = useState(false);
   const [localError, setLocalError] = useState<string | null>(null);
+  const [dragError, setDragError] = useState<string | null>(null);
   const [projectDeleteCandidate, setProjectDeleteCandidate] = useState<Project | null>(null);
   const [projectDeleting, setProjectDeleting] = useState(false);
   const [actionDeleteCandidate, setActionDeleteCandidate] = useState<ProjectAction | null>(null);
   const [actionDeleting, setActionDeleting] = useState(false);
+  const sensors = useSensors(
+    useSensor(MouseSensor, {
+      activationConstraint: {
+        distance: 10,
+      },
+    }),
+    useSensor(TouchSensor, {
+      activationConstraint: {
+        delay: 180,
+        tolerance: 8,
+      },
+    }),
+  );
+  const sortedProjects = useMemo(() => sortProjectsForList(projects), [projects]);
+  const listProjects = useMemo(() => sortedProjects.filter((project) => project.status !== "completed"), [sortedProjects]);
+  const completedProjects = useMemo(() => sortedProjects.filter((project) => project.status === "completed"), [sortedProjects]);
+  const listProjectsById = useMemo(() => new Map(listProjects.map((project) => [project.id, project])), [listProjects]);
+  const orderedListProjects = useMemo(() => {
+    const knownProjects = projectOrderIds.map((id) => listProjectsById.get(id)).filter((project): project is Project => Boolean(project));
+    const knownIds = new Set(knownProjects.map((project) => project.id));
+    return [...knownProjects, ...listProjects.filter((project) => !knownIds.has(project.id))];
+  }, [listProjects, listProjectsById, projectOrderIds]);
   const selectedProject = selectedProjectId ? projects.find((project) => project.id === selectedProjectId) ?? null : null;
-  const selectedProjectIndex = selectedProject ? projects.findIndex((project) => project.id === selectedProject.id) : -1;
-  const previousProject = selectedProjectIndex > 0 ? projects[selectedProjectIndex - 1] : null;
-  const nextProject = selectedProjectIndex >= 0 && selectedProjectIndex < projects.length - 1 ? projects[selectedProjectIndex + 1] : null;
-  const activeProjects = projects.filter((project) => project.status !== "completed");
-  const completedProjects = projects.filter((project) => project.status === "completed");
+  const selectedProjectNavigationProjects = selectedProject?.status === "completed" ? completedProjects : orderedListProjects;
+  const selectedProjectIndex = selectedProject ? selectedProjectNavigationProjects.findIndex((project) => project.id === selectedProject.id) : -1;
+  const previousProject = selectedProjectIndex > 0 ? selectedProjectNavigationProjects[selectedProjectIndex - 1] : null;
+  const nextProject = selectedProjectIndex >= 0 && selectedProjectIndex < selectedProjectNavigationProjects.length - 1 ? selectedProjectNavigationProjects[selectedProjectIndex + 1] : null;
+  const sortableProjectIds = orderedListProjects.map((project) => project.id);
+  const canSortProjects = orderedListProjects.length > 1;
 
   useEffect(() => {
     setSelectedProjectId((currentId) => {
       if (currentId && projects.some((project) => project.id === currentId)) return currentId;
-      return projects[0]?.id ?? null;
+      return null;
     });
   }, [projects]);
+
+  useEffect(() => {
+    if (draggingProjectId) return;
+    const nextIds = listProjects.map((project) => project.id);
+    setProjectOrderIds((currentIds) => (currentIds.join("|") === nextIds.join("|") ? currentIds : nextIds));
+  }, [draggingProjectId, listProjects]);
 
   useEffect(() => {
     return () => {
@@ -12393,7 +12551,7 @@ function ProjectsView({
 
   function handleProjectDetailSwipePointerDown(pointerEvent: ReactPointerEvent<HTMLDivElement>) {
     if (projectDetailTransitioningRef.current || projectDetailSwipeStartRef.current || shouldBlockProjectDetailSwipeStart(pointerEvent.target)) return;
-    if (projects.length <= 1) return;
+    if (selectedProjectNavigationProjects.length <= 1) return;
 
     projectDetailSwipeStartRef.current = {
       pointerId: pointerEvent.pointerId,
@@ -12554,11 +12712,115 @@ function ProjectsView({
     }
   }
 
+  async function persistProjectOrder(nextIds: string[], previousIds: string[]) {
+    const nextProjects = nextIds
+      .map((id) => listProjectsById.get(id))
+      .filter((project): project is Project => Boolean(project));
+
+    try {
+      await onReorderProjects(nextProjects);
+    } catch (reorderError) {
+      setProjectOrderIds(previousIds);
+      setDragError(getUserFacingErrorMessage(reorderError, "Impossible d'enregistrer l'ordre des projets."));
+    }
+  }
+
+  function handleProjectDragStart(event: DragStartEvent) {
+    setDraggingProjectId(String(event.active.id));
+    setDragError(null);
+  }
+
+  function handleProjectDragEnd(event: DragEndEvent) {
+    setDraggingProjectId(null);
+    const activeId = String(event.active.id);
+    const overId = event.over?.id ? String(event.over.id) : null;
+    if (!overId || activeId === overId) return;
+
+    const previousIds = sortableProjectIds;
+    const oldIndex = previousIds.indexOf(activeId);
+    const newIndex = previousIds.indexOf(overId);
+    if (oldIndex === -1 || newIndex === -1) return;
+
+    const nextIds = arrayMove(previousIds, oldIndex, newIndex);
+    setProjectOrderIds(nextIds);
+    void persistProjectOrder(nextIds, previousIds);
+  }
+
+  function handleProjectDragCancel() {
+    setDraggingProjectId(null);
+  }
+
+  async function duplicateProjectFromList(project: Project) {
+    setLocalError(null);
+    setDragError(null);
+    try {
+      await onDuplicateProject(project);
+    } catch (duplicateError) {
+      setLocalError(getUserFacingErrorMessage(duplicateError, "Impossible de dupliquer le projet."));
+    }
+  }
+
+  function renderProjectRow(project: Project, sortable: boolean) {
+    if (!sortable) {
+      return (
+        <ProjectQueueRow
+          key={project.id}
+          project={project}
+          canDelete
+          canDuplicate
+          onDelete={() => setProjectDeleteCandidate(project)}
+          onDuplicate={() => void duplicateProjectFromList(project)}
+          onOpen={() => selectProject(project.id)}
+        />
+      );
+    }
+
+    return (
+      <SortableProjectRow
+        key={project.id}
+        project={project}
+        dragging={draggingProjectId === project.id}
+        canDrag
+        canDelete
+        canDuplicate
+        onDelete={() => setProjectDeleteCandidate(project)}
+        onDuplicate={() => void duplicateProjectFromList(project)}
+        onOpen={() => selectProject(project.id)}
+      />
+    );
+  }
+
   return (
     <div ref={nativeKeyboard.scrollContainerRef} style={nativeKeyboard.scrollContainerStyle} className="flex min-h-0 flex-1 flex-col">
       {(error || localError) && <StatusMessage tone="error">{localError ?? error}</StatusMessage>}
-      <div className="grid min-h-0 flex-1 gap-3 md:grid-cols-[280px_minmax(0,1fr)]">
-        <aside className={cn("min-h-0 flex-col rounded-3xl bg-white p-3", selectedProject ? "hidden md:flex" : "flex")}>
+      {selectedProject ? (
+        <section className="min-h-0 flex-1 overflow-hidden">
+          <div
+            ref={projectDetailViewportRef}
+            className="no-scrollbar min-h-0 h-full touch-pan-y overflow-y-auto overflow-x-hidden overscroll-contain"
+            onPointerDownCapture={handleProjectDetailSwipePointerDown}
+            onPointerMoveCapture={handleProjectDetailSwipePointerMove}
+            onPointerUpCapture={handleProjectDetailSwipePointerUp}
+            onPointerCancelCapture={handleProjectDetailSwipeCancel}
+          >
+            <div
+              className="flex min-h-full w-[300%]"
+              style={{
+                gap: `${PROJECT_DETAIL_SWIPE_PANEL_GAP_PX}px`,
+                transform: `translate3d(calc(-33.333333% - ${PROJECT_DETAIL_SWIPE_PANEL_GAP_PX}px + ${projectDetailPagerOffset}px), 0, 0)`,
+                transition: projectDetailPagerTransitionEnabled ? `transform ${EVENT_DETAIL_CAROUSEL_TRANSITION_MS}ms ${EVENT_DETAIL_CAROUSEL_EASING}` : undefined,
+              }}
+            >
+              {[previousProject, selectedProject, nextProject].map((project, index) => (
+                <div key={project?.id ?? `empty-project-${index}`} className="flex w-1/3 min-w-0 shrink-0">
+                  {renderProjectDetail(project)}
+                </div>
+              ))}
+            </div>
+          </div>
+        </section>
+      ) : (
+        <section className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-3xl bg-white p-3 md:p-4">
           <div className="mb-3 flex items-center justify-between gap-2">
             <h1 className="text-lg font-semibold text-neutral-950">Projets</h1>
             <button
@@ -12577,70 +12839,45 @@ function ProjectsView({
             <button
               type="button"
               onClick={() => void createAndSelectProject()}
-              className="grid min-h-40 place-items-center rounded-2xl bg-neutral-50 px-4 text-center text-base font-semibold text-neutral-400 transition hover:bg-neutral-100"
+              className="grid min-h-40 w-full place-items-center rounded-2xl bg-neutral-50 px-4 text-center text-base font-semibold text-neutral-400 transition hover:bg-neutral-100"
             >
               Aucun projet
             </button>
           ) : (
-            <div className="no-scrollbar min-h-0 flex-1 overflow-y-auto pr-1">
-              <ProjectListSection
-                label="Actifs"
-                projects={activeProjects}
-                selectedProjectId={selectedProjectId}
-                onSelect={selectProject}
-              />
-              <ProjectListSection
-                label="Terminés"
-                projects={completedProjects}
-                selectedProjectId={selectedProjectId}
-                onSelect={selectProject}
-              />
-            </div>
-          )}
-        </aside>
-
-        <section className={cn("min-h-0 flex-col overflow-hidden md:flex", selectedProject ? "flex" : "hidden md:flex")}>
-          {selectedProject ? (
-            <div
-              ref={projectDetailViewportRef}
-              className="no-scrollbar min-h-0 flex-1 touch-pan-y overflow-y-auto overflow-x-hidden overscroll-contain"
-              onPointerDownCapture={handleProjectDetailSwipePointerDown}
-              onPointerMoveCapture={handleProjectDetailSwipePointerMove}
-              onPointerUpCapture={handleProjectDetailSwipePointerUp}
-              onPointerCancelCapture={handleProjectDetailSwipeCancel}
-            >
-              <div
-                className="flex min-h-full w-[300%]"
-                style={{
-                  gap: `${PROJECT_DETAIL_SWIPE_PANEL_GAP_PX}px`,
-                  transform: `translate3d(calc(-33.333333% - ${PROJECT_DETAIL_SWIPE_PANEL_GAP_PX}px + ${projectDetailPagerOffset}px), 0, 0)`,
-                  transition: projectDetailPagerTransitionEnabled ? `transform ${EVENT_DETAIL_CAROUSEL_TRANSITION_MS}ms ${EVENT_DETAIL_CAROUSEL_EASING}` : undefined,
-                }}
-              >
-                {[previousProject, selectedProject, nextProject].map((project, index) => (
-                  <div key={project?.id ?? `empty-project-${index}`} className="flex w-1/3 min-w-0 shrink-0">
-                    {renderProjectDetail(project)}
-                  </div>
-                ))}
-              </div>
-            </div>
-          ) : (
-            <div className="grid min-h-72 flex-1 place-items-center rounded-3xl bg-white text-center">
-              <div>
-                <p className="text-base font-semibold text-neutral-400">Sélectionnez un projet</p>
-                <button
-                  type="button"
-                  onClick={() => void createAndSelectProject()}
-                  disabled={creatingProject}
-                  className="mt-3 rounded-2xl bg-neutral-50 px-4 py-2 text-base font-semibold text-neutral-600 transition hover:bg-neutral-100 disabled:text-neutral-300"
+            <div className="no-scrollbar min-h-0 flex-1 touch-pan-y overflow-y-auto overflow-x-hidden overscroll-contain pb-4">
+              {canSortProjects ? (
+                <DndContext
+                  sensors={sensors}
+                  collisionDetection={closestCenter}
+                  onDragStart={handleProjectDragStart}
+                  onDragEnd={handleProjectDragEnd}
+                  onDragCancel={handleProjectDragCancel}
                 >
-                  Nouveau projet
-                </button>
-              </div>
+                  <SortableContext items={sortableProjectIds} strategy={verticalListSortingStrategy}>
+                    <div className="grid gap-2 overflow-visible pt-1">
+                      {orderedListProjects.map((project) => renderProjectRow(project, true))}
+                    </div>
+                  </SortableContext>
+                </DndContext>
+              ) : (
+                <div className="grid gap-2 overflow-visible pt-1">
+                  {orderedListProjects.map((project) => renderProjectRow(project, false))}
+                </div>
+              )}
+              {dragError && <p className="px-1 pt-2 text-xs font-semibold text-rose-600">{dragError}</p>}
+
+              {completedProjects.length > 0 && (
+                <section className="space-y-1.5 pt-4">
+                  <p className="px-1 text-xs font-semibold uppercase tracking-[0.08em] text-neutral-300">Terminé</p>
+                  <div className="grid gap-1.5 overflow-visible">
+                    {completedProjects.map((project) => renderProjectRow(project, false))}
+                  </div>
+                </section>
+              )}
             </div>
           )}
         </section>
-      </div>
+      )}
 
       {projectDeleteCandidate && (
         <SharedConfirmationDialog
@@ -12670,43 +12907,343 @@ function ProjectsView({
   );
 }
 
-function ProjectListSection({
-  label,
-  projects,
-  selectedProjectId,
-  onSelect,
+function SortableProjectRow({
+  project,
+  dragging = false,
+  canDrag,
+  canDelete,
+  canDuplicate,
+  onDelete,
+  onDuplicate,
+  onOpen,
 }: {
-  label: string;
-  projects: Project[];
-  selectedProjectId: string | null;
-  onSelect: (projectId: string) => void;
+  project: Project;
+  dragging?: boolean;
+  canDrag: boolean;
+  canDelete: boolean;
+  canDuplicate: boolean;
+  onDelete: () => void;
+  onDuplicate: () => void;
+  onOpen: () => void;
 }) {
-  if (projects.length === 0) return null;
+  const {
+    attributes,
+    listeners,
+    setActivatorNodeRef,
+    setNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({
+    id: project.id,
+    disabled: !canDrag,
+  });
+  const rowIsDragging = dragging || isDragging;
+  const verticalTransform = transform ? { ...transform, x: 0 } : null;
+  const style: CSSProperties = {
+    transform: CSS.Transform.toString(verticalTransform),
+    transition,
+    zIndex: rowIsDragging ? 50 : undefined,
+    position: rowIsDragging ? "relative" : undefined,
+  };
+  const setProjectRowRef = (node: HTMLDivElement | null) => {
+    setNodeRef(node);
+    setActivatorNodeRef(node);
+  };
+
   return (
-    <div className="mb-4 last:mb-0">
-      <p className="mb-1.5 px-2 text-xs font-semibold uppercase tracking-[0.08em] text-neutral-400">{label}</p>
-      <div className="grid gap-1">
-        {projects.map((project) => {
-          const selected = project.id === selectedProjectId;
-          return (
-            <button
-              key={project.id}
-              type="button"
-              onClick={() => onSelect(project.id)}
-              className={cn(
-                "rounded-2xl px-3 py-2.5 text-left transition",
-                selected ? "bg-neutral-950 text-white" : "bg-white text-neutral-800 hover:bg-neutral-50",
-              )}
-            >
-              <span className="block truncate text-base font-semibold">{project.name}</span>
-              <span className={cn("mt-0.5 block text-sm font-semibold", selected ? "text-white/65" : "text-neutral-400")}>{getProjectStatusLabel(project.status)}</span>
-            </button>
-          );
-        })}
-      </div>
+    <div className="overflow-visible" style={style}>
+      <ProjectQueueRow
+        ref={setProjectRowRef}
+        project={project}
+        dragging={rowIsDragging}
+        draggable={canDrag}
+        draggableProps={canDrag ? ({ ...attributes, ...listeners } as HTMLAttributes<HTMLDivElement>) : undefined}
+        canDelete={canDelete}
+        canDuplicate={canDuplicate}
+        onDelete={onDelete}
+        onDuplicate={onDuplicate}
+        onOpen={onOpen}
+      />
     </div>
   );
 }
+
+const ProjectQueueRow = forwardRef<HTMLDivElement, {
+  project: Project;
+  dragging?: boolean;
+  draggable?: boolean;
+  draggableProps?: HTMLAttributes<HTMLDivElement>;
+  canDelete?: boolean;
+  canDuplicate?: boolean;
+  onDelete?: () => void;
+  onDuplicate?: () => void;
+  onOpen: () => void;
+}>(function ProjectQueueRow({
+  project,
+  dragging = false,
+  draggable = false,
+  draggableProps,
+  canDelete = false,
+  canDuplicate = false,
+  onDelete,
+  onDuplicate,
+  onOpen,
+}, ref) {
+  const rowRef = useRef<HTMLDivElement | null>(null);
+  const pointerStartRef = useRef<{ pointerId: number; x: number; y: number; axis: "horizontal" | "vertical" | null } | null>(null);
+  const stableRowWidthRef = useRef(0);
+  const suppressClickRef = useRef(false);
+  const [swipeOffset, setSwipeOffset] = useState(0);
+  const [swiping, setSwiping] = useState(false);
+  const [openAction, setOpenAction] = useState<"delete" | "duplicate" | null>(null);
+  const projectSurface = getProjectSurfaceTone(project);
+  const canSwipeDelete = canDelete && Boolean(onDelete);
+  const canSwipeDuplicate = canDuplicate && Boolean(onDuplicate);
+  const canSwipe = canSwipeDelete || canSwipeDuplicate;
+  const baseOffset = canSwipeDelete && openAction === "delete"
+    ? -PROJECT_ROW_SWIPE_ACTION_WIDTH
+    : canSwipeDuplicate && openAction === "duplicate"
+      ? PROJECT_ROW_SWIPE_ACTION_WIDTH
+      : 0;
+  const visibleOffset = swiping ? swipeOffset : baseOffset;
+  const deleteActionVisible = canSwipeDelete && visibleOffset < -1;
+  const duplicateActionVisible = canSwipeDuplicate && visibleOffset > 1;
+  const rowTransform = `translateX(${canSwipe ? visibleOffset : 0}px)`;
+
+  function setProjectQueueRowRef(node: HTMLDivElement | null) {
+    rowRef.current = node;
+    if (typeof ref === "function") {
+      ref(node);
+    } else if (ref) {
+      ref.current = node;
+    }
+  }
+
+  function resetSwipe() {
+    pointerStartRef.current = null;
+    stableRowWidthRef.current = 0;
+    setSwiping(false);
+    setSwipeOffset(0);
+  }
+
+  function callDraggableHandler<TEvent extends ReactPointerEvent<HTMLDivElement>>(
+    handler: HTMLAttributes<HTMLDivElement>["onPointerDown"] | HTMLAttributes<HTMLDivElement>["onPointerMove"] | HTMLAttributes<HTMLDivElement>["onPointerUp"] | HTMLAttributes<HTMLDivElement>["onPointerCancel"] | undefined,
+    event: TEvent,
+  ) {
+    handler?.(event);
+  }
+
+  function handlePointerDown(event: ReactPointerEvent<HTMLDivElement>) {
+    if ((event.target as HTMLElement).closest("[data-project-row-swipe-action]")) return;
+    pointerStartRef.current = {
+      pointerId: event.pointerId,
+      x: event.clientX,
+      y: event.clientY,
+      axis: null,
+    };
+    if (canSwipe) {
+      stableRowWidthRef.current = rowRef.current?.offsetWidth ?? event.currentTarget.offsetWidth ?? PROJECT_ROW_SWIPE_ACTION_WIDTH;
+      setSwiping(true);
+      setSwipeOffset(baseOffset);
+    }
+    event.currentTarget.setPointerCapture(event.pointerId);
+    callDraggableHandler(draggableProps?.onPointerDown, event);
+  }
+
+  function handlePointerMove(event: ReactPointerEvent<HTMLDivElement>) {
+    callDraggableHandler(draggableProps?.onPointerMove, event);
+    if (!canSwipe) return;
+    const pointerStart = pointerStartRef.current;
+    if (!pointerStart || pointerStart.pointerId !== event.pointerId) return;
+
+    const deltaX = event.clientX - pointerStart.x;
+    const deltaY = event.clientY - pointerStart.y;
+    const absDeltaX = Math.abs(deltaX);
+    const absDeltaY = Math.abs(deltaY);
+
+    if (!pointerStart.axis && (absDeltaX > EVENT_SWIPE_AXIS_ACTIVATION_PX || absDeltaY > EVENT_SWIPE_AXIS_ACTIVATION_PX)) {
+      if (absDeltaX > EVENT_SWIPE_AXIS_ACTIVATION_PX && absDeltaX > absDeltaY * EVENT_SWIPE_AXIS_DOMINANCE) {
+        pointerStart.axis = "horizontal";
+      } else if (absDeltaY > EVENT_SWIPE_AXIS_ACTIVATION_PX && absDeltaY >= absDeltaX) {
+        pointerStart.axis = "vertical";
+        suppressClickRef.current = true;
+      }
+    }
+
+    if (pointerStart.axis === "vertical") return;
+    if (pointerStart.axis !== "horizontal") return;
+
+    const rowWidth = stableRowWidthRef.current || rowRef.current?.offsetWidth || PROJECT_ROW_SWIPE_ACTION_WIDTH;
+    const minOffset = canSwipeDelete ? -rowWidth : 0;
+    const maxOffset = canSwipeDuplicate ? rowWidth : 0;
+    const nextOffset = Math.max(minOffset, Math.min(maxOffset, baseOffset + deltaX));
+    suppressClickRef.current = true;
+    event.preventDefault();
+    setSwipeOffset(nextOffset);
+  }
+
+  function handlePointerUp(event: ReactPointerEvent<HTMLDivElement>) {
+    callDraggableHandler(draggableProps?.onPointerUp, event);
+    const pointerStart = pointerStartRef.current;
+    if (!pointerStart || pointerStart.pointerId !== event.pointerId) return;
+
+    const deltaX = event.clientX - pointerStart.x;
+    const deltaY = event.clientY - pointerStart.y;
+    const absDeltaX = Math.abs(deltaX);
+    const absDeltaY = Math.abs(deltaY);
+    const wasHorizontalSwipe = pointerStart.axis === "horizontal";
+    const wasTap = !wasHorizontalSwipe && pointerStart.axis !== "vertical" && absDeltaX < EVENT_SWIPE_AXIS_ACTIVATION_PX && absDeltaY < EVENT_SWIPE_AXIS_ACTIVATION_PX;
+
+    if (!canSwipe) {
+      resetSwipe();
+      if (wasTap && !dragging) {
+        suppressClickRef.current = true;
+        onOpen();
+      }
+      return;
+    }
+
+    const rowWidth = stableRowWidthRef.current || rowRef.current?.offsetWidth || PROJECT_ROW_SWIPE_ACTION_WIDTH;
+    const minOffset = canSwipeDelete ? -rowWidth : 0;
+    const maxOffset = canSwipeDuplicate ? rowWidth : 0;
+    const finalOffset = Math.max(minOffset, Math.min(maxOffset, baseOffset + deltaX));
+    const fullSwipeThreshold = rowWidth * PROJECT_ROW_FULL_SWIPE_RATIO;
+    const shouldRequestDelete = canSwipeDelete && finalOffset <= -fullSwipeThreshold;
+    const shouldRequestDuplicate = canSwipeDuplicate && finalOffset >= fullSwipeThreshold;
+    const shouldOpenDelete = canSwipeDelete && finalOffset < -PROJECT_ROW_SWIPE_ACTION_WIDTH / 2;
+    const shouldOpenDuplicate = canSwipeDuplicate && finalOffset > PROJECT_ROW_SWIPE_ACTION_WIDTH / 2;
+
+    resetSwipe();
+
+    if (!wasHorizontalSwipe) {
+      if (wasTap && !dragging) {
+        suppressClickRef.current = true;
+        onOpen();
+      }
+      return;
+    }
+
+    window.setTimeout(() => {
+      suppressClickRef.current = false;
+    }, 0);
+
+    if (shouldRequestDelete) {
+      setOpenAction(null);
+      onDelete?.();
+    } else if (shouldRequestDuplicate) {
+      setOpenAction(null);
+      onDuplicate?.();
+    } else if (shouldOpenDelete) {
+      setOpenAction("delete");
+    } else if (shouldOpenDuplicate) {
+      setOpenAction("duplicate");
+    } else {
+      setOpenAction(null);
+    }
+  }
+
+  function handlePointerCancel(event: ReactPointerEvent<HTMLDivElement>) {
+    callDraggableHandler(draggableProps?.onPointerCancel, event);
+    resetSwipe();
+  }
+
+  function handleRowClick() {
+    if (suppressClickRef.current) {
+      suppressClickRef.current = false;
+      return;
+    }
+
+    if (openAction) {
+      setOpenAction(null);
+      return;
+    }
+
+    onOpen();
+  }
+
+  return (
+    <div
+      ref={setProjectQueueRowRef}
+      className={cn("relative mx-0.5 rounded-xl", dragging ? "z-40 overflow-visible" : "overflow-hidden")}
+      {...draggableProps}
+      onPointerDown={handlePointerDown}
+      onPointerMove={handlePointerMove}
+      onPointerUp={handlePointerUp}
+      onPointerCancel={handlePointerCancel}
+    >
+      {canSwipeDuplicate && (
+        <button
+          type="button"
+          data-project-row-swipe-action
+          onPointerDown={(event) => event.stopPropagation()}
+          onClick={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            setOpenAction(null);
+            onDuplicate?.();
+          }}
+          className={cn(
+            "absolute inset-y-0 left-0 z-0 flex w-full items-center justify-start rounded-l-xl bg-emerald-600 pl-5 text-base font-semibold text-white transition hover:bg-emerald-700",
+            duplicateActionVisible ? "opacity-100" : "pointer-events-none opacity-0",
+          )}
+        >
+          Dupliquer
+        </button>
+      )}
+      {canSwipeDelete && (
+        <button
+          type="button"
+          data-project-row-swipe-action
+          onPointerDown={(event) => event.stopPropagation()}
+          onClick={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            setOpenAction(null);
+            onDelete?.();
+          }}
+          className={cn(
+            "absolute inset-y-0 right-0 z-0 flex w-full items-center justify-end rounded-r-xl bg-[#bb2720] pr-5 text-base font-semibold text-white transition hover:bg-[#a9231d]",
+            deleteActionVisible ? "opacity-100" : "pointer-events-none opacity-0",
+          )}
+        >
+          Supprimer
+        </button>
+      )}
+      <div
+        role="button"
+        tabIndex={0}
+        onClick={handleRowClick}
+        onKeyDown={(event) => {
+          if (event.key !== "Enter" && event.key !== " ") return;
+          event.preventDefault();
+          if (openAction) {
+            setOpenAction(null);
+          } else {
+            onOpen();
+          }
+        }}
+        style={{ transform: rowTransform, touchAction: "pan-y" }}
+        className={cn(
+          "group relative z-10 flex min-h-11 select-none items-center gap-2 rounded-xl px-3 py-2 transition-[transform,opacity]",
+          dragging ? "cursor-grabbing" : "cursor-pointer",
+          projectSurface.row,
+          dragging && "opacity-90",
+          swiping ? "transition-none" : "duration-200 ease-out",
+        )}
+      >
+        <span className={cn("min-w-0 flex-1 truncate text-left text-base font-semibold leading-snug", projectSurface.title)}>
+          {project.name}
+        </span>
+        {projectSurface.icon && (
+          <span className={cn("ml-auto inline-flex h-4 min-w-4 shrink-0 items-center justify-center text-xs font-bold leading-none", projectSurface.icon.className)} aria-label={projectSurface.icon.label} title={projectSurface.icon.label}>
+            {projectSurface.icon.symbol}
+          </span>
+        )}
+      </div>
+    </div>
+  );
+});
 
 function ProjectDetailPanel({
   project,
@@ -12757,7 +13294,7 @@ function ProjectDetailPanel({
   return (
     <div className="no-scrollbar min-h-0 flex-1 overflow-y-auto overscroll-contain">
       <div className="mb-3 flex items-center justify-between gap-2">
-        <button type="button" onClick={onBack} className="rounded-xl bg-neutral-50 px-3 py-1.5 text-sm font-semibold text-neutral-600 transition hover:bg-neutral-100 md:hidden">
+        <button type="button" onClick={onBack} className="rounded-xl bg-neutral-50 px-3 py-1.5 text-sm font-semibold text-neutral-600 transition hover:bg-neutral-100">
           Retour
         </button>
         <button type="button" onClick={onDeleteProject} className="ml-auto rounded-xl bg-[#bb2720]/[0.07] px-3 py-1.5 text-sm font-semibold text-[#bb2720] transition hover:bg-[#bb2720]/[0.11]">

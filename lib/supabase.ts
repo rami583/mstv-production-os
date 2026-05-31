@@ -365,6 +365,7 @@ export type Database = {
           notes: string | null;
           status: "active" | "paused" | "completed";
           owner_profile_id: string | null;
+          sort_order: number | null;
           created_by_profile_id: string;
           created_at: string;
           updated_at: string;
@@ -376,6 +377,7 @@ export type Database = {
           notes?: string | null;
           status?: "active" | "paused" | "completed";
           owner_profile_id?: string | null;
+          sort_order?: number | null;
           created_by_profile_id?: string;
           created_at?: string;
           updated_at?: string;
