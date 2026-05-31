@@ -432,6 +432,7 @@ type AppTask = {
   id: string;
   title: string;
   eventId: string | null;
+  projectId: string | null;
   assignedProfileId: string | null;
   status: TaskStatus;
   priority: TaskPriority;
@@ -490,6 +491,7 @@ type Project = {
 type TaskCreateInput = {
   title: string;
   eventId?: string | null;
+  projectId?: string | null;
   assignedProfileId?: string | null;
   dueDate?: string | null;
   notes?: string | null;
@@ -497,7 +499,7 @@ type TaskCreateInput = {
   sortOrder?: number | null;
 };
 
-type TaskUpdatePatch = Partial<Pick<AppTask, "title" | "eventId" | "assignedProfileId" | "dueDate" | "notes" | "status" | "priority" | "sortOrder">>;
+type TaskUpdatePatch = Partial<Pick<AppTask, "title" | "eventId" | "projectId" | "assignedProfileId" | "dueDate" | "notes" | "status" | "priority" | "sortOrder">>;
 
 type TaskDiagnosticProfile = {
   id: string;
@@ -2977,6 +2979,7 @@ function mapTask(row: TaskRow): AppTask {
     id: row.id,
     title: row.title,
     eventId: row.event_id ?? null,
+    projectId: row.project_id ?? null,
     assignedProfileId: row.assigned_profile_id ?? null,
     status: row.status,
     priority: row.priority ?? "normal",
@@ -4383,6 +4386,7 @@ export default function Home() {
   const [projectsLoading, setProjectsLoading] = useState(false);
   const [projectsError, setProjectsError] = useState<string | null>(null);
   const [projectsNavigationRequest, setProjectsNavigationRequest] = useState(0);
+  const [projectOpenRequest, setProjectOpenRequest] = useState<{ projectId: string; token: number } | null>(null);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [notificationsHydrated, setNotificationsHydrated] = useState(false);
   const [online, setOnline] = useState(() => typeof navigator === "undefined" ? true : navigator.onLine);
@@ -4514,7 +4518,9 @@ export default function Home() {
   const headerSession = authSession;
   const headerPermissions = useMemo(() => getPermissionsForRole(headerProfile?.role ?? "team"), [headerProfile?.role]);
   const headerCanOpenTrash = headerPermissions.canRestoreEvents || headerPermissions.canPermanentDeleteEvents;
-  const canOpenProjects = headerPermissions.canManageEvents || projects.length > 0;
+  const canOpenProjects = headerPermissions.canManageEvents ||
+    projects.length > 0 ||
+    Boolean(profile?.id && tasks.some((task) => task.projectId && task.assignedProfileId === profile.id));
   const actorName = getProfileDisplayName(profile);
   const externalCalendarVisibilityState = useMemo(
     () => buildExternalCalendarVisibilityState(externalCalendars, getCalendarVisibilityViewer(profile, authSession?.user.id ?? null)),
@@ -6969,6 +6975,7 @@ export default function Home() {
     if (insertError) throw insertError;
     const createdProject = mapProject(data, [], []);
     upsertProjectInState(createdProject);
+    await refreshTasks({ silent: true });
     return createdProject;
   }
 
@@ -7031,6 +7038,7 @@ export default function Home() {
 
     const duplicatedProject = mapProject(data, duplicatedActions, duplicatedParticipants);
     upsertProjectInState(duplicatedProject);
+    await refreshTasks({ silent: true });
     return duplicatedProject;
   }
 
@@ -7057,6 +7065,7 @@ export default function Home() {
 
     if (updateError) throw updateError;
     upsertProjectInState(mapProject(data, project.actions, project.participants));
+    await refreshTasks({ silent: true });
   }
 
   async function updateProjectParticipants(project: Project, nextParticipants: ProjectParticipantInput[]) {
@@ -7070,7 +7079,7 @@ export default function Home() {
       }))
       .filter((participant) => participant.profileId || participant.externalName);
 
-    const firstInternalParticipant = normalizedParticipants.find((participant) => participant.profileId)?.profileId ?? null;
+    const responsibleProfileId = normalizedParticipants[0]?.profileId ?? null;
 
     const { error: deleteError } = await supabase
       .from("project_participants")
@@ -7097,7 +7106,7 @@ export default function Home() {
 
     const { data: updatedProjectRow, error: updateError } = await supabase
       .from("projects")
-      .update({ owner_profile_id: firstInternalParticipant })
+      .update({ owner_profile_id: responsibleProfileId })
       .eq("id", project.id)
       .select()
       .single();
@@ -7105,6 +7114,7 @@ export default function Home() {
     if (updateError) throw updateError;
 
     upsertProjectInState(mapProject(updatedProjectRow, project.actions, participants));
+    await refreshTasks({ silent: true });
   }
 
   async function deleteProject(project: Project) {
@@ -7113,6 +7123,7 @@ export default function Home() {
     const { error: deleteError } = await supabase.from("projects").delete().eq("id", project.id);
     if (deleteError) throw deleteError;
     setProjects((current) => current.filter((item) => item.id !== project.id));
+    setTasks((current) => current.filter((task) => task.projectId !== project.id));
   }
 
   async function reorderProjects(orderedProjects: Project[]) {
@@ -7227,6 +7238,7 @@ export default function Home() {
     const payload: Database["public"]["Tables"]["tasks"]["Insert"] = {
       title,
       event_id: input.eventId ?? null,
+      project_id: input.projectId ?? null,
       assigned_profile_id: input.assignedProfileId ?? null,
       status: "todo",
       priority: permissions.canManageEvents ? input.priority ?? "normal" : "normal",
@@ -7312,6 +7324,7 @@ export default function Home() {
     }
     if (patch.assignedProfileId !== undefined) payload.assigned_profile_id = patch.assignedProfileId || null;
     if (patch.eventId !== undefined && permissions.canManageEvents) payload.event_id = patch.eventId || null;
+    if (patch.projectId !== undefined && permissions.canManageEvents) payload.project_id = patch.projectId || null;
     if (patch.dueDate !== undefined) payload.due_date = patch.dueDate || null;
     if (patch.notes !== undefined) payload.notes = patch.notes?.trim() || null;
     if (patch.status !== undefined) payload.status = patch.status;
@@ -7357,6 +7370,9 @@ export default function Home() {
           eventId: updatedTask.eventId,
         },
       });
+    }
+    if (updatedTask.projectId && patch.status !== undefined && patch.status !== task.status) {
+      await refreshProjects({ silent: true });
     }
   }
 
@@ -7916,6 +7932,12 @@ export default function Home() {
       setProjectsNavigationRequest((request) => request + 1);
       return;
     }
+    setScreen("projects");
+  }
+
+  function openProjectFromMirrorTask(projectId: string) {
+    setCreateMenuOpen(false);
+    setProjectOpenRequest({ projectId, token: Date.now() });
     setScreen("projects");
   }
 
@@ -11724,10 +11746,11 @@ export default function Home() {
               onDeleteTask={deleteTask}
               onReorderTasks={reorderTasksForAssignee}
               onOpenEvent={openEvent}
+              onOpenProject={openProjectFromMirrorTask}
             />
           )}
 
-          {!loading && screen === "projects" && (permissions.canManageEvents || projects.length > 0) && (
+          {!loading && screen === "projects" && canOpenProjects && (
             <ProjectsView
               projects={projects}
               profiles={taskProfiles}
@@ -11735,6 +11758,7 @@ export default function Home() {
               loading={projectsLoading}
               error={projectsError}
               navigationRequest={projectsNavigationRequest}
+              openProjectRequest={projectOpenRequest}
               onRefresh={() => refreshProjects()}
               onCreateProject={createProject}
               onUpdateProject={updateProject}
@@ -12519,6 +12543,7 @@ function ProjectsView({
   loading,
   error,
   navigationRequest,
+  openProjectRequest,
   onCreateProject,
   onUpdateProject,
   onDeleteProject,
@@ -12535,6 +12560,7 @@ function ProjectsView({
   loading: boolean;
   error: string | null;
   navigationRequest: number;
+  openProjectRequest: { projectId: string; token: number } | null;
   onRefresh: () => Promise<void>;
   onCreateProject: () => Promise<Project>;
   onUpdateProject: (project: Project, patch: Partial<Pick<Project, "name" | "description" | "notes" | "status" | "ownerProfileId">>) => Promise<void>;
@@ -12552,6 +12578,7 @@ function ProjectsView({
   const projectDetailTransitioningRef = useRef(false);
   const projectDetailTransitionTimeoutRef = useRef<number | null>(null);
   const lastNavigationRequestRef = useRef(navigationRequest);
+  const lastOpenProjectRequestTokenRef = useRef(0);
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
   const [projectDetailPagerOffset, setProjectDetailPagerOffset] = useState(0);
   const [projectDetailPagerTransitionEnabled, setProjectDetailPagerTransitionEnabled] = useState(false);
@@ -12607,6 +12634,13 @@ function ProjectsView({
     lastNavigationRequestRef.current = navigationRequest;
     selectProject(null);
   }, [navigationRequest]);
+
+  useEffect(() => {
+    if (!openProjectRequest || openProjectRequest.token === lastOpenProjectRequestTokenRef.current) return;
+    if (!projects.some((project) => project.id === openProjectRequest.projectId)) return;
+    lastOpenProjectRequestTokenRef.current = openProjectRequest.token;
+    selectProject(openProjectRequest.projectId);
+  }, [openProjectRequest, projects]);
 
   useEffect(() => {
     if (draggingProjectId) return;
@@ -13907,6 +13941,7 @@ function TeamTasksSheet({
   onDeleteTask,
   onReorderTasks,
   onOpenEvent,
+  onOpenProject,
 }: {
   tasks: AppTask[];
   events: ProductionEvent[];
@@ -13922,6 +13957,7 @@ function TeamTasksSheet({
   onDeleteTask: (task: AppTask) => Promise<void>;
   onReorderTasks: (orderedTasks: AppTask[], assignedProfileId: string | null) => Promise<void>;
   onOpenEvent: (eventId: string) => void;
+  onOpenProject: (projectId: string) => void;
 }) {
   const nativeKeyboard = useNativeKeyboardVisibility<HTMLDivElement>();
   const suppressTaskOpenRef = useRef(false);
@@ -13959,7 +13995,7 @@ function TeamTasksSheet({
   const eventsById = useMemo(() => new Map(events.map((event) => [event.id, event])), [events]);
   const taskPeople = useMemo(() => {
     if (!permissions.canManageEvents) return currentProfile ? [currentProfile] : [];
-    return profiles.filter((person) => person.role === "team");
+    return profiles;
   }, [currentProfile, permissions.canManageEvents, profiles]);
   const activeProfile = taskPeople.find((person) => person.id === selectedProfileId) ?? taskPeople[0] ?? null;
   const activeProfileId = activeProfile?.id ?? null;
@@ -14294,10 +14330,12 @@ function TeamTasksSheet({
   }
 
   function canDeleteTask(task: AppTask) {
+    if (isProjectMirrorTask(task)) return false;
     return permissions.canManageEvents || Boolean(currentProfile?.id && task.assignedProfileId === currentProfile.id && task.createdBy === currentProfile.id);
   }
 
   function canDuplicateTask(task: AppTask) {
+    if (isProjectMirrorTask(task)) return false;
     return permissions.canManageEvents || Boolean(currentProfile?.id && task.assignedProfileId === currentProfile.id);
   }
 
@@ -14404,7 +14442,7 @@ function TeamTasksSheet({
           canDuplicate={canDuplicateTask(task)}
           onDelete={() => void requestDeleteTask(task)}
           onDuplicate={() => void duplicateTask(task)}
-          onOpen={() => openTaskDetail(task.id)}
+          onOpen={() => task.projectId ? onOpenProject(task.projectId) : openTaskDetail(task.id)}
         />
       );
     }
@@ -14421,7 +14459,7 @@ function TeamTasksSheet({
         canDuplicate={canDuplicateTask(task)}
         onDelete={() => void requestDeleteTask(task)}
         onDuplicate={() => void duplicateTask(task)}
-        onOpen={() => openTaskDetail(task.id)}
+        onOpen={() => task.projectId ? onOpenProject(task.projectId) : openTaskDetail(task.id)}
       />
     );
   }
@@ -15011,16 +15049,18 @@ function AdminTaskDetailPanel({
   const eventSearchInputRef = useRef<HTMLInputElement | null>(null);
   const done = task.status === "done";
   const taskTone = getTaskTone(task);
+  const projectMirrorTask = isProjectMirrorTask(task);
   const assignedToCurrentProfile = Boolean(currentProfile?.id && task.assignedProfileId === currentProfile.id);
   const createdByCurrentProfile = Boolean(currentProfile?.id && task.createdBy === currentProfile.id);
-  const canEditContent = permissions.canManageEvents || (assignedToCurrentProfile && createdByCurrentProfile);
+  const canEditContent = !projectMirrorTask && (permissions.canManageEvents || (assignedToCurrentProfile && createdByCurrentProfile));
   const canToggleStatus = permissions.canManageEvents || assignedToCurrentProfile;
   const canEditUrgent = Boolean(
+    !projectMirrorTask &&
     permissions.canManageEvents &&
     (isTaskUrgent(task) || (task.assignedProfileId && countActiveUrgentTasksForProfile(tasks, task.assignedProfileId, task.id) < maxUrgentTasksPerPerson)),
   );
-  const canEditEventLink = permissions.canManageEvents;
-  const canDelete = permissions.canManageEvents || (assignedToCurrentProfile && createdByCurrentProfile);
+  const canEditEventLink = !projectMirrorTask && permissions.canManageEvents;
+  const canDelete = !projectMirrorTask && (permissions.canManageEvents || (assignedToCurrentProfile && createdByCurrentProfile));
   const eventCandidates = useMemo(() => {
     const query = normalizeLabel(eventQuery);
     if (query.length < 2) return [];
@@ -15048,6 +15088,14 @@ function AdminTaskDetailPanel({
       (assignedToCurrentProfile && patchKeys.every((key) => key === "status")) ||
       (canEditContent && patchKeys.every((key) => ["title", "dueDate", "notes", "status", "sortOrder"].includes(key)));
     if (!canApplyPatch) return;
+    if (projectMirrorTask && patch.status !== undefined && patch.status !== task.status) {
+      const confirmed = window.confirm(
+        patch.status === "done"
+          ? "Terminer cette tâche terminera aussi le projet. Confirmer ?"
+          : "Réactiver cette tâche réactivera aussi le projet. Confirmer ?",
+      );
+      if (!confirmed) return;
+    }
     setSaving(true);
     setLocalError(null);
     try {
@@ -20181,6 +20229,10 @@ function getNextTaskSortOrder(tasks: AppTask[], assignedProfileId: string | null
 
 function isTaskUrgent(task: AppTask) {
   return task.priority === "urgent";
+}
+
+function isProjectMirrorTask(task: AppTask) {
+  return Boolean(task.projectId);
 }
 
 function countActiveUrgentTasksForProfile(tasks: AppTask[], assignedProfileId: string, excludedTaskId?: string | null) {
